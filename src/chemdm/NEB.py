@@ -1,11 +1,10 @@
 import torch as pt
 from typing import Callable
 
-def objective_factory(V: Callable[[pt.Tensor], pt.Tensor], k: float = 1.0):
+def force_factory(V: Callable[[pt.Tensor], pt.Tensor], k: float = 1.0):
     """
-    Returns an objective(x) suitable for optimizing an NEB band.
-    The objective is 0.5 * sum_i ||F_i||^2 over interior images, where
-    F_i is the NEB force using energy-weighted tangents.
+    Returns an neb_force(x) suitable for optimizing an NEB band.
+    The force F_i is the NEB force using energy-weighted tangents.
     """
 
     def _normalize(v: pt.Tensor, eps: float = 1e-12) -> pt.Tensor:
@@ -75,7 +74,6 @@ def objective_factory(V: Callable[[pt.Tensor], pt.Tensor], k: float = 1.0):
         # Objective: drive NEB force to zero (endpoints excluded)
         F = F_perp + F_spring_par  # (N-2, d)
         return F
-        return 0.5 * (F.pow(2).sum())
 
     return neb_force
 
@@ -85,6 +83,8 @@ def computeMEP( V : Callable[[pt.Tensor], pt.Tensor],
                 N : int,
                 k : float,
                 n_steps : int,
+                *,
+                verbose : bool = False,
               ):
     device = xA.device
     dtype = xA.dtype
@@ -96,12 +96,12 @@ def computeMEP( V : Callable[[pt.Tensor], pt.Tensor],
     x0 = xA + (xB - xA) * t_grid[:,None]
 
     # Optimize only interior images
-    lr = 1e-2  # NEB relaxation usually tolerates a bit larger than 1e-3
+    lr = 1e-3
     x_inner = pt.nn.Parameter(x0[1:-1].clone())  # (N-1,d)
     optimizer = pt.optim.Adam([x_inner], lr=lr)
-    scheduler = pt.optim.lr_scheduler.StepLR( optimizer, step_size=n_steps//4, gamma=0.1 )
+    scheduler = pt.optim.lr_scheduler.StepLR( optimizer, step_size=n_steps//3, gamma=0.1 )
 
-    neb_force = objective_factory( V, k )
+    neb_force = force_factory( V, k )
     for step in range(n_steps):
         optimizer.zero_grad( set_to_none=True )
 
@@ -118,7 +118,7 @@ def computeMEP( V : Callable[[pt.Tensor], pt.Tensor],
         scheduler.step( )
 
         # Print optimization information
-        if step % 200 == 0 or step == n_steps - 1:
+        if verbose and (step % 200 == 0 or step == n_steps - 1):
             maxF = pt.linalg.norm(F, dim=-1).max().item()
             meanF = pt.linalg.norm(F, dim=-1).mean().item()
             print(f"step {step:5d}  max|F| {maxF:.3e}  mean|F| {meanF:.3e} ")

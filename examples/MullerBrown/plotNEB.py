@@ -7,11 +7,11 @@ from MullerBrown import potential, get_fixed_points
 
 # Call NEB
 xA = get_fixed_points()[4,:]
+xS = get_fixed_points()[3,:]
 xB = get_fixed_points()[2,:]
-print(xA, xB)
 N = 100
-k = 100.0
-n_steps = 10000
+k = 0.1
+n_steps = 1000
 neb0, neb_trajectory = NEB.computeMEP( potential, xA, xB, N, k, n_steps )
 
 # Contour plot of the MB potential.
@@ -28,9 +28,11 @@ Z = potential( XY )
 Z = Z.reshape( (n_plot_points, n_plot_points) )
 
 plt.contour( X, Y, Z, levels=101 )
-plt.plot( neb0[:,0], neb0[:,1], marker='o', label='NEB')
-plt.plot( neb_trajectory[:,0], neb_trajectory[:,1], marker='o', label='NEB')
+plt.plot( neb0[:,0], neb0[:,1], marker='.', label='NEB0')
+plt.plot( neb_trajectory[:,0], neb_trajectory[:,1], marker='.', label='NEB')
+plt.scatter( xS[0], xS[1], marker='x', label='SP')
 plt.xlabel( r"$x$" )
 plt.ylabel( r"$y$" )
+plt.legend()
 plt.title( "NEB on the Muller-Brown Potential" )
 plt.show()
