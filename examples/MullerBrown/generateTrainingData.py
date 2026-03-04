@@ -158,7 +158,7 @@ plt.scatter( xS[0], xS[1], marker='x', label='SP')
 plt.xlabel( r"$x$" )
 plt.ylabel( r"$y$" )
 plt.legend()
-plt.title( "Validation Trajectories" )
+plt.title( "Trajectories" )
 
 plt.figure()
 arclengths = pt.linspace(0.0, 1.0, N+1)
