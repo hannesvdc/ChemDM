@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chemdm"
+version = "0.0.1"
+description = "Exploring Diffusion Models for Computational Chemistry"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = { file = "LICENSE" }
+authors = [
+    { name="Hannes Vandecasteele", email="hannesvdc@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "matplotlib"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.urls]
+Homepage = "https://github.com/hannesvdc/ChemDM"
+Documentation = "https://github.com/hannesvdc/ChemDM"
+Source = "https://github.com/hannesvdc/ChemDM"
