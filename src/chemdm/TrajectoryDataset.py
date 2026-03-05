@@ -16,6 +16,7 @@ class TrajectoryDataset( Dataset ):
         self.s_grid = pt.tensor( s_grid )
         trajectories = np.load( os.path.join(data_folder, dataset_name+"_trajectories.npy") )
         self.trajectories = pt.tensor( trajectories ) # shape ( len(s_grid), 2, n_trajectories )
+        print(self.trajectories.shape)
         assert self.trajectories.shape[0] == self.s_grid.shape[0], \
             f"Number of points per trajectory should be the same as the size of s_grid, but got {self.trajectories.shape[0]} and {s_grid.shape}"
         

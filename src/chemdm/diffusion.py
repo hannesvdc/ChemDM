@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 beta_min = 0.001
 beta_max = 10.0 # used to be 3.0 but higher is necessary to avoid bias.
-T = 1.0 # final diffusion time
+T = 2.0 # final diffusion time
 beta = lambda t: beta_min + t * (beta_max - beta_min)
 alpha = lambda t: beta_min * t + 0.5 * (beta_max - beta_min) * t**2
 mean_factor_tensor = lambda t: pt.exp(-0.5 * alpha(t))
