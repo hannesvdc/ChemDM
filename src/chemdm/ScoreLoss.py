@@ -26,7 +26,7 @@ class ScoreLoss( nn.Module ):
         # Sample t quadratically
         B_ = u0.shape[0]
         tmin = 1e-4
-        t = tmin + (df.T - tmin) * pt.rand((B_,), device=self.device, dtype=self.dtype)
+        t = tmin + (df.T - tmin) * pt.rand((B_,), device=self.device, dtype=self.dtype)**2
 
         # Forward diffusion
         mt = df.mean_factor_tensor(t)[:,None]

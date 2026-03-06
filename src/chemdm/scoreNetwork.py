@@ -1,4 +1,3 @@
-import math
 import torch as pt
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,25 +5,10 @@ import torch.nn.functional as F
 from collections import OrderedDict
 from typing import List, Tuple
 
+from chemdm.embedding import SinusoidalEmbedding, ArcLengthEmbedding
+
 def _all_equal( l : List[int] ) -> bool:
     return len( set(l) ) <= 1
-
-class SinusoidalEmbedding(nn.Module):
-    """
-    Standard sinusoidal embedding for scalar diffusion time t in [0,1].
-    Output shape: (B, 2*n_freq)
-    """
-    def __init__(self, n_freq: int = 16):
-        super().__init__()
-        self.n_freq = n_freq
-
-    def forward(self, t: pt.Tensor) -> pt.Tensor:
-        # t: (B,)
-        # frequencies: (n_freq,)
-        freqs = (2.0 * math.pi) * (2.0 ** pt.arange(self.n_freq, device=t.device, dtype=t.dtype))
-        t = t[:, None]  # (B,1)
-        emb = pt.cat([pt.sin(freqs[None, :] * t), pt.cos(freqs[None, :] * t)], dim=1)
-        return emb  # (B, 2*n_freq)
 
 class FiLMNetwork( nn.Module ):
 
@@ -73,9 +57,11 @@ class ScoreNetwork( nn.Module ):
         super().__init__()
 
         self.time_embedding = SinusoidalEmbedding( n_freq=n_freq )
+        self.arc_embedding = ArcLengthEmbedding( n_freq=n_freq )
+        n_embeds = self.time_embedding.n_embeddings + self.arc_embedding.n_embeddings
 
         self.act = nn.GELU()
-        self.film = FiLMNetwork( 4 + 2*n_freq + 2*n_freq, film_hidden_layers, hidden_layers, self.act )
+        self.film = FiLMNetwork( 4 + n_embeds, film_hidden_layers, hidden_layers, self.act )
 
         # Hidden layers
         layers = []
@@ -106,10 +92,10 @@ class ScoreNetwork( nn.Module ):
 
         # Time embedding
         t_embed = self.time_embedding( t )
-        s_embed = self.time_embedding( s )
+        s_embed = self.arc_embedding( s )
         
         # Apply the network layer, film and activations
-        film_input = pt.cat( (xA, xB, s_embed, t_embed), dim=1 ) # shape (B, 4 + 4*n_freq)
+        film_input = pt.cat( (xA, xB, s_embed, t_embed), dim=1 ) # shape (B, 4 + n_embeddings)
         gammas, betas = self.film( film_input )
         for layer_idx in range( len(self.layers) ):
             gam = gammas[layer_idx]

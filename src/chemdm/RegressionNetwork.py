@@ -5,25 +5,10 @@ import torch.nn as nn
 from collections import OrderedDict
 from typing import List
 
+from chemdm.embedding import ArcLengthEmbedding
+
 def _all_equal( l : List[int] ) -> bool:
     return len( set(l) ) <= 1
-
-class SinusoidalEmbedding(nn.Module):
-    """
-    Standard sinusoidal embedding for scalar diffusion time t in [0,1].
-    Output shape: (B, 2*n_freq)
-    """
-    def __init__(self, n_freq: int = 16):
-        super().__init__()
-        self.n_freq = n_freq
-
-    def forward(self, t: pt.Tensor) -> pt.Tensor:
-        # t: (B,)
-        # frequencies: (n_freq,)
-        freqs = (2.0 * math.pi) * (2.0 ** pt.arange(self.n_freq, device=t.device, dtype=t.dtype))
-        t = t[:, None]  # (B,1)
-        emb = pt.cat([pt.sin(freqs[None, :] * t), pt.cos(freqs[None, :] * t)], dim=1)
-        return emb  # (B, 2*n_freq)
 
 class RegressionNetwork( nn.Module ):
 
@@ -32,14 +17,15 @@ class RegressionNetwork( nn.Module ):
                 ) -> None:
         super().__init__()
 
-        self.time_embedding = SinusoidalEmbedding( n_freq=n_freq )
+        self.arc_embedding = ArcLengthEmbedding( n_freq=n_freq )
+        n_embeds = self.arc_embedding.n_embeddings
 
         self.act = nn.GELU()
 
         # Hidden layers
         layers = []
         for n in range( len(hidden_layers) ):
-            in_neurons = 4+2*n_freq if n == 0 else hidden_layers[n-1]
+            in_neurons = 4 + n_embeds if n == 0 else hidden_layers[n-1]
             out_neurons = hidden_layers[n]
             layers.append( nn.Linear(in_neurons, out_neurons, bias=True) )
         self.layers = nn.ModuleList( layers )
@@ -59,7 +45,7 @@ class RegressionNetwork( nn.Module ):
             f"`u`, `xA`, `xB` and `s` must have the same leading (batch) dimension."
 
         # Time embedding
-        s_embed = self.time_embedding( s )
+        s_embed = self.arc_embedding( s )
         
         # Apply the network layer, film and activations
         x = pt.cat( (xA, xB, s_embed), dim=1 ) # shape (B, 4 + 4*n_freq)

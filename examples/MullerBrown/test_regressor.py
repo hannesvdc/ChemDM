@@ -15,6 +15,8 @@ pt.set_grad_enabled( False )
 
 data_folder = os.path.abspath( './data' )
 train_dataset = TrajectoryDataset( data_folder, "train" )
+print(train_dataset.xA * train_dataset.diff.T + train_dataset.center.T) # all shape (2, something)
+print(train_dataset.xB * train_dataset.diff.T + train_dataset.center.T)
 
 # Build the complicated FiLM Scoring Network
 n_embeddings = 4
@@ -38,17 +40,22 @@ zA = pt.randn( (2,) )
 zB = pt.randn( (2,) )
 xA = fp_1 + sigma * ( L1 @ zA )
 xB = fp_2 + sigma * ( L2 @ zB )
+print('new xA, xB', xA, xB)
 xA_normalized = (xA[None,:] - train_dataset.center) / train_dataset.diff
 xB_normalized = (xB[None,:] - train_dataset.center) / train_dataset.diff
-print(xA_normalized.shape)
+print('normalized', xA_normalized, xB_normalized)
 
 # Propagate a full grid through the network
-s_grid = pt.linspace( 0.0, 1.0, 201, device=device, dtype=dtype ) # (B,)
+s_grid = pt.linspace( 0.0, 1.0, 200, device=device, dtype=dtype ) # (B,)
+print(s_grid)
+print(train_dataset.s_grid)
 xA_normalized = xA_normalized.expand( len(s_grid), 2 ) # (B,2)
 xB_normalized = xB_normalized.expand( len(s_grid), 2 ) # (B,2)
-xs = regression_model( xA_normalized, xB_normalized, s_grid) # (B,2)
+print('normalized expanded', xA_normalized.shape, xB_normalized.shape)
+xs = regression_model( xA_normalized, xB_normalized, s_grid ) # (B,2)
 xs = xs * train_dataset.diff + train_dataset.center
 print(xs.shape)
+print(xs)
 
 # Plot the path on the MB potential
 fig, ax = plotHelper()
