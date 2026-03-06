@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from typing import Tuple
 
 from chemdm import NEB
-from MullerBrown import potential, get_fixed_points
+from MullerBrown import potential, get_fixed_points, plotHelper
 
 def inverseHessianAt( x : pt.Tensor ) -> pt.Tensor:
     x = x.detach().requires_grad_(True)
@@ -105,65 +105,54 @@ def variance_vs_s(
 
     return s_grid, X, radial_var, mean_path
 
-# Generate random starting and end points around the local minima and run NEB for every pair.
-fp_1 = get_fixed_points()[4,:]
-xS = get_fixed_points()[3,:]
-fp_2 = get_fixed_points()[2,:]
+if __name__ == '__main__':
+    # Generate random starting and end points around the local minima and run NEB for every pair.
+    fp_1 = get_fixed_points()[4,:]
+    xS = get_fixed_points()[3,:]
+    fp_2 = get_fixed_points()[2,:]
 
-# Compute the local hessian at the local minima
-invH_1 = inverseHessianAt( fp_1 )
-invH_2 = inverseHessianAt( fp_2 )
+    # Compute the local hessian at the local minima
+    invH_1 = inverseHessianAt( fp_1 )
+    invH_2 = inverseHessianAt( fp_2 )
 
-# NEB parameters
-N = 100
-k = 0.1
-n_steps = 1000
+    # NEB parameters
+    N = 100
+    k = 0.1
+    n_steps = 1000
 
-# For every (xA, xB), run NEB
-generator = pt.Generator( )
-n_train_trajectories = 1000
-n_valid_trajectories = 100
-print('Generating Training Trajectories')
-train_trajectories, train_arclengths = generateNEBTrajectories( fp_1, fp_2, invH_1, invH_2, N, k, n_steps, n_train_trajectories, generator)
-print('Generating Validation Trajectories')
-valid_trajectories, valid_arclengths = generateNEBTrajectories( fp_1, fp_2, invH_1, invH_2, N, k, n_steps, n_valid_trajectories, generator)
+    # For every (xA, xB), run NEB
+    generator = pt.Generator( )
+    n_train_trajectories = 1000
+    n_valid_trajectories = 100
+    print('Generating Training Trajectories')
+    train_trajectories, train_arclengths = generateNEBTrajectories( fp_1, fp_2, invH_1, invH_2, N, k, n_steps, n_train_trajectories, generator)
+    print('Generating Validation Trajectories')
+    valid_trajectories, valid_arclengths = generateNEBTrajectories( fp_1, fp_2, invH_1, invH_2, N, k, n_steps, n_valid_trajectories, generator)
 
-# Interpolate the trajectories on a fixed grid of normalized arclength values
-s_grid, train_traj_int, radial_var, mean_path = variance_vs_s(train_trajectories, train_arclengths, M=200)
-_, valid_traj_int, _, _ = variance_vs_s(valid_trajectories, valid_arclengths, M=200)
+    # Interpolate the trajectories on a fixed grid of normalized arclength values
+    s_grid, train_traj_int, radial_var, mean_path = variance_vs_s(train_trajectories, train_arclengths, M=200)
+    _, valid_traj_int, _, _ = variance_vs_s(valid_trajectories, valid_arclengths, M=200)
 
-# Store
-np.save( './data/train_trajectories.npy', train_traj_int.numpy() )
-np.save( './data/valid_trajectories.npy', valid_traj_int.numpy() )
-np.save( './data/s_grid.npy', s_grid.numpy() )
+    # Store
+    np.save( './data/train_trajectories.npy', train_traj_int.numpy() )
+    np.save( './data/valid_trajectories.npy', valid_traj_int.numpy() )
+    np.save( './data/s_grid.npy', s_grid.numpy() )
 
-# Plot the validation trajectories
-# Contour plot of the MB potential.
-n_plot_points = 1001
-x_min = -1.2
-x_max = 1.0
-y_min = -0.4
-y_max = 1.8
-X = pt.linspace( x_min, x_max, n_plot_points)
-Y = pt.linspace( y_min, y_max, n_plot_points)
-X, Y = pt.meshgrid(X, Y, indexing="ij")
-XY = pt.cat( (X.flatten()[:,None], Y.flatten()[:,None]), dim=1 )
-Z = potential( XY )
-Z = Z.reshape( (n_plot_points, n_plot_points) )
+    # Plot the validation trajectories
+    # Contour plot of the MB potential.
+    fig, ax = plotHelper( )
+    for traj_index in range( train_trajectories.shape[2] ):
+        ax.plot( train_traj_int[:,0,traj_index], train_traj_int[:,1,traj_index], marker='.' )
+    ax.scatter( xS[0], xS[1], marker='x', label='SP')
+    ax.set_xlabel( r"$x$" )
+    ax.set_ylabel( r"$y$" )
+    ax.legend()
+    ax.set_title( "Trajectories" )
 
-plt.contour( X, Y, Z, levels=101 )
-for traj_index in range( train_trajectories.shape[2] ):
-    plt.plot( train_traj_int[:,0,traj_index], train_traj_int[:,1,traj_index], marker='.' )
-plt.scatter( xS[0], xS[1], marker='x', label='SP')
-plt.xlabel( r"$x$" )
-plt.ylabel( r"$y$" )
-plt.legend()
-plt.title( "Trajectories" )
-
-plt.figure()
-arclengths = pt.linspace(0.0, 1.0, N+1)
-plt.plot(s_grid.numpy(), radial_var.numpy(), label=r"$\text{Var}(s)$")
-plt.xlabel(r"$s$")
-plt.legend()
-plt.title("Radial Variance")
-plt.show()
+    plt.figure()
+    arclengths = pt.linspace(0.0, 1.0, N+1)
+    plt.plot(s_grid.numpy(), radial_var.numpy(), label=r"$\text{Var}(s)$")
+    plt.xlabel(r"$s$")
+    plt.legend()
+    plt.title("Radial Variance")
+    plt.show()

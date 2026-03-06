@@ -25,7 +25,7 @@ class SinusoidalEmbedding(nn.Module):
         emb = pt.cat([pt.sin(freqs[None, :] * t), pt.cos(freqs[None, :] * t)], dim=1)
         return emb  # (B, 2*n_freq)
 
-class ScoreNetwork( nn.Module ):
+class RegressionNetwork( nn.Module ):
 
     def __init__(self, n_freq : int,
                        hidden_layers : List[int], 
@@ -47,17 +47,15 @@ class ScoreNetwork( nn.Module ):
         # Output layer
         self.output_layer = nn.Linear( hidden_layers[-1], 2, bias=True )
 
-    def forward(self, u : pt.Tensor, # (B,2)
-                      xA : pt.Tensor, # (B, 2)
+    def forward(self, xA : pt.Tensor, # (B, 2)
                       xB : pt.Tensor, #(B,2)
                       s : pt.Tensor, # (B,)
                     ) -> pt.Tensor:
         if s.ndim > 1:
             s = s.flatten()
-        assert u.ndim == 2 and u.shape[1] == 2, f"`u` must have shape (B,2) but got {u.shape}."
         assert xA.ndim == 2 and xA.shape[1] == 2, f"`xA` must have shape (B,2) but got {xA.shape}."
         assert xB.ndim == 2 and xB.shape[1] == 2, f"`xB` must have shape (B,2) but got {xB.shape}."
-        assert _all_equal([ u.shape[0], xA.shape[0], xB.shape[0], s.shape[0]]), \
+        assert _all_equal([ xA.shape[0], xB.shape[0], s.shape[0]]), \
             f"`u`, `xA`, `xB` and `s` must have the same leading (batch) dimension."
 
         # Time embedding

@@ -18,3 +18,24 @@ def get_fixed_points() -> pt.Tensor:
                       [-0.0500108229982061, 0.466694104871972], # min
                       [-0.822001558732732, 0.624312802814871], # saddle
                       [-0.558223634633024, 1.44172584180467]]) # min
+
+def plotHelper():
+    import matplotlib.pyplot as plt
+    fig = plt.figure()
+    ax = fig.gca()
+
+    # Contour plot of the MB potential.
+    n_plot_points = 1001
+    x_min = -1.2
+    x_max = 1.0
+    y_min = -0.4
+    y_max = 1.8
+    X = pt.linspace( x_min, x_max, n_plot_points)
+    Y = pt.linspace( y_min, y_max, n_plot_points)
+    X, Y = pt.meshgrid(X, Y, indexing="ij")
+    XY = pt.cat( (X.flatten()[:,None], Y.flatten()[:,None]), dim=1 )
+    Z = potential( XY )
+    Z = Z.reshape( (n_plot_points, n_plot_points) )
+
+    ax.contour( X, Y, Z, levels=101 )
+    return fig, ax
