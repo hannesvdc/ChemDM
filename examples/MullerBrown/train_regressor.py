@@ -99,13 +99,11 @@ for epoch in range(n_epochs):
             validation_losses.append( validation_loss.item() )
 
         if validation_loss.item() < best_loss:
+            print('Storing best regression model')
             pt.save( regression_model.state_dict(), "./models/muller_brown_regressor.pth")
             best_loss = validation_loss.item()
 
     print('Validation Loss {:.6f}'.format( validation_loss.item() ))
-
-# Save the final network weights on file    
-pt.save( regression_model.state_dict(), "./models/muller_brown_regressor.pth" )
 
 # Plot the loss and grad norm
 plt.semilogy(counter, losses, label='Losses', alpha=0.5)

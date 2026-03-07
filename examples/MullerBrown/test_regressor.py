@@ -40,22 +40,15 @@ zA = pt.randn( (2,) )
 zB = pt.randn( (2,) )
 xA = fp_1 + sigma * ( L1 @ zA )
 xB = fp_2 + sigma * ( L2 @ zB )
-print('new xA, xB', xA, xB)
 xA_normalized = (xA[None,:] - train_dataset.center) / train_dataset.diff
 xB_normalized = (xB[None,:] - train_dataset.center) / train_dataset.diff
-print('normalized', xA_normalized, xB_normalized)
 
 # Propagate a full grid through the network
-s_grid = pt.linspace( 0.0, 1.0, 200, device=device, dtype=dtype ) # (B,)
-print(s_grid)
-print(train_dataset.s_grid)
+s_grid = pt.linspace( 0.0, 1.0, 2001, device=device, dtype=dtype ) # (B,)
 xA_normalized = xA_normalized.expand( len(s_grid), 2 ) # (B,2)
 xB_normalized = xB_normalized.expand( len(s_grid), 2 ) # (B,2)
-print('normalized expanded', xA_normalized.shape, xB_normalized.shape)
 xs = regression_model( xA_normalized, xB_normalized, s_grid ) # (B,2)
 xs = xs * train_dataset.diff + train_dataset.center
-print(xs.shape)
-print(xs)
 
 # Plot the path on the MB potential
 fig, ax = plotHelper()
