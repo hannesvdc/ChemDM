@@ -25,13 +25,14 @@ n_embeddings = 4
 hidden_layers = [64, 64, 64]
 film_hidden_layers = [64, 64]
 score_model = ScoreNetwork(n_embeddings, hidden_layers, film_hidden_layers).to( device=device )
-score_model.load_state_dict(pt.load("./models/muller_brown_diffusion.pth", map_location=device, weights_only=True))
+score_model.load_state_dict(pt.load("./models/muller_brown_diffusion_extended.pth", map_location=device, weights_only=True))
 score_model.eval()
 
 # Sample a new xA and xB
-fp_1 = get_fixed_points()[4,:]
-xS = get_fixed_points()[3,:]
-fp_2 = get_fixed_points()[2,:]
+fp_1 = get_fixed_points()[0,:]
+xS1 = get_fixed_points()[1,:]
+xS2 = get_fixed_points()[3,:]
+fp_2 = get_fixed_points()[4,:]
 invH_1 = inverseHessianAt( fp_1 )
 invH_2 = inverseHessianAt( fp_2 )
 jitter = 1e-10
@@ -60,7 +61,8 @@ y_traj = trajectories[:,:,1].detach().numpy() # (B, len(s_grid))
 # Plot the path on the MB potential
 fig, ax = plotHelper()
 ax.plot( x_traj.T, y_traj.T )
-ax.scatter( xS[0], xS[1], marker='x', label='SP')
+ax.scatter( xS2[0], xS2[1], marker='x', label='SP')
+ax.scatter( xS1[0], xS1[1], marker='x', label='SP')
 ax.set_xlabel( r"$x$" )
 ax.set_ylabel( r"$y$" )
 ax.legend()

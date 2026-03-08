@@ -14,20 +14,19 @@ device = pt.device( "cpu" )
 pt.set_grad_enabled( False )
 
 data_folder = os.path.abspath( './data' )
-train_dataset = TrajectoryDataset( data_folder, "train" )
-print(train_dataset.xA * train_dataset.diff.T + train_dataset.center.T) # all shape (2, something)
-print(train_dataset.xB * train_dataset.diff.T + train_dataset.center.T)
+train_dataset = TrajectoryDataset( data_folder, "train_extended" )
 
 # Build the complicated FiLM Scoring Network
 n_embeddings = 4
 hidden_layers = [64, 64, 64]
 regression_model = RegressionNetwork( n_embeddings, hidden_layers ).to( device=device, dtype=dtype )
-regression_model.load_state_dict( pt.load("./models/muller_brown_regressor.pth", map_location=device, weights_only=True) )
+regression_model.load_state_dict( pt.load("./models/muller_brown_regressor_extended.pth", map_location=device, weights_only=True) )
 
 # Sample a new xA and xB
 fp_1 = get_fixed_points()[4,:]
-xS = get_fixed_points()[3,:]
-fp_2 = get_fixed_points()[2,:]
+xS1 = get_fixed_points()[1,:]
+xS2 = get_fixed_points()[3,:]
+fp_2 = get_fixed_points()[0,:]
 invH_1 = inverseHessianAt( fp_1 )
 invH_2 = inverseHessianAt( fp_2 )
 jitter = 1e-10
@@ -50,10 +49,18 @@ xB_normalized = xB_normalized.expand( len(s_grid), 2 ) # (B,2)
 xs = regression_model( xA_normalized, xB_normalized, s_grid ) # (B,2)
 xs = xs * train_dataset.diff + train_dataset.center
 
+# Post-process by enforcing the end points exactly. This is optional
+f = 10.0
+xA_factor = pt.exp(-f*s_grid).reshape( (len(s_grid), 1) )
+xB_factor = pt.exp(-f*(1-s_grid)).reshape( (len(s_grid), 1) )
+xs = xA[None,:] * xA_factor + xB[None,:] * xB_factor + \
+    (1.0 - xA_factor) * (1.0 - xB_factor) * xs
+
 # Plot the path on the MB potential
 fig, ax = plotHelper()
 ax.plot( xs[:,0], xs[:,1], label='Transition Path' )
-ax.scatter( xS[0], xS[1], marker='x', label='SP')
+ax.scatter( xS2[0], xS2[1], marker='x', label='SP')
+ax.scatter( xS1[0], xS1[1], marker='x', label='SP')
 ax.scatter( xA[0], xA[1], marker='x', label=r'$x_A$')
 ax.scatter( xB[0], xB[1], marker='x', label=r'$x_B$')
 ax.set_xlabel( r"$x$" )

@@ -14,10 +14,19 @@ def inverseHessianAt( x : pt.Tensor ) -> pt.Tensor:
     H = hessian( f_scalar, x )
     return pt.inverse( H )
 
+def generateSample( fp : pt.Tensor,
+                     L : pt.Tensor, 
+                     sigma : float ) -> pt.Tensor:
+    z = pt.randn( (2,), generator=generator )
+    x = fp + sigma * ( L @ z )
+    return x
+
 def generateNEBTrajectories( fp_1 : pt.Tensor, 
                              fp_2 : pt.Tensor, 
+                             fp_3 : pt.Tensor,
                              invH1 : pt.Tensor,
                              invH2 : pt.Tensor,
+                             invH3 : pt.Tensor,
                              N : int, 
                              k : float, 
                              n_steps : int, 
@@ -31,18 +40,21 @@ def generateNEBTrajectories( fp_1 : pt.Tensor,
     jitter = 1e-10
     L1 = pt.linalg.cholesky(invH1 + jitter * pt.eye(2))
     L2 = pt.linalg.cholesky(invH2 + jitter * pt.eye(2))
+    L3 = pt.linalg.cholesky(invH3 + jitter * pt.eye(2))
+    fps = [fp_1, fp_2, fp_3]
+    Ls = [L1, L2, L3]
+    sample_pairs = [ [0,1], [1,0], [1,2], [2,1] ]
 
     trajectories = pt.zeros( (N+1, 2, n_data_trajectories) )
     s_store = pt.zeros( (N+1, n_data_trajectories) )
     for n in range( n_data_trajectories ):
         print( f"\rGenerating {n+1:{width}} / {n_data_trajectories}", end="", flush=True)
 
-        # correlated Gaussian perturbations
-        zA = pt.randn( (2,), generator=generator )
-        zB = pt.randn( (2,), generator=generator )
-
-        xA = fp_1 + sigma * ( L1 @ zA )
-        xB = fp_2 + sigma * ( L2 @ zB )
+        pair_idx = pt.randint(0, 4, (1,), generator=generator)
+        sp = sample_pairs[pair_idx][0]
+        ep = sample_pairs[pair_idx][1]
+        xA = generateSample( fps[sp], Ls[sp], sigma )
+        xB = generateSample( fps[ep], Ls[ep], sigma )
 
         _, neb_trajectory = NEB.computeMEP( potential, xA, xB, N, k, n_steps, verbose=False )
         trajectories[:,:,n] = neb_trajectory
@@ -108,16 +120,19 @@ def variance_vs_s(
 if __name__ == '__main__':
     # Generate random starting and end points around the local minima and run NEB for every pair.
     fp_1 = get_fixed_points()[4,:]
-    xS = get_fixed_points()[3,:]
+    xS1 = get_fixed_points()[3,:]
     fp_2 = get_fixed_points()[2,:]
+    xS2 = get_fixed_points()[1,:]
+    fp_3 = get_fixed_points()[0,:]
 
     # Compute the local hessian at the local minima
     invH_1 = inverseHessianAt( fp_1 )
     invH_2 = inverseHessianAt( fp_2 )
+    invH_3 = inverseHessianAt( fp_3 )
 
     # NEB parameters
     N = 100
-    k = 0.1
+    k = 10.0
     n_steps = 1000
 
     # For every (xA, xB), run NEB
@@ -125,17 +140,19 @@ if __name__ == '__main__':
     n_train_trajectories = 1000
     n_valid_trajectories = 100
     print('Generating Training Trajectories')
-    train_trajectories, train_arclengths = generateNEBTrajectories( fp_1, fp_2, invH_1, invH_2, N, k, n_steps, n_train_trajectories, generator)
+    train_trajectories, train_arclengths = generateNEBTrajectories( fp_1, fp_2, fp_3, invH_1, invH_2, invH_3, 
+                                                                    N, k, n_steps, n_train_trajectories, generator)
     print('Generating Validation Trajectories')
-    valid_trajectories, valid_arclengths = generateNEBTrajectories( fp_1, fp_2, invH_1, invH_2, N, k, n_steps, n_valid_trajectories, generator)
+    valid_trajectories, valid_arclengths = generateNEBTrajectories( fp_1, fp_2, fp_3, invH_1, invH_2, invH_3, 
+                                                                    N, k, n_steps, n_valid_trajectories, generator)
 
     # Interpolate the trajectories on a fixed grid of normalized arclength values
     s_grid, train_traj_int, radial_var, mean_path = variance_vs_s(train_trajectories, train_arclengths, M=200)
     _, valid_traj_int, _, _ = variance_vs_s(valid_trajectories, valid_arclengths, M=200)
 
     # Store
-    np.save( './data/train_trajectories.npy', train_traj_int.numpy() )
-    np.save( './data/valid_trajectories.npy', valid_traj_int.numpy() )
+    np.save( './data/train_extended_trajectories.npy', train_traj_int.numpy() )
+    np.save( './data/valid_extended_trajectories.npy', valid_traj_int.numpy() )
     np.save( './data/s_grid.npy', s_grid.numpy() )
 
     # Plot the validation trajectories
@@ -143,7 +160,8 @@ if __name__ == '__main__':
     fig, ax = plotHelper( )
     for traj_index in range( train_trajectories.shape[2] ):
         ax.plot( train_traj_int[:,0,traj_index], train_traj_int[:,1,traj_index], marker='.' )
-    ax.scatter( xS[0], xS[1], marker='x', label='SP')
+    ax.scatter( xS1[0], xS1[1], marker='x', label='SP')
+    ax.scatter( xS2[0], xS2[1], marker='x', label='SP')
     ax.set_xlabel( r"$x$" )
     ax.set_ylabel( r"$y$" )
     ax.legend()

@@ -16,9 +16,9 @@ device = pt.device("mps")
 # Load the full dataset
 B = 1024
 data_folder = os.path.abspath( './data' )
-train_dataset = TrajectoryDataset( data_folder, "train" )
+train_dataset = TrajectoryDataset( data_folder, "train_extended" )
 train_loader = DataLoader(train_dataset, B, shuffle=True )
-test_dataset = TrajectoryDataset( data_folder, "valid" )
+test_dataset = TrajectoryDataset( data_folder, "valid_extended" )
 test_loader = DataLoader( test_dataset, len(test_dataset) )
 
 # Build the complicated FiLM Scoring Network
@@ -99,7 +99,7 @@ for epoch in range(n_epochs):
 
         if validation_loss.item() < best_loss:
             print('Storing best diffusion model')
-            pt.save( score_model.state_dict(), "./models/muller_brown_diffusion.pth")
+            pt.save( score_model.state_dict(), "./models/muller_brown_diffusion_extended.pth")
             best_loss = validation_loss.item()
 
     print('Validation Loss {:.6f}'.format( validation_loss.item() ))
