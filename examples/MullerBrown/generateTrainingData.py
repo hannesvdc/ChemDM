@@ -137,8 +137,8 @@ if __name__ == '__main__':
 
     # For every (xA, xB), run NEB
     generator = pt.Generator( )
-    n_train_trajectories = 1000
-    n_valid_trajectories = 100
+    n_train_trajectories = 100
+    n_valid_trajectories = 10
     print('Generating Training Trajectories')
     train_trajectories, train_arclengths = generateNEBTrajectories( fp_1, fp_2, fp_3, invH_1, invH_2, invH_3, 
                                                                     N, k, n_steps, n_train_trajectories, generator)
@@ -151,9 +151,9 @@ if __name__ == '__main__':
     _, valid_traj_int, _, _ = variance_vs_s(valid_trajectories, valid_arclengths, M=200)
 
     # Store
-    np.save( './data/train_extended_trajectories.npy', train_traj_int.numpy() )
-    np.save( './data/valid_extended_trajectories.npy', valid_traj_int.numpy() )
-    np.save( './data/s_grid.npy', s_grid.numpy() )
+#    np.save( './data/train_extended_trajectories.npy', train_traj_int.numpy() )
+#    np.save( './data/valid_extended_trajectories.npy', valid_traj_int.numpy() )
+#    np.save( './data/s_grid.npy', s_grid.numpy() )
 
     # Plot the validation trajectories
     # Contour plot of the MB potential.
@@ -165,7 +165,7 @@ if __name__ == '__main__':
     ax.set_xlabel( r"$x$" )
     ax.set_ylabel( r"$y$" )
     ax.legend()
-    ax.set_title( "Trajectories" )
+    plt.tight_layout()
 
     plt.figure()
     arclengths = pt.linspace(0.0, 1.0, N+1)
