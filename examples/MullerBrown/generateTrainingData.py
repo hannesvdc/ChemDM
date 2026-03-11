@@ -56,7 +56,7 @@ def generateNEBTrajectories( fp_1 : pt.Tensor,
         xA = generateSample( fps[sp], Ls[sp], sigma )
         xB = generateSample( fps[ep], Ls[ep], sigma )
 
-        _, neb_trajectory = NEB.computeMEP( potential, xA, xB, N, k, n_steps, verbose=False )
+        _, neb_trajectory,_ = NEB.computeMEP( potential, xA, xB, N, k, n_steps, verbose=False )
         trajectories[:,:,n] = neb_trajectory
 
         # Calulate the normalized arclengths.
@@ -151,9 +151,9 @@ if __name__ == '__main__':
     _, valid_traj_int, _, _ = variance_vs_s(valid_trajectories, valid_arclengths, M=200)
 
     # Store
-#    np.save( './data/train_extended_trajectories.npy', train_traj_int.numpy() )
-#    np.save( './data/valid_extended_trajectories.npy', valid_traj_int.numpy() )
-#    np.save( './data/s_grid.npy', s_grid.numpy() )
+    np.save( './data/train_extended_trajectories.npy', train_traj_int.numpy() )
+    np.save( './data/valid_extended_trajectories.npy', valid_traj_int.numpy() )
+    np.save( './data/s_grid.npy', s_grid.numpy() )
 
     # Plot the validation trajectories
     # Contour plot of the MB potential.

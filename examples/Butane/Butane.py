@@ -60,6 +60,10 @@ def potential_internal( q : pt.Tensor,
     theta_1 = pt.arccos( q[:,0] )
     theta_2 = pt.arccos( q[:,1] )
     cos_phi = q[:,2]
+    sin_phi = q[:,3]
+    
+    scale = cos_phi**2 + sin_phi**2
+    cos_phi = cos_phi / pt.sqrt( scale )
 
     return 0.5*Butane.k_theta * ( (theta_1 - Butane.theta0)**2 + (theta_2 - Butane.theta0)**2 ) \
            + Butane.c0 - Butane.c1 * cos_phi + Butane.c2 * cos_phi**2 - Butane.c3 * cos_phi**3
@@ -73,18 +77,17 @@ def internalToCartesian( q: pt.Tensor,
     """
     theta1 = pt.arccos( q[:,0] )
     theta2 = pt.arccos( q[:,1] )
-    phi = pt.atan2( q[:,3], q[:,2] )
-    assert len(theta1) == len(theta2) and len(theta2) == len(phi), \
-        f"`theta1`, `theta2` and `phi` must have the same (flattened) size but received {len(theta1)}, {len(theta2)} and {len(phi)}"
+    cos_phi = q[:,2]
+    sin_phi = q[:,3]
     
-    x = pt.zeros( (len(phi), 4, 3) )
+    x = pt.zeros( (len(cos_phi), 4, 3) )
     x[:, 1, :] = 0.0 # x2 = origin
     x[:, 2, 0] = bond_length # x3 = on the x-axis
     x[:, 0, 0] = -bond_length * pt.cos( theta1 ) # x1 in xy-plane
     x[:, 0, 1] =  bond_length * pt.sin( theta1 )
     x[:, 3, 0] =  bond_length - bond_length * pt.cos( theta2 ) # x4 from theta2 and dihedral phi
-    x[:, 3, 1] = -bond_length * pt.sin( theta2 ) * pt.cos( phi )
-    x[:, 3, 2] =  bond_length * pt.sin( theta2 ) * pt.sin( phi )
+    x[:, 3, 1] =  bond_length * pt.sin( theta2 ) * cos_phi
+    x[:, 3, 2] =  bond_length * pt.sin( theta2 ) * sin_phi
 
     # Subtract the center of mass to obtain translation invariance.
     x = x - pt.mean( x, dim=1, keepdim=True )

@@ -1,5 +1,5 @@
 import torch as pt
-from typing import Callable
+from typing import Callable, Tuple, Optional
 
 def force_factory(V: Callable[[pt.Tensor], pt.Tensor], k: float = 1.0):
     """
@@ -78,14 +78,22 @@ def force_factory(V: Callable[[pt.Tensor], pt.Tensor], k: float = 1.0):
     return neb_force
 
 def computeMEP( V : Callable[[pt.Tensor], pt.Tensor], 
-                xA : pt.Tensor,
-                xB : pt.Tensor,
+                xA : pt.Tensor, # (d,)
+                xB : pt.Tensor, # (d,)
                 N : int,
                 k : float,
                 n_steps : int,
                 *,
+                lr : float = 1e-3,
                 verbose : bool = False,
-              ):
+                generate_initial_path : Optional[Callable] = None,
+              ) -> Tuple[pt.Tensor, pt.Tensor, float]:
+    """
+    Connect xA and xB using the Nudged Elastic Band method. Implemented in internal coordinates
+    with a unique mapping q <-> V(q).
+
+    Returns the inital guess for the path as well as the full trajectory.
+    """
     device = xA.device
     dtype = xA.dtype
 
@@ -93,15 +101,18 @@ def computeMEP( V : Callable[[pt.Tensor], pt.Tensor],
     xA = xA.flatten()
     xB = xB.flatten()
     t_grid = pt.linspace(0.0, 1.0, N+1, device=device, dtype=dtype )
-    x0 = xA + (xB - xA) * t_grid[:,None]
+    if generate_initial_path is not None:
+        x0 = generate_initial_path( xA, xB, t_grid )
+    else:
+        x0 = xA + (xB - xA) * t_grid[:,None]
 
     # Optimize only interior images
-    lr = 1e-3
     x_inner = pt.nn.Parameter(x0[1:-1].clone())  # (N-1,d)
     optimizer = pt.optim.Adam([x_inner], lr=lr)
-    scheduler = pt.optim.lr_scheduler.StepLR( optimizer, step_size=n_steps//3, gamma=0.1 )
+    scheduler = pt.optim.lr_scheduler.CosineAnnealingLR( optimizer, T_max=n_steps, eta_min=lr/100)
 
     neb_force = force_factory( V, k )
+    F_optimal = pt.inf
     for step in range(n_steps):
         optimizer.zero_grad( set_to_none=True )
 
@@ -113,9 +124,12 @@ def computeMEP( V : Callable[[pt.Tensor], pt.Tensor],
         F = neb_force( x )  # (N-1,d)
         x_inner.grad = (-F)  # gradient descent: x <- x - lr * grad = x + lr * F
         optimizer.step()
-        optimizer.step()
-
         scheduler.step( )
+
+        F_mean = pt.linalg.norm(F, dim=-1).mean().item()
+        if float(F_mean) < F_optimal:
+            F_optimal = F_mean
+            x_optimal = pt.clone(x).detach()
 
         # Print optimization information
         if verbose and (step % 200 == 0 or step == n_steps - 1):
@@ -124,6 +138,7 @@ def computeMEP( V : Callable[[pt.Tensor], pt.Tensor],
             print(f"step {step:5d}  max|F| {maxF:.3e}  mean|F| {meanF:.3e} ")
 
     # Return final band
-    with pt.no_grad():
-        x_final = pt.cat([xA[None, :], x_inner, xB[None, :]], dim=0)
-    return x0, x_final
+    if F_optimal == pt.inf:
+        with pt.no_grad():
+            x_optimal = pt.cat([xA[None, :], x_inner, xB[None, :]], dim=0).detach()
+    return x0, x_optimal, F_optimal
