@@ -51,12 +51,17 @@ def generateNEBTrajectories( N : int,
     possible_paths = [ [0, 1], [1, 0], [1, -1], [-1, 1]]
 
     # Genrate paths in Cartesian coordinates for continuity
-    def generate_initial_path( xA: pt.Tensor, xB : pt.Tensor, t_grid : pt.Tensor ):
+    def generate_initial_path( xA: pt.Tensor, # (4,)
+                               xB : pt.Tensor,  # (4,)
+                               t_grid : pt.Tensor, # (N,)
+                             ):
         t_grid = t_grid.flatten()
-        xA_c = internalToCartesian( xA[None,:] )
-        xB_c = internalToCartesian( xB[None,:] )
-        path_c = xA_c + (xB_c - xA_c) * t_grid[:,None,None]
-        path = cartesianToInternal( path_c )
+        # xA_c = internalToCartesian( xA[None,:] )
+        # xB_c = internalToCartesian( xB[None,:] )
+        path = xA[None,:] + (xB[None,:] - xA[None,:]) * t_grid[:,None]
+        path[:,2:4] = path[:,2:4] / pt.sqrt( path[:,2:3]**2 + path[:,3:4]**2 ) # rescale so cos**2 + sin**2 = 1
+        # path_c = xA_c + (xB_c - xA_c) * t_grid[:,None,None]
+        # path = cartesianToInternal( path_c )
         return path
 
     lr = 1e-4
@@ -72,6 +77,7 @@ def generateNEBTrajectories( N : int,
         # Sample a random rotation matrix to ensure equivariance during training (the network should enforce this!)
         _, q_path, F_optimal = NEB.computeMEP( potential_internal, q1, q2, N, k, n_steps, lr=lr, verbose=False, generate_initial_path=generate_initial_path)
         x_path = internalToCartesian( q_path ) # (N, 4, 3)
+        print(F_optimal)
 
         # Sample a random matrix in E(3) to train / verify equivariance
         R, t = sampleE3Invariant( generator )
@@ -86,13 +92,9 @@ def generateNEBTrajectories( N : int,
         # Re-parametrize by arclength on a grid
 
         # Store
-        #if F_optimal < 10.0:
         x[n,:,:,:] = x_path
         s_store[n,:] = s
         optimal_vals[n] = F_optimal
-        #else:
-        #    x[n,:,:,:] = pt.nan
-        #    s_store[n,:] = pt.nan
 
     return x, s_store, optimal_vals
 
@@ -122,23 +124,17 @@ def generateTrainingData():
 
     # Plot all trajectories for testing purposes.
     internal_coords = cartesianToInternal( train_trajectories ) # ( n_trajectories, N, 4 )
-    print(internal_coords.shape)
-    theta1 = pt.arccos( internal_coords[:,:,0] )
-    theta2 = pt.arccos( internal_coords[:,:,1] )
     cos_phi = internal_coords[:,:,2]
     sin_phi = internal_coords[:,:,3]
     phi = pt.atan2( sin_phi, cos_phi )
-    #phi = pt.atan2( internal_coords[:,:,3], internal_coords[:,:,2] )
-    # print(theta1.shape, phi.shape)
     for idx in range(n_train_trajectories):
-        plt.plot( cos_phi[idx,:], sin_phi[idx,:], label=r"$\cos(\phi) - \sin(\phi)$")
+        plt.plot( cos_phi[idx,:], sin_phi[idx,:])
     plt.xlabel( r"$\cos(\phi)$" )
     plt.ylabel( r"$\sin(\phi)$" )
     plt.title( "NEB Trajectories" )
     plt.legend()
     plt.figure()
     for idx in range(n_train_trajectories):
-        print(train_arclengths[idx,:], phi[idx,:])
         plt.plot(train_arclengths[idx,:], phi[idx,:], label=r"$\phi(s)$")
     plt.show()
 
