@@ -56,13 +56,19 @@ def generateNEBTrajectories( N : int,
                                t_grid : pt.Tensor, # (N,)
                              ):
         t_grid = t_grid.flatten()
-        # xA_c = internalToCartesian( xA[None,:] )
-        # xB_c = internalToCartesian( xB[None,:] )
         path = xA[None,:] + (xB[None,:] - xA[None,:]) * t_grid[:,None]
         path[:,2:4] = path[:,2:4] / pt.sqrt( path[:,2:3]**2 + path[:,3:4]**2 ) # rescale so cos**2 + sin**2 = 1
-        # path_c = xA_c + (xB_c - xA_c) * t_grid[:,None,None]
-        # path = cartesianToInternal( path_c )
         return path
+    
+    # Make sure the internal NEB coordiantes are consistent
+    @pt.no_grad()
+    def project( x : pt.Tensor, # shape (N, d),
+                 eps : float = 1e-12,
+                ) -> pt.Tensor:
+        cs = x[:, 2:4]
+        scale = pt.linalg.norm(cs, dim=1, keepdim=True)
+        x[:, 2:4] = cs / (scale + eps)
+        return x
 
     lr = 1e-4
     x = pt.zeros( (n_data_trajectories, N+1, 4, 3) )
@@ -75,7 +81,7 @@ def generateNEBTrajectories( N : int,
         q2 = generateRandomMolecules( possible_paths[path][1], 1, generator ).flatten()
 
         # Sample a random rotation matrix to ensure equivariance during training (the network should enforce this!)
-        _, q_path, F_optimal = NEB.computeMEP( potential_internal, q1, q2, N, k, n_steps, lr=lr, verbose=False, generate_initial_path=generate_initial_path)
+        _, q_path, F_optimal = NEB.computeMEP( potential_internal, q1, q2, N, k, n_steps, lr=lr, verbose=False, generate_initial_path=generate_initial_path, _project=project)
         x_path = internalToCartesian( q_path ) # (N, 4, 3)
         print(F_optimal)
 
@@ -102,7 +108,7 @@ def generateTrainingData():
     # NEB parameters
     N = 100
     k = 1e5
-    n_steps = 75_000
+    n_steps = 50_000
 
     generator = pt.Generator()
 
@@ -115,8 +121,8 @@ def generateTrainingData():
     valid_trajectories, valid_arclengths, valid_optimal_vals = generateNEBTrajectories( N, k, n_steps, n_valid_trajectories, generator=generator )
 
     # Store
-    np.save( './data/train_extended_trajectories.npy', train_trajectories.detach().numpy() )
-    np.save( './data/valid_extended_trajectories.npy', valid_trajectories.detach().numpy() )
+    np.save( './data/train_trajectories.npy', train_trajectories.detach().numpy() )
+    np.save( './data/valid_trajectories.npy', valid_trajectories.detach().numpy() )
     np.save( './data/train_arclengths.npy', train_arclengths.detach().numpy() )
     np.save( './data/valid_arclengths.npy', valid_arclengths.detach().numpy() )
     np.save( './data/train_optimal_vals.npy', train_optimal_vals.detach().numpy() )
@@ -214,12 +220,9 @@ def postprocessTrainingData():
     valid_arclenghts = pt.tensor( np.load( './data/valid_arclengths.npy' ) )
     train_optimal_vals = pt.tensor( np.load( './data/train_optimal_vals.npy' ) )
     valid_optimal_vals = pt.tensor( np.load( './data/valid_optimal_vals.npy' ) )
-    print(train_trajectories.shape)
-    print(train_arclenghts.shape)
-    print(train_optimal_vals.shape)
 
     # Filter out unconverged paths
-    T = 0.8
+    T = 0.2
     train_idx = ( train_optimal_vals.flatten() < T )
     valid_idx = ( valid_optimal_vals.flatten() < T )
     train_trajectories = train_trajectories[train_idx,:,:,:]
@@ -228,6 +231,7 @@ def postprocessTrainingData():
     valid_arclenghts = valid_arclenghts[valid_idx,:]
     train_optimal_vals = train_optimal_vals[train_idx]
     valid_optimal_vals = valid_optimal_vals[valid_idx]
+    print('Number of Paths Removed: ', len(train_idx)-pt.numel(train_optimal_vals), len(valid_idx)-pt.numel(valid_optimal_vals))
 
     # Redistribute according to arclength
     # s_grid, train_trajectories, train_var, mean_train_path = variance_vs_s( train_trajectories, train_arclenghts )

@@ -87,6 +87,7 @@ def computeMEP( V : Callable[[pt.Tensor], pt.Tensor],
                 lr : float = 1e-3,
                 verbose : bool = False,
                 generate_initial_path : Optional[Callable] = None,
+                _project : Optional[Callable] = None,
               ) -> Tuple[pt.Tensor, pt.Tensor, float]:
     """
     Connect xA and xB using the Nudged Elastic Band method. Implemented in internal coordinates
@@ -109,7 +110,7 @@ def computeMEP( V : Callable[[pt.Tensor], pt.Tensor],
     # Optimize only interior images
     x_inner = pt.nn.Parameter(x0[1:-1].clone())  # (N-1,d)
     optimizer = pt.optim.Adam([x_inner], lr=lr)
-    scheduler = pt.optim.lr_scheduler.CosineAnnealingLR( optimizer, T_max=n_steps, eta_min=lr/100)
+    scheduler = pt.optim.lr_scheduler.CosineAnnealingLR( optimizer, T_max=n_steps, eta_min=lr/1000)
 
     neb_force = force_factory( V, k )
     F_optimal = pt.inf
@@ -125,6 +126,10 @@ def computeMEP( V : Callable[[pt.Tensor], pt.Tensor],
         x_inner.grad = (-F)  # gradient descent: x <- x - lr * grad = x + lr * F
         optimizer.step()
         scheduler.step( )
+
+        # Enforce any constraints.
+        if _project is not None:
+            x = _project(x)
 
         F_mean = pt.linalg.norm(F, dim=-1).mean().item()
         if float(F_mean) < F_optimal:
