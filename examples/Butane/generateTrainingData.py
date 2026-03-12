@@ -138,5 +138,123 @@ def generateTrainingData():
         plt.plot(train_arclengths[idx,:], phi[idx,:], label=r"$\phi(s)$")
     plt.show()
 
+def variance_vs_s(
+    trajectories: pt.Tensor,   # (B, N, 4, 3)
+    s_store: pt.Tensor,        # (B, N), normalized arclength per trajectory
+    M: int = 200,
+    eps: float = 1e-12,
+) -> Tuple[pt.Tensor, pt.Tensor, pt.Tensor, pt.Tensor]:
+    """
+    Resample a batch of trajectories onto a common arclength grid and compute
+    mean path + variance.
+
+    Returns:
+      s_grid:     (M,)
+      X:          (B, M, 4, 3) resampled trajectories
+      radial_var: (M,) average squared distance to the mean path
+      mean_path:  (M, 4, 3)
+    """
+    assert trajectories.ndim == 4 and trajectories.shape[2:] == (4, 3), \
+        f"`trajectories` must have shape (B, N, 4, 3), got {trajectories.shape}"
+    assert s_store.ndim == 2, f"`s_store` must have shape (B, N), got {s_store.shape}"
+    assert trajectories.shape[:2] == s_store.shape, \
+        f"Leading shapes must match, got {trajectories.shape[:2]} and {s_store.shape}"
+
+    B, N, n_atoms, d = trajectories.shape
+    D = n_atoms * d  # flattened molecular dimension = 12
+
+    # Common s-grid
+    s_grid = pt.linspace(
+        0.0, 1.0, M,
+        dtype=trajectories.dtype,
+        device=trajectories.device,
+    )
+
+    # Flatten molecular coordinates for interpolation
+    traj_flat = trajectories.reshape(B, N, D)   # (B, N, 12)
+
+    # Resampled trajectories on common grid
+    X = pt.empty((B, M, D), dtype=trajectories.dtype, device=trajectories.device)
+
+    for b in range(B):
+        sb = s_store[b]         # (N,)
+        xb = traj_flat[b]       # (N, 12)
+
+        # Make sb nondecreasing for safety
+        sb = pt.maximum(sb, pt.cat([sb[:1], sb[:-1]]))
+        sb = sb / (sb[-1] + eps)
+
+        # Find interval [sb[i], sb[i+1]] for each point in s_grid
+        idx = pt.searchsorted(sb, s_grid, right=True) - 1
+        idx = idx.clamp(0, N - 2)
+
+        s0 = sb[idx]            # (M,)
+        s1 = sb[idx + 1]        # (M,)
+        x0 = xb[idx]            # (M, 12)
+        x1 = xb[idx + 1]        # (M, 12)
+
+        w = (s_grid - s0) / (s1 - s0 + eps)   # (M,)
+        X[b] = x0 + w[:, None] * (x1 - x0)
+
+    # Reshape back to molecular coordinates
+    X = X.reshape(B, M, 4, 3)                  # (B, M, 4, 3)
+
+    # Mean path
+    mean_path = X.mean(dim=0)                  # (M, 4, 3)
+
+    # Radial variance in full Cartesian configuration space
+    radial_var = ((X - mean_path[None])**2).sum(dim=(2, 3)).mean(dim=0)  # (M,)
+
+    return s_grid, X, radial_var, mean_path
+
+def postprocessTrainingData():
+    train_trajectories = pt.tensor( np.load( './data/train_extended_trajectories.npy' ) ) # shape (n_trajectories, N, 4, 3)
+    valid_trajectories = pt.tensor( np.load( './data/valid_extended_trajectories.npy' ) )
+    train_arclenghts = pt.tensor( np.load( './data/train_arclengths.npy' ) ) # shape (n_trajectories, N)
+    valid_arclenghts = pt.tensor( np.load( './data/valid_arclengths.npy' ) )
+    train_optimal_vals = pt.tensor( np.load( './data/train_optimal_vals.npy' ) )
+    valid_optimal_vals = pt.tensor( np.load( './data/valid_optimal_vals.npy' ) )
+    print(train_trajectories.shape)
+    print(train_arclenghts.shape)
+    print(train_optimal_vals.shape)
+
+    # Filter out unconverged paths
+    T = 0.8
+    train_idx = ( train_optimal_vals.flatten() < T )
+    valid_idx = ( valid_optimal_vals.flatten() < T )
+    train_trajectories = train_trajectories[train_idx,:,:,:]
+    valid_trajectories = valid_trajectories[valid_idx,:,:,:]
+    train_arclenghts = train_arclenghts[train_idx,:]
+    valid_arclenghts = valid_arclenghts[valid_idx,:]
+    train_optimal_vals = train_optimal_vals[train_idx]
+    valid_optimal_vals = valid_optimal_vals[valid_idx]
+
+    # Redistribute according to arclength
+    # s_grid, train_trajectories, train_var, mean_train_path = variance_vs_s( train_trajectories, train_arclenghts )
+    # s_grid, valid_trajectories, valid_var, mean_valid_path = variance_vs_s( valid_trajectories, valid_arclenghts )
+
+    # Save as a new file
+    np.save( './data/train_trajectories_filtered.npy', train_trajectories.numpy() )
+    np.save( './data/valid_trajectories_filtered.npy', valid_trajectories.numpy() )
+    np.save( './data/train_arclengths_filtered.npy', train_arclenghts.detach().numpy() )
+    np.save( './data/valid_arclengths_filtered.npy', valid_arclenghts.detach().numpy() )
+    # np.save( './data/s_grid.npy', s_grid.numpy() )
+
+    # Plot all trajectories for testing purposes.
+    internal_coords = cartesianToInternal( train_trajectories ) # ( n_trajectories, N, 4 )
+    cos_phi = internal_coords[:,:,2]
+    sin_phi = internal_coords[:,:,3]
+    phi = pt.atan2( sin_phi, cos_phi )
+    for idx in range( train_trajectories.shape[0] ):
+        plt.plot( cos_phi[idx,:], sin_phi[idx,:])
+    plt.xlabel( r"$\cos(\phi)$" )
+    plt.ylabel( r"$\sin(\phi)$" )
+    plt.title( "NEB Trajectories" )
+    plt.legend()
+    plt.figure()
+    for idx in range(train_trajectories.shape[0]):
+        plt.plot( train_arclenghts[idx,:], phi[idx,:], label=r"$\phi(s)$")
+    plt.show()
+
 if __name__ == '__main__':
     generateTrainingData( )
