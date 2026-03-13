@@ -12,7 +12,7 @@ class TrajectoryDataset( Dataset ):
         super().__init__()
 
         # Normalization
-        self.scale = 2.0
+        self.scale = 1.0
 
         # Load the trajectory data
         self.trajectories = pt.tensor( np.load( f"./data/{dataset_name}_trajectories.npy" ), requires_grad=False) / self.scale # (n_trajectories, n_points, 4, 3)
