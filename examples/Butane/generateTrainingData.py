@@ -214,35 +214,26 @@ def variance_vs_s(
     return s_grid, X, radial_var, mean_path
 
 def postprocessTrainingData():
-    train_trajectories = pt.tensor( np.load( './data/train_extended_trajectories.npy' ) ) # shape (n_trajectories, N, 4, 3)
-    valid_trajectories = pt.tensor( np.load( './data/valid_extended_trajectories.npy' ) )
+    train_trajectories = pt.tensor( np.load( './data/train_trajectories.npy' ) ) # shape (n_trajectories, N, 4, 3)
+    valid_trajectories = pt.tensor( np.load( './data/valid_trajectories.npy' ) )
     train_arclenghts = pt.tensor( np.load( './data/train_arclengths.npy' ) ) # shape (n_trajectories, N)
     valid_arclenghts = pt.tensor( np.load( './data/valid_arclengths.npy' ) )
-    train_optimal_vals = pt.tensor( np.load( './data/train_optimal_vals.npy' ) )
-    valid_optimal_vals = pt.tensor( np.load( './data/valid_optimal_vals.npy' ) )
 
-    # Filter out unconverged paths
-    T = 0.2
-    train_idx = ( train_optimal_vals.flatten() < T )
-    valid_idx = ( valid_optimal_vals.flatten() < T )
-    train_trajectories = train_trajectories[train_idx,:,:,:]
-    valid_trajectories = valid_trajectories[valid_idx,:,:,:]
-    train_arclenghts = train_arclenghts[train_idx,:]
-    valid_arclenghts = valid_arclenghts[valid_idx,:]
-    train_optimal_vals = train_optimal_vals[train_idx]
-    valid_optimal_vals = valid_optimal_vals[valid_idx]
-    print('Number of Paths Removed: ', len(train_idx)-pt.numel(train_optimal_vals), len(valid_idx)-pt.numel(valid_optimal_vals))
-
-    # Redistribute according to arclength
-    # s_grid, train_trajectories, train_var, mean_train_path = variance_vs_s( train_trajectories, train_arclenghts )
-    # s_grid, valid_trajectories, valid_var, mean_valid_path = variance_vs_s( valid_trajectories, valid_arclenghts )
+    train_arclenghts_diffs = train_arclenghts[:,1:] - train_arclenghts[:,:-1]
+    train_large_s_idx = pt.logical_not( pt.any(train_arclenghts_diffs > 0.05, dim=1) )
+    valid_arclenghts_diffs = valid_arclenghts[:,1:] - valid_arclenghts[:,:-1]
+    valid_large_s_idx = pt.logical_not( pt.any(valid_arclenghts_diffs > 0.05, dim=1) )
+    train_trajectories = train_trajectories[train_large_s_idx,:,:,:]
+    valid_trajectories = valid_trajectories[valid_large_s_idx,:,:,:]
+    train_arclenghts = train_arclenghts[train_large_s_idx,:]
+    valid_arclenghts = valid_arclenghts[valid_large_s_idx,:]
+    s_grid, train_trajectories, _,_ = variance_vs_s(train_trajectories, train_arclenghts)
+    s_grid, valid_trajectories, _,_ = variance_vs_s(valid_trajectories, valid_arclenghts)
 
     # Save as a new file
     np.save( './data/train_trajectories_filtered.npy', train_trajectories.numpy() )
     np.save( './data/valid_trajectories_filtered.npy', valid_trajectories.numpy() )
-    np.save( './data/train_arclengths_filtered.npy', train_arclenghts.detach().numpy() )
-    np.save( './data/valid_arclengths_filtered.npy', valid_arclenghts.detach().numpy() )
-    # np.save( './data/s_grid.npy', s_grid.numpy() )
+    np.save( './data/s_grid.npy', s_grid.numpy() )
 
     # Plot all trajectories for testing purposes.
     internal_coords = cartesianToInternal( train_trajectories ) # ( n_trajectories, N, 4 )
@@ -257,8 +248,8 @@ def postprocessTrainingData():
     plt.legend()
     plt.figure()
     for idx in range(train_trajectories.shape[0]):
-        plt.plot( train_arclenghts[idx,:], phi[idx,:], label=r"$\phi(s)$")
+        plt.plot( s_grid, phi[idx,:], label=r"$\phi(s)$")
     plt.show()
 
 if __name__ == '__main__':
-    generateTrainingData( )
+    postprocessTrainingData( )

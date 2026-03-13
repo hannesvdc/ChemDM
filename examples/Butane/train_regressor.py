@@ -20,7 +20,7 @@ test_dataset = TrajectoryDataset( "valid" )
 test_loader = DataLoader( test_dataset, len(test_dataset) )
 
 # Build the complicated FiLM Scoring Network
-n_embeddings = 4
+n_embeddings = 8
 hidden_layers = [64, 64, 64]
 regression_model = EquivariantNetwork( n_embeddings, hidden_layers ).to( device=device )
 n_params = sum( p.numel() for p in regression_model.parameters() if p.requires_grad )
@@ -28,12 +28,12 @@ print(f"Total trainable parameters: {n_params:,}")
 
 # Optimizer and learning rate scheduler
 lr = 1e-3
-n_epochs = 5_000
+n_epochs = 1_000
 optimizer = optim.Adam(regression_model.parameters(), lr=lr)
 scheduler = optim.lr_scheduler.CosineAnnealingLR(
     optimizer,
     T_max=n_epochs,
-    eta_min=1e-6
+    eta_min=1e-4
 )
 
 # The loss function

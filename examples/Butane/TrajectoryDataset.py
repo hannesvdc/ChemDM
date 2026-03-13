@@ -16,16 +16,15 @@ class TrajectoryDataset( Dataset ):
 
         # Load the trajectory data
         self.trajectories = pt.tensor( np.load( f"./data/{dataset_name}_trajectories.npy" ), requires_grad=False) / self.scale # (n_trajectories, n_points, 4, 3)
+        self.trajectories = self.trajectories - pt.mean(self.trajectories,dim=2,keepdim=True)
         self.xA = self.trajectories[:,0,:,:] # (n_trajectories, 4, 3)
-        self.xB = self.trajectories[:,-1,:,:] # (n_trajectories, 4, 3)
-        self.arclenghts = pt.tensor( np.load( f"./data/{dataset_name}_arclenghts.npy" ), requires_grad=False ) # (n_trajectories, n_points)
-        assert self.trajectories.shape[0] == self.arclenghts.shape[0], \
-            f"Number of points per trajectory should be the same as the size of s_grid, but got {self.trajectories.shape[0]} and {self.arclenghts.shape}"
+        self.xB = self.trajectories[:,-1,:,:] # (n_trajectories, 4, 3)train_arclengths_filtered
+        self.arclengths = pt.tensor( np.load( f"./data/{dataset_name}_arclengths.npy" ), requires_grad=False) # (n_trajectories, N)
         
     def __len__( self ) -> int:
         return self.trajectories.shape[0] * self.trajectories.shape[1]
     
     def __getitem__( self, idx : int ) -> Tuple[pt.Tensor, pt.Tensor, pt.Tensor, pt.Tensor]:
-        s_idx = idx % self.arclenghts.shape[1]
-        traj_idx = idx // self.arclenghts.shape[1]
-        return self.arclenghts[traj_idx,s_idx], self.trajectories[traj_idx,s_idx,:,:], self.xA[traj_idx,:,:], self.xB[traj_idx,:,:]
+        s_idx = idx % self.arclengths.shape[1] #len(self.s_grid) #
+        traj_idx = idx // self.arclengths.shape[1] #len(self.s_grid)#
+        return self.arclengths[traj_idx,s_idx], self.trajectories[traj_idx,s_idx,:,:], self.xA[traj_idx,:,:], self.xB[traj_idx,:,:]
