@@ -40,10 +40,33 @@ class AtomicInformation( nn.Module ):
         self.register_buffer("atom_kind_ohe", atom_kind_ohe)
         self.register_buffer("atom_mass_lookup", atom_mass_lookup)
         self.register_buffer("allowed_lookup", allowed_lookup)
+
+    def numberOfOutputs( self ) -> int:
+        """
+        Returns the number of chemical features associated to each atom. 
+        Useful for constructing neural network architectures.
+        """
+        return len(self.ALLOWED_ATOMIC_NUMBERS) + 3
     
     def forward( self, atoms : pt.Tensor,
                        bond_graph : List[List[int]],
                 ) -> pt.Tensor:
+        """
+        Compute relevant chemical information per atom based on kind and bond graph.
+
+        Arguments
+        ---------
+        atoms : tensor, shape (1,)
+            Atom kinds. Array is flattened and converted to integers before calculations.
+        
+        bond_graph: List[ List[int] ]
+            CSC-type representation of all bonds. `bond_graph[i]` must contain a list of all 
+            connected atoms. Symmetry is not explicitly enforced.
+
+        Returns
+        -------
+        chemical_knowledge: pt.Tensor of shape ( len(atoms), n_outputs )
+        """
         atoms = atoms.flatten().long()
         assert len(atoms) == len(bond_graph), \
             f"The number of atoms must match the number of entries in the bond graph, got {len(atoms)} and {len(bond_graph)} respectively"
