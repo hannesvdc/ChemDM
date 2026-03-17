@@ -1,7 +1,7 @@
 import torch as pt
 import torch.nn as nn
 
-from typing import List, ClassVar
+from typing import List, ClassVar, Set
 
 class AtomicInformation( nn.Module ):
     """
@@ -48,15 +48,15 @@ class AtomicInformation( nn.Module ):
         """
         return len(self.ALLOWED_ATOMIC_NUMBERS) + 3
     
-    def forward( self, atoms : pt.Tensor,
-                       bond_graph : List[List[int]],
+    def forward( self, Z : pt.Tensor,
+                       bond_graph : List[Set[int]],
                 ) -> pt.Tensor:
         """
         Compute relevant chemical information per atom based on kind and bond graph.
 
         Arguments
         ---------
-        atoms : tensor, shape (1,)
+        Z : tensor, shape (1,)
             Atom kinds. Array is flattened and converted to integers before calculations.
         
         bond_graph: List[ List[int] ]
@@ -65,26 +65,26 @@ class AtomicInformation( nn.Module ):
 
         Returns
         -------
-        chemical_knowledge: pt.Tensor of shape ( len(atoms), n_outputs )
+        chemical_knowledge: pt.Tensor of shape ( len(Z), n_outputs )
         """
-        atoms = atoms.flatten().long()
-        assert len(atoms) == len(bond_graph), \
-            f"The number of atoms must match the number of entries in the bond graph, got {len(atoms)} and {len(bond_graph)} respectively"
-        valid = self.allowed_lookup[atoms]
-        assert pt.all(valid), f"Unsupported atomic numbers found: {atoms[~valid].tolist()}"
+        Z = Z.flatten().long()
+        assert len(Z) == len(bond_graph), \
+            f"The number of atoms must match the number of entries in the bond graph, got {len(Z)} and {len(bond_graph)} respectively"
+        valid = self.allowed_lookup[Z]
+        assert pt.all(valid), f"Unsupported atomic numbers found: {Z[~valid].tolist()}"
 
-        device = atoms.device
-        dtype = atoms.dtype
+        device = Z.device
+        dtype = Z.dtype
 
         # Lookup elemental features
-        atom_kinds = self.atom_kind_ohe[atoms, :]   # (n_atoms, 4)
-        atom_masses = (self.atom_mass_lookup[atoms] )[:, None] # (n_atoms, 1)
+        atom_kinds = self.atom_kind_ohe[Z, :]   # (n_atoms, 4)
+        atom_masses = (self.atom_mass_lookup[Z] )[:, None] # (n_atoms, 1)
         atom_masses = atom_masses / 16.0 # explicitly normalize.
 
         # Count the number of neighbors and bonded hydrogen atoms
         degree = pt.tensor( [ len(bonds) for bonds in bond_graph ], device=device, dtype=dtype )
         degree = degree[:,None] / 4.0 # Can be more than 4, but just a sensible normalization
-        hydrogen_count = pt.tensor([ sum(1 for neighbor in bonds if atoms[neighbor] == 1)  for bonds in bond_graph ], device=device, dtype=dtype) # Fast enough for 20 atoms
+        hydrogen_count = pt.tensor([ sum(1 for neighbor in bonds if Z[neighbor] == 1)  for bonds in bond_graph ], device=device, dtype=dtype) # Fast enough for 20 atoms
         hydrogen_count = hydrogen_count[:,None] / 4.0 
 
         # Store everything in one tensor

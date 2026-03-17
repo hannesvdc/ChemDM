@@ -105,16 +105,14 @@ def prune_bonds_by_valence(bonds, x, z):
 # Download the data from huggingface
 data_directory = "/Users/hannesvdc/transition1x/"
 with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
-    for datatype in ['train', 'test', 'val']:
-        data = f[datatype]
+    for evaltype in ['train', 'test', 'val']:
+        data = f[evaltype]
         molecules = list(data.keys())
 
         storage_counter = 0
         for molecule in molecules:
-            print(molecule)
             molecule_data = data[molecule]
             reactions = molecule_data.keys()
-            print( reactions )
 
             for reaction in reactions:
                 reaction_data = molecule_data[reaction]
@@ -164,7 +162,7 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                             "bondsA" : pruned_bonds_A, "bondsB_raw" : bonds_B, "bondsB" : pruned_bonds_B }
                     
                     # Save the dict
-                    with open( os.path.join(data_directory, f"{datatype}_reaction_{storage_counter}.pkl"), "wb") as sf:
+                    with open( os.path.join(data_directory, f"{evaltype}_reaction_{storage_counter}.pkl"), "wb") as sf:
                         pickle.dump( tp_dict, sf )
                     storage_counter += 1
 
