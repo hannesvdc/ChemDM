@@ -29,9 +29,11 @@ class MolecularEmbeddingNetwork( nn.Module ):
         self.n_edge_features = 3
 
         # Nonlinear Message and Nodal Update layers
-        message_neurons_per_layer = [ 2*self.state_size + self.n_edge_features, 64, 64, self.message_size ]
+        hidden_message_neurons = max(64, self.message_size )
+        message_neurons_per_layer = [ 2*self.state_size + self.n_edge_features, hidden_message_neurons, hidden_message_neurons, self.message_size ]
         message_networks = []
-        update_neurons_per_layer = [ self.state_size + self.message_size, 64, 64, self.state_size ]
+        hidden_update_size = max( 64, self.state_size )
+        update_neurons_per_layer = [ self.state_size + self.message_size, hidden_update_size, hidden_update_size, self.state_size ]
         state_update_networks = []
         for l in range( n_layers ):
             message_network = MultiLayerPerceptron( message_neurons_per_layer, nn.GELU, f"message_layer_{l}")

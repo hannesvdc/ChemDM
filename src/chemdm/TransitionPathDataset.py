@@ -50,7 +50,7 @@ class TransitionPathDataset( Dataset ):
     
     def __getitem__( self, 
                     idx : int
-                   ) -> Tuple[pt.Tensor, pt.Tensor, pt.Tensor, pt.Tensor, List, List, List]:
+                   ) -> Tuple[pt.Tensor, pt.Tensor, pt.Tensor, pt.Tensor, pt.Tensor, List, List]:
         """
         Just return every piece of information at the current state of the reaction.
         """
@@ -76,7 +76,7 @@ class TransitionPathDataset( Dataset ):
         bondsA = self.toBondStructure( Z, tp["bondsA"] )
         bondsB = self.toBondStructure( Z, tp["bondsB"] )
 
-        return xA, xB, s, x, Z, bondsA, bondsB
+        return xA, xB, s, x, pt.tensor(Z, dtype=pt.long), bondsA, bondsB
     
 if __name__ == '__main__':
     tp_dataset = TransitionPathDataset( "train", "/Users/hannesvdc/transition1x")
