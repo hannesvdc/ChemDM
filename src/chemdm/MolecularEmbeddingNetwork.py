@@ -1,7 +1,7 @@
 import torch as pt
 import torch.nn as nn
 
-from chemdm.AtomicInformation import AtomicInformation
+from chemdm.AtomicAndGraphInformation import AtomicAndGraphInformation
 from chemdm.MLP import MultiLayerPerceptron
 
 from typing import List, Set
@@ -21,7 +21,7 @@ class MolecularEmbeddingNetwork( nn.Module ):
         self.n_layers = n_layers
 
         # Embedding of atomic information
-        self.atomic_information = AtomicInformation()
+        self.atomic_information = AtomicAndGraphInformation()
         info_neurons_per_layer = [self.atomic_information.numberOfOutputs(), 64, self.state_size]
         self.atomic_embedding = MultiLayerPerceptron( info_neurons_per_layer, nn.GELU, "embedding_atomic_info" )
 

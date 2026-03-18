@@ -17,7 +17,7 @@ def testEmbeddingNetwork():
 
     # Sample the dataset randomly and pass through the network.
     for samples in range(10):
-        idx = random.randint( 0, 1000, )
+        idx = random.randint( 0, len(dataset), )
         xA, xB, s, x, Z, bondsA, bondsB = dataset[idx]
 
         print(network(Z, xA, bondsA).shape)
