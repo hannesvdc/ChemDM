@@ -31,6 +31,9 @@ class ArcLengthEmbedding(nn.Module):
         self.n_freq = n_freq
         self.n_embeddings = 2 * self.n_freq + 2 # last two for `s` and `1-s`
 
+    def getNumberOfFeatures( self ) -> int:
+        return self.n_embeddings
+
     def forward(self, s: pt.Tensor) -> pt.Tensor:
         # s: (B,)
         # frequencies: (n_freq,)

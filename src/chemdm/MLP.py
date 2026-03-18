@@ -14,16 +14,17 @@ class MultiLayerPerceptron( nn.Module ):
         super().__init__()
 
         assert len(neurons_per_layer) >= 2, "`neurons_per_layer` must contain at least two elements."
+        self.neurons_per_layer = neurons_per_layer
         if len(name) != 0:
             name = name + '_'
 
         layers = []
-        for n in range(1, len(neurons_per_layer) ):
-            n_in = neurons_per_layer[n-1]
-            n_out = neurons_per_layer[n]
+        for n in range(1, len(self.neurons_per_layer) ):
+            n_in = self.neurons_per_layer[n-1]
+            n_out = self.neurons_per_layer[n]
 
             layers.append( ( f"{name}linear_{n}", nn.Linear(n_in, n_out, bias=True) ) )
-            if n < len(neurons_per_layer)-1:
+            if n < len(self.neurons_per_layer)-1:
                 layers.append( ( f"{name}act_{n}", act() ) )
         self.layers = nn.Sequential( OrderedDict(layers) )
 
@@ -34,6 +35,9 @@ class MultiLayerPerceptron( nn.Module ):
         if isinstance(m, nn.Linear) and m.out_features == 1:
             nn.init.zeros_(m.weight)
             nn.init.zeros_(m.bias)
+
+    def getNumberOfOutputs( self ) -> int:
+        return self.neurons_per_layer[-1]
 
     def forward(self, x : pt.Tensor ) -> pt.Tensor:
         return self.layers(x)
