@@ -65,11 +65,21 @@ class TransitionPathNetwork( nn.Module ):
 
         # Position update networks
         alpha_networks = []
+        beta_networks = []
+        gamma_networks = []
         alpha_neurons_per_layer = [ 2*self.state_size + self.n_edge_features, hidden_neurons, hidden_neurons, 1 ]
+        beta_neurons_per_layer = [ self.state_size, hidden_neurons, hidden_neurons, 1]
+        gamma_neurons_per_layer = [ self.state_size, hidden_neurons, hidden_neurons, 1]
         for l in range( self.n_layers ):
             alpha_network = MultiLayerPerceptron( alpha_neurons_per_layer, nn.GELU, f"alpha_layer_{l}")
             alpha_networks.append( alpha_network )
+            beta_network = MultiLayerPerceptron( beta_neurons_per_layer, nn.GELU, f"beta_layer_{l}")
+            beta_networks.append( beta_network )
+            gamma_network = MultiLayerPerceptron( gamma_neurons_per_layer, nn.GELU, f"gamma_layer_{l}")
+            gamma_networks.append( gamma_network )
         self.alpha_networks = nn.ModuleList( alpha_networks )
+        self.beta_networks = nn.ModuleList( beta_networks )
+        self.gamma_networks = nn.ModuleList( gamma_networks )
 
     def create_bond_mask( self, 
                           G : List[Set[int]],
@@ -123,13 +133,14 @@ class TransitionPathNetwork( nn.Module ):
         s_embed = self.arclength_embedding(s)
         if s_embed.ndim == 1:
             s_embed = s_embed[None,:]
+        s_embed = s_embed.expand(N, -1)
         h = pt.cat( (atom_embedding, hA, hB, s_embed), dim=1)
         x = (1.0 - s) * xA + s * xB
 
         # Iterate over the layers and update the states
         for l in range( self.n_layers ):
             # Calculate distances and construct the edge features
-            direction = x[:,None,:] - x[None,:,:]
+            direction = x[None,:,:] - x[:,None,:]
             distances = pt.norm( direction, dim=2 )
             edge_features = pt.stack( (bond_mask_A.to(x.dtype), 
                                        bond_mask_B.to(x.dtype), 
@@ -148,17 +159,18 @@ class TransitionPathNetwork( nn.Module ):
             h_j = h[None, :, :]   # (1, N, c)
             pair_feat = pt.cat([ h_i.expand(N, N, self.state_size), h_j.expand(N, N, self.state_size), edge_features ], dim=2) # (N,N,2C+e)
 
+            # Update the positions equivariantly
+            alpha = self.alpha_networks[l]( pair_feat )
+            neighbor_alpha = neighbor_mask[:,:,None] * alpha
+            beta = self.beta_networks[l]( h )
+            gamma = self.gamma_networks[l]( h )
+            x = x + pt.sum(neighbor_alpha * direction, dim=1) + beta * (xA - x) + gamma * (xB - x) # all (N,3)
+
             # Create the edge messages
             messages = self.message_networks[l]( pair_feat ) # (N, N, m)
             neighbor_messages = neighbor_mask[:,:,None] * messages
             m_i = pt.sum( neighbor_messages, dim=1 )
             h = h + self.state_networks[l]( pt.cat( (h, m_i), dim=1) )
-
-            # Update the positions equivariantly
-            alpha = self.alpha_networks[l]( pair_feat )
-            neighbor_alpha = neighbor_mask[:,:,None] * alpha
-            delta_x = pt.sum(neighbor_alpha * direction, dim=1)   # (N,3)
-            x = x + delta_x
 
         # Return just the position
         return x
