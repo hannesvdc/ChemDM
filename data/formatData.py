@@ -6,7 +6,7 @@ import pickle
 from rdkit import Chem
 from rdkit.Chem import rdDetermineBonds
 
-import matplotlib.pyplot as plt
+from typing import List, Set
 
 def local_minima_indices( d : np.ndarray,
                           drop : float = 0.4
@@ -77,6 +77,18 @@ MAX_COORD = {
     8: 2,   # O
 }
 
+def toBondStructure( Z : List[float],
+                     bonds : List ) -> List[Set[int]]:
+        """
+        Convert set-type bond structure to List of Lists as used in TransitionPathNetwork.
+        """
+        bond_structure = [ set() for _ in range(len(Z)) ]
+        for bond in bonds:
+            i,j = bond
+            bond_structure[i].add( j )
+            bond_structure[j].add( i )
+        return bond_structure
+
 def prune_bonds_by_valence(bonds, x, z):
     bonds = set(tuple(sorted(b)) for b in bonds)
     changed = True
@@ -104,6 +116,7 @@ def prune_bonds_by_valence(bonds, x, z):
 
 # Download the data from huggingface
 data_directory = "/Users/hannesvdc/transition1x/"
+store_directory = data_directory + "processed/"
 with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
     for evaltype in ['train', 'test', 'val']:
         data = f[evaltype]
@@ -111,6 +124,7 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
 
         storage_counter = 0
         for molecule in molecules:
+            print('molecule', molecule)
             molecule_data = data[molecule]
             reactions = molecule_data.keys()
 
@@ -154,23 +168,27 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                     tp = positions_data[start_idx:end_idx,:,:]
                     tp = np.concatenate( (xA[np.newaxis,:,:], tp, xB[np.newaxis,:,:]), axis=0)
 
+                    # Make center of mass zero
+                    xA = xA - np.mean( xA, axis=0, keepdims=True )
+                    xB = xB - np.mean( xB, axis=0, keepdims=True )
+                    tp = tp - np.mean( tp, axis=1 )
+
                     # Compute the normalized arclengths
                     s = normalized_arclength( tp )
 
                     # Make a dictionary object with all information
-                    tp_dict = { "s": s, "xA" : xA, "xB" : xB, "pos" : tp, "Z" : Z, "bondsA_raw" : bonds_A, 
-                            "bondsA" : pruned_bonds_A, "bondsB_raw" : bonds_B, "bondsB" : pruned_bonds_B }
+                    tp_dict = { "s": s,
+                                "xA" : xA, 
+                                "xB" : xB, 
+                                "pos" : tp, 
+                                "Z" : Z, 
+                                "bondsA_raw" : toBondStructure(Z, bonds_A), 
+                                "bondsA" : toBondStructure(Z, pruned_bonds_A), 
+                                "bondsB_raw" : toBondStructure(Z, bonds_B), 
+                                "bondsB" : toBondStructure(Z, pruned_bonds_B) }
                     
                     # Save the dict
-                    with open( os.path.join(data_directory, f"{evaltype}_reaction_{storage_counter}.pkl"), "wb") as sf:
+                    with open( os.path.join(store_directory, f"{evaltype}_reaction_{storage_counter}.pkl"), "wb") as sf:
                         pickle.dump( tp_dict, sf )
                     storage_counter += 1
-
-                # print(distance_from_reactant.shape, positions_data.shape)
-                # plt.plot(distance_from_reactant, label='Distance from Reactant')
-                # plt.plot(distance_from_product, alpha=0.1)
-                # plt.scatter( indices, distance_from_reactant[indices])
-                # plt.legend()
-                # plt.show()
-
-        
+        print( f"Number of {evaltype} reactions store: {storage_counter}" )
