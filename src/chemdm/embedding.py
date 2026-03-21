@@ -38,6 +38,7 @@ class ArcLengthEmbedding(nn.Module):
         # s: (B,)
         # frequencies: (n_freq,)
         freqs = 2.0 * math.pi * pt.arange(1, self.n_freq + 1, device=s.device, dtype=s.dtype)
+        s = pt.atleast_1d( s ) # to handle scalar ege cases
         s = s[:, None]  # (B,1)
         emb = pt.cat([s, 1.0-s, pt.sin(freqs[None, :] * s), pt.cos(freqs[None, :] * s)], dim=1)
         return emb  # (B, 2*n_freq)
