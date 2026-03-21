@@ -47,7 +47,7 @@ class BatchedMoleculeGraph:
 
         # Calculate the total offset per molecule.
         n_atoms = pt.tensor([mol.Z.shape[0] for mol in molecules], dtype=pt.long)
-        self.molecule_id = pt.repeat_interleave( pt.arange(len(molecules), dtype=pt.long), n_atoms )
+        self._molecule_id = pt.repeat_interleave( pt.arange(len(molecules), dtype=pt.long), n_atoms )
         offsets = pt.cumsum( pt.cat([pt.tensor([0], dtype=pt.long), n_atoms[:-1]]), dim=0 )
 
         # Merge the edge indices.
@@ -59,7 +59,7 @@ class BatchedMoleculeGraph:
 
     @property
     def x(self): return self._x
-    
+
     @property
     def edge_index(self): return self._edge_index
 
