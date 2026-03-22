@@ -3,7 +3,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Tuple
 
 class Molecule(ABC):
     @property
@@ -68,6 +68,7 @@ class BatchedMoleculeGraph( Molecule ):
     @property
     def molecule_id(self): return self._molecule_id
 
+@pt.no_grad()
 def batchMolecules(molecules: List[MoleculeGraph]) -> BatchedMoleculeGraph:
     """
     Create a batched molecule from a list of single-molecule graphs. 
@@ -87,9 +88,10 @@ def batchMolecules(molecules: List[MoleculeGraph]) -> BatchedMoleculeGraph:
     """
     return BatchedMoleculeGraph(molecules)
 
-def findAllNeighbors( molecule: Molecule,
-                      cutoff: float
-                    ) -> pt.Tensor:
+@pt.no_grad()
+def findAllDistanceNeighbors( molecule: Molecule,
+                              cutoff: float
+                            ) -> pt.Tensor:
     """
     Find all atoms within the cutoff distance from each other. Returns a tensor
     of shape (n_neighbors, 2) representing the new connections between atoms 
@@ -138,3 +140,42 @@ def findAllNeighbors( molecule: Molecule,
         neighbor_edge_index = pt.from_numpy(all_pairs).to(device=device, dtype=pt.long)
 
     return neighbor_edge_index
+
+@pt.no_grad()
+def findAllNeighbors( molecule : Molecule,
+                      d_cutoff : float
+                    ) -> Tuple[pt.Tensor, pt.Tensor]:
+    """
+    Return all atoms that are either bonds or within a distance of each other.
+
+    Arguments
+    ---------
+    molecule : Molecule
+    d_cutoff : float
+        The cutoff distance used for neighbor calculations.
+
+    Returns
+    -------
+    all_neighbors : Tensor of shape (n_edges, 2)
+        Unique directed edges.
+    is_bond : Tensor of shape (n_edges,)
+        1 if the edge is a bond in `molecule`, 0 otherwise.
+    """
+    device = molecule.x.device
+
+    # Merge the neighbors
+    bond_neighbors = molecule.edge_index
+    distance_neighbors = findAllDistanceNeighbors( molecule, d_cutoff )
+    all_edges = pt.cat([bond_neighbors, distance_neighbors], dim=0)
+    edge_type = pt.cat([
+        pt.ones(bond_neighbors.shape[0], dtype=pt.float32, device=device),
+        pt.zeros(distance_neighbors.shape[0], dtype=pt.float32, device=device),
+    ])
+    all_neighbors, inverse = pt.unique(all_edges, dim=0, return_inverse=True)
+
+    # Flag neighbors that were bonds. `edge_type` has shape E1+E2, and if either 
+    # of the duplicates was a bond, "amax" will return 1, otherwise 0.
+    is_bond = pt.zeros(all_neighbors.shape[0], dtype=pt.float32, device=device)
+    is_bond = pt.scatter_reduce( is_bond, 0, inverse, edge_type, reduce="amax", include_self=False )
+
+    return all_neighbors, is_bond
