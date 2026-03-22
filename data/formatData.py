@@ -1,10 +1,13 @@
 import os
 import h5py
 import numpy as np
+import torch as pt
 import pickle
 
 from rdkit import Chem
 from rdkit.Chem import rdDetermineBonds
+
+from chemdm.Trajectory import Trajectory
 
 from typing import List, Set
 
@@ -77,17 +80,16 @@ MAX_COORD = {
     8: 2,   # O
 }
 
-def toBondStructure( Z : List[float],
-                     bonds : List ) -> List[Set[int]]:
-        """
-        Convert set-type bond structure to List of Lists as used in TransitionPathNetwork.
-        """
-        bond_structure = [ set() for _ in range(len(Z)) ]
-        for bond in bonds:
-            i,j = bond
-            bond_structure[i].add( j )
-            bond_structure[j].add( i )
-        return bond_structure
+def toBondStructure( bonds : List ) -> pt.Tensor:
+    """
+    Convert set-type bond structure to a two-dimensional torch tensor.
+    """
+    bond_structure = []
+    for bond in bonds:
+        i,j = bond
+        bond_structure.append( [i,j] )
+        bond_structure.append( [j,i] )
+    return pt.unique( pt.tensor( bond_structure ), dim=0 )
 
 def prune_bonds_by_valence(bonds, x, z):
     bonds = set(tuple(sorted(b)) for b in bonds)
@@ -140,9 +142,9 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                 
                 # Do some essential checks
                 assert (reactant['atomic_numbers'][:] == product['atomic_numbers'][:]).all()
-                xA = reactant['positions'][:][0]
+                xA = np.asarray( reactant['positions'][:][0] )
                 assert np.allclose( xA, positions_data[0,:,:])
-                xB = product['positions'][:][0]
+                xB = np.asarray( product['positions'][:][0] )
                 matches = np.array([np.allclose(frame, xA, rtol=1e-3, atol=1e-3) for frame in positions_data])
                 assert np.sum(matches) == 1
 
@@ -159,7 +161,9 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                 distance_from_reactant = np.linalg.norm( (positions_data - xA[np.newaxis,:,:]).reshape(positions_data.shape[0], -1), axis=1)
                 distance_from_product = np.linalg.norm( (positions_data - xB[np.newaxis,:,:]).reshape(positions_data.shape[0], -1), axis=1)
                 indices = local_minima_indices( distance_from_reactant )
-                indices = np.insert( indices, 0, [1] ) 
+                indices = np.insert( indices, 0, [1] )
+                
+                reaction_trajectories = []
                 for t_idx in range( len(indices) ):
                     start_idx = indices[t_idx]
                     end_idx = indices[t_idx+1] if t_idx+1 < len(indices) else positions_data.shape[0]
@@ -171,24 +175,23 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                     # Make center of mass zero
                     xA = xA - np.mean( xA, axis=0, keepdims=True )
                     xB = xB - np.mean( xB, axis=0, keepdims=True )
-                    tp = tp - np.mean( tp, axis=1 )
+                    tp = tp - np.mean( tp, axis=1, keepdims=True )
 
                     # Compute the normalized arclengths
                     s = normalized_arclength( tp )
 
-                    # Make a dictionary object with all information
-                    tp_dict = { "s": s,
-                                "xA" : xA, 
-                                "xB" : xB, 
-                                "pos" : tp, 
-                                "Z" : Z, 
-                                "bondsA_raw" : toBondStructure(Z, bonds_A), 
-                                "bondsA" : toBondStructure(Z, pruned_bonds_A), 
-                                "bondsB_raw" : toBondStructure(Z, bonds_B), 
-                                "bondsB" : toBondStructure(Z, pruned_bonds_B) }
-                    
-                    # Save the dict
-                    with open( os.path.join(store_directory, f"{evaltype}_reaction_{storage_counter}.pkl"), "wb") as sf:
-                        pickle.dump( tp_dict, sf )
-                    storage_counter += 1
+                    # Store as a trajectory object for easy loading.
+                    trajectory = Trajectory( pt.tensor(Z, dtype=pt.long), 
+                                             pt.tensor(xA), 
+                                             pt.tensor(xB),
+                                             toBondStructure( pruned_bonds_A ),
+                                             toBondStructure( pruned_bonds_B ),
+                                             pt.tensor(s),
+                                             pt.tensor(tp) )
+                    reaction_trajectories.append( trajectory )
+
+                # Save the trajectories for this reaction.
+                with open( os.path.join(store_directory, f"{evaltype}_reaction_{storage_counter}.pkl"), "wb") as sf:
+                    pickle.dump( reaction_trajectories, sf )
+                storage_counter += 1
         print( f"Number of {evaltype} reactions store: {storage_counter}" )

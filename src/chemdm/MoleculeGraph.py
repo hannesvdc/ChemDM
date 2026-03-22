@@ -21,7 +21,10 @@ class Molecule(ABC):
     def edge_index(self) -> pt.Tensor: pass
 
     @abstractmethod
-    def copyWithNewPositions(self, x : pt.Tensor ) -> Self: pass 
+    def to( self, device : pt.device, dtype : pt.dtype ) -> Self: pass
+
+    @abstractmethod
+    def copyWithNewPositions(self, x : pt.Tensor ) -> Self: pass
 
 class MoleculeGraph( Molecule ):
 
@@ -46,6 +49,12 @@ class MoleculeGraph( Molecule ):
     @property
     def edge_index(self): return self._edge_index
 
+    def to( self, device=pt.device("cpu"), dtype=pt.float64 ) -> Self:
+        self._Z = self._Z.to( device=device )
+        self._x = self._x.to( device=device, dtype=dtype )
+        self._edge_index = self._edge_index.to( device=device )
+        return self
+
     def copyWithNewPositions(self, x: pt.Tensor) -> Self:
         return type(self)( self._Z, x, self._edge_index )
 
@@ -63,7 +72,14 @@ class BatchedMoleculeGraph( Molecule ):
 
         # Merge the edge indices.
         edge_list = [ mol.edge_index + offset for mol, offset in zip(molecules, offsets) ]
-        self._edge_index = pt.cat(edge_list, dim=0)   # shape: (total_edges, 2)
+        self._edge_index = pt.cat(edge_list, dim=0).to(device=self._x.device)   # shape: (total_edges, 2)
+
+    def to( self, device=pt.device("cpu"), dtype=pt.float64 ) -> Self:
+        self._Z = self._Z.to( device=device )
+        self._x = self._x.to( device=device, dtype=dtype )
+        self._edge_index = self._edge_index.to( device=device )
+        self._molecule_id = self._molecule_id.to( device=device )
+        return self
 
     @property
     def Z(self): return self._Z

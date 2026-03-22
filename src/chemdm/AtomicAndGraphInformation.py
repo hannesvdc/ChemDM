@@ -21,17 +21,17 @@ class MoleculeInformation( nn.Module ):
 
     ALLOWED_ATOMIC_NUMBERS: ClassVar[tuple[int, ...]] = (1, 6, 7, 8)
 
-    def __init__( self, dtype=pt.float32) -> None:
+    def __init__( self ) -> None:
         super().__init__()
 
         # Create a vectorized lookup structure for atomic masses and kinds (one-hot encoded).
         atom_type_rows = { 1 : 0, 6 : 1, 7 : 2, 8 : 3}
-        atom_kind_ohe = pt.zeros( (max(atom_type_rows.keys())+1, len(atom_type_rows.keys())), dtype=dtype )
+        atom_kind_ohe = pt.zeros( (max(atom_type_rows.keys())+1, len(atom_type_rows.keys())) )
         for k, v in atom_type_rows.items():
             atom_kind_ohe[k, v] = 1.0
         
         atom_masses = { 1 : 1.008, 6 : 12.001, 7 : 14.007, 8 : 15.999 }
-        atom_mass_lookup = pt.full( (max(atom_masses.keys()) + 1,), -1.0, dtype=dtype )
+        atom_mass_lookup = pt.full( (max(atom_masses.keys()) + 1,), -1.0 )
         for k, v in atom_masses.items():
             atom_mass_lookup[k] = float(v)
 

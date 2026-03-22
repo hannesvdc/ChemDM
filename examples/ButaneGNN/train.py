@@ -1,3 +1,6 @@
+import os
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
 import random
 import torch as pt
 from torch.optim import Adam
@@ -56,10 +59,8 @@ def main():
     )
 
     # Move to the GPU
-    device = pt.device( "cpu" )
+    device = pt.device( "mps" )
     dtype = pt.float32
-    train_dataset.to( device=device, dtype=dtype )
-    valid_dataset.to( device=device, dtype=dtype )
 
     # Global molecular information
     d_cutoff = 5.0 # Amstrong
@@ -68,8 +69,8 @@ def main():
     embedding_state_size = 32
     embedding_message_size = 32
     n_embedding_layers = 3
-    xA_embedding = MolecularEmbeddingGNN(embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff, dtype=dtype)
-    xB_embedding = MolecularEmbeddingGNN(embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff, dtype=dtype)
+    xA_embedding = MolecularEmbeddingGNN(embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff, device=device, dtype=dtype)
+    xB_embedding = MolecularEmbeddingGNN(embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff, device=device, dtype=dtype)
     n_tp_layers = 3
     tp_message_size = 32
     tp_network = TransitionPathGNN( xA_embedding, xB_embedding, tp_message_size, n_tp_layers, d_cutoff )
@@ -113,6 +114,11 @@ def main():
         for batch_idx, (xA, xB, s, x_ref) in enumerate( train_loader ):
             optimizer.zero_grad( set_to_none=True )
 
+            xA = xA.to( device=device, dtype=dtype )
+            xB = xB.to( device=device, dtype=dtype )
+            s = s.to( device=device, dtype=dtype )
+            x_ref = x_ref.to( device=device, dtype=dtype )
+
             # Evalute the loss
             loss = evaluate_batch( xA, xB, s, x_ref )
             epoch_loss += float( loss.item() )
@@ -143,6 +149,11 @@ def main():
         n_batches = len(valid_loader)
         epoch_loss = 0.0
         for batch_idx, (xA, xB, s, x_ref) in enumerate( valid_loader ):
+
+            xA = xA.to( device=device, dtype=dtype )
+            xB = xB.to( device=device, dtype=dtype )
+            s = s.to( device=device, dtype=dtype )
+            x_ref = x_ref.to( device=device, dtype=dtype )
 
             # Evalute the loss
             loss = evaluate_batch( xA, xB, s, x_ref )
