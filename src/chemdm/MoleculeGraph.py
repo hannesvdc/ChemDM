@@ -1,9 +1,11 @@
 import torch as pt
 import numpy as np
-from scipy.spatial import cKDTree
+import copy
+
+import chemdm.graph.algorithms as alg
 
 from abc import ABC, abstractmethod
-from typing import List, Tuple
+from typing import List, Tuple, Self
 
 class Molecule(ABC):
     @property
@@ -17,6 +19,9 @@ class Molecule(ABC):
     @property
     @abstractmethod
     def edge_index(self) -> pt.Tensor: pass
+
+    @abstractmethod
+    def copyWithNewPositions(self, x : pt.Tensor ) -> Self: pass 
 
 class MoleculeGraph( Molecule ):
 
@@ -41,7 +46,11 @@ class MoleculeGraph( Molecule ):
     @property
     def edge_index(self): return self._edge_index
 
+    def copyWithNewPositions(self, x: pt.Tensor) -> Self:
+        return type(self)( self._Z, x, self._edge_index )
+
 class BatchedMoleculeGraph( Molecule ):
+
     def __init__(self, molecules: List[MoleculeGraph]) -> None:
         # Concatenate atomic state and positions.
         self._Z = pt.cat([mol.Z for mol in molecules], dim=0)
@@ -67,6 +76,18 @@ class BatchedMoleculeGraph( Molecule ):
 
     @property
     def molecule_id(self): return self._molecule_id
+
+    @classmethod
+    def fromRawTensors(cls, Z: pt.Tensor, x: pt.Tensor, edge_index: pt.Tensor, molecule_id : pt.Tensor):
+        obj = cls.__new__(cls)
+        obj._Z = Z
+        obj._x = x
+        obj._edge_index = edge_index
+        obj._molecule_id = molecule_id
+        return obj
+
+    def copyWithNewPositions(self, x: pt.Tensor):
+        return BatchedMoleculeGraph.fromRawTensors(self._Z, x, self._edge_index, self._molecule_id)
 
 @pt.no_grad()
 def batchMolecules(molecules: List[MoleculeGraph]) -> BatchedMoleculeGraph:
@@ -114,30 +135,16 @@ def findAllDistanceNeighbors( molecule: Molecule,
         Represents all new edgs between neighbors. Guaranteed symmetric and
         excluding self-edges.
     """
-    device = molecule.x.device
 
     # Move batch separation into an extra coordinate so different molecules
     # cannot become neighbors.
-    x_cpu = molecule.x.detach().cpu()
     if isinstance( molecule, BatchedMoleculeGraph ):
-        mol_id_cpu = molecule.molecule_id.detach().cpu().to(x_cpu.dtype)[:, None] 
-        points = pt.cat([x_cpu, 2.0 * cutoff * mol_id_cpu], dim=1).numpy()
+        x = pt.cat([molecule.x, 2.0 * cutoff * molecule.molecule_id[:,None]], dim=1)
     else:
-        points = x_cpu.numpy()
+        x = molecule.x
 
-    # Construct the KDTree and query for neighbors
-    tree = cKDTree(points)
-    pairs = tree.query_pairs( r=cutoff, p=2.0)
-    pairs = np.array(list( pairs ), dtype=np.int64)
-
-    # Convert to a torch tensor of shape (n_neighbor_pairs, 2)
-    if pairs.size == 0:
-        neighbor_edge_index = pt.empty((0, 2), dtype=pt.long, device=device)
-    else:
-        # Add both directions
-        rev_pairs = pairs[:, [1, 0]]
-        all_pairs = np.concatenate([pairs, rev_pairs], axis=0)
-        neighbor_edge_index = pt.from_numpy(all_pairs).to(device=device, dtype=pt.long)
+    # Inline function
+    neighbor_edge_index = alg.findAllDistanceNeighbors( x, cutoff )
 
     return neighbor_edge_index
 
@@ -161,21 +168,78 @@ def findAllNeighbors( molecule : Molecule,
     is_bond : Tensor of shape (n_edges,)
         1 if the edge is a bond in `molecule`, 0 otherwise.
     """
-    device = molecule.x.device
 
     # Merge the neighbors
     bond_neighbors = molecule.edge_index
     distance_neighbors = findAllDistanceNeighbors( molecule, d_cutoff )
-    all_edges = pt.cat([bond_neighbors, distance_neighbors], dim=0)
-    edge_type = pt.cat([
-        pt.ones(bond_neighbors.shape[0], dtype=pt.float32, device=device),
+    return alg.mergeBondAndDistanceNeighbors(bond_neighbors, distance_neighbors)
+
+
+@pt.no_grad()
+def findAllNeighborsReactantProduct( moleculeA : Molecule,
+                                     moleculeB : Molecule,
+                                     x : pt.Tensor,
+                                     d_cutoff : float
+                                   ) -> Tuple[pt.Tensor, pt.Tensor, pt.Tensor]:
+    """
+    Return all atoms that are either bonds in molecule A, bonds in molecule B,
+    or within a distance of each other.
+
+    Arguments
+    ---------
+    moleculeA : Molecule
+        Reactant graph.
+    moleculeB : Molecule
+        Product graph.
+    x : Tensor of shape (N_atoms, 3)
+        Intermediate coordinates used for distance-based neighbor calculations.
+    d_cutoff : float
+        The cutoff distance used for neighbor calculations.
+
+    Returns
+    -------
+    all_neighbors : Tensor of shape (n_edges, 2)
+        Unique directed edges.
+    is_bond_A : Tensor of shape (n_edges,)
+        1 if the edge is a bond in `moleculeA`, 0 otherwise.
+    is_bond_B : Tensor of shape (n_edges,)
+        1 if the edge is a bond in `moleculeB`, 0 otherwise.
+    """
+    assert pt.all( moleculeA.Z == moleculeB.Z ), f"Both molecules must have the same atoms in the same ordering."
+    if isinstance( moleculeA, BatchedMoleculeGraph ):
+        assert isinstance( moleculeB, BatchedMoleculeGraph), f"If either molecuule is a batched molecule, so must the other be"
+        assert pt.all( moleculeA.molecule_id == moleculeB.molecule_id ), f"Batched molecule A and B must represent the same batch."
+
+    device = x.device
+
+    # Build a temperary molecule with the same strucure as A and B but with positions x
+    moleculeX = moleculeA.copyWithNewPositions( x )
+    distance_neighbors = findAllDistanceNeighbors( moleculeX, d_cutoff) # type: ignore
+
+    # Merge the neighbors
+    bond_neighbors_A = moleculeA.edge_index
+    bond_neighbors_B = moleculeB.edge_index
+    all_edges = pt.cat([bond_neighbors_A, bond_neighbors_B, distance_neighbors], dim=0)
+
+    edge_type_A = pt.cat([
+        pt.ones (bond_neighbors_A.shape[0], dtype=pt.float32, device=device),
+        pt.zeros(bond_neighbors_B.shape[0], dtype=pt.float32, device=device),
         pt.zeros(distance_neighbors.shape[0], dtype=pt.float32, device=device),
     ])
+
+    edge_type_B = pt.cat([
+        pt.zeros(bond_neighbors_A.shape[0], dtype=pt.float32, device=device),
+        pt.ones (bond_neighbors_B.shape[0], dtype=pt.float32, device=device),
+        pt.zeros(distance_neighbors.shape[0], dtype=pt.float32, device=device),
+    ])
+
     all_neighbors, inverse = pt.unique(all_edges, dim=0, return_inverse=True)
 
-    # Flag neighbors that were bonds. `edge_type` has shape E1+E2, and if either 
-    # of the duplicates was a bond, "amax" will return 1, otherwise 0.
-    is_bond = pt.zeros(all_neighbors.shape[0], dtype=pt.float32, device=device)
-    is_bond = pt.scatter_reduce( is_bond, 0, inverse, edge_type, reduce="amax", include_self=False )
+    # Flag neighbors that were bonds in A / B
+    is_bond_A = pt.zeros(all_neighbors.shape[0], dtype=pt.float32, device=device)
+    is_bond_A = pt.scatter_reduce(is_bond_A, 0, inverse, edge_type_A, reduce="amax", include_self=False)
 
-    return all_neighbors, is_bond
+    is_bond_B = pt.zeros(all_neighbors.shape[0], dtype=pt.float32, device=device)
+    is_bond_B = pt.scatter_reduce(is_bond_B, 0, inverse, edge_type_B, reduce="amax", include_self=False)
+
+    return all_neighbors, is_bond_A, is_bond_B
