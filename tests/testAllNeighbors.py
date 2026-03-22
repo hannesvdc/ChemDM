@@ -1,6 +1,6 @@
 import torch as pt
 
-from chemdm.graph.MoleculeGraph import MoleculeGraph, batchMolecules, findAllNeighbors
+from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, findAllNeighbors
 
 def assert_same_edges(actual: pt.Tensor, expected: pt.Tensor) -> None:
     actual_set = set(map(tuple, actual.tolist()))

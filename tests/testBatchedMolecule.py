@@ -1,7 +1,7 @@
 import torch as pt
 import random
 
-from chemdm.graph.MoleculeGraph import MoleculeGraph, BatchedMoleculeGraph
+from chemdm.MoleculeGraph import MoleculeGraph, BatchedMoleculeGraph
 
 def testSimpleBatching():
     mol1 = MoleculeGraph(
