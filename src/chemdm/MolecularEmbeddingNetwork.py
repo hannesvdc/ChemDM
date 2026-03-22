@@ -1,7 +1,7 @@
 import torch as pt
 import torch.nn as nn
 
-from chemdm.graph.MoleculeGraph import Molecule, findAllNeighbors
+from chemdm.MoleculeGraph import Molecule, findAllNeighbors
 from chemdm.AtomicAndGraphInformation import AtomicAndGraphInformation, MoleculeInformation
 from chemdm.MLP import MultiLayerPerceptron
 
@@ -23,7 +23,7 @@ class MolecularEmbeddingGNN( nn.Module ):
         # Embedding of molecular information
         self.molecule_information = MoleculeInformation()
         info_neurons_per_layer = [self.molecule_information.numberOfOutputs(), 64, self.state_size]
-        self.molecule_embedding = MultiLayerPerceptron( info_neurons_per_layer, nn.GELU, "molecule_embedding" )
+        self.molecule_info_embedding = MultiLayerPerceptron( info_neurons_per_layer, nn.GELU, "molecule_embedding" )
 
         # There must be a more principled way instead of hard-coding this.
         self.n_edge_features = 3
@@ -38,7 +38,7 @@ class MolecularEmbeddingGNN( nn.Module ):
         for l in range( n_layers ):
             message_network = MultiLayerPerceptron( message_neurons_per_layer, nn.GELU, f"message_layer_{l}")
             message_networks.append( message_network )
-            update_network = MultiLayerPerceptron( update_neurons_per_layer, nn.GELU, f"update_layer_{l}")
+            update_network = MultiLayerPerceptron( update_neurons_per_layer, nn.GELU, f"update_layer_{l}", init_zero=True )
             state_update_networks.append( update_network )
         self.message_networks = nn.ModuleList( message_networks )
         self.state_update_networks = nn.ModuleList( state_update_networks )
@@ -47,7 +47,7 @@ class MolecularEmbeddingGNN( nn.Module ):
 
         # Calculate the atomic embedding
         molecule_info = self.molecule_information( molecule ) # (N, info)
-        h = self.molecule_embedding( molecule_info ) # shape (N, c)
+        h = self.molecule_info_embedding( molecule_info ) # shape (N, c)
 
         # Construct all neighbors
         all_edges, is_bond = findAllNeighbors( molecule, self.d_cutoff )
@@ -55,10 +55,10 @@ class MolecularEmbeddingGNN( nn.Module ):
         dst = all_edges[:,1]
 
         # Calculate the edge features
-        dx = molecule.x[dst] - molecule.x[src]
+        dx = molecule.x[src] - molecule.x[dst]
         dist2 = (dx * dx).sum(dim=1, keepdim=True)
         dist = pt.sqrt( dist2 )
-        edge_features = pt.cat([is_bond[:, None], dist, dist2], dim=1)
+        edge_features = pt.cat([is_bond[:, None], dist, dist2], dim=1) # TODO: proper scaling.
 
         # move through all the layers of the GNN
         for l in range( self.n_layers ):
