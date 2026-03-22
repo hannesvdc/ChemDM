@@ -1,9 +1,9 @@
 import torch as pt
 import torch.nn as nn
 
-from chemdm.graph.MoleculeGraph import Molecule
+from chemdm.MoleculeGraph import Molecule
 
-from typing import List, ClassVar, Set
+from typing import ClassVar
 
 class AtomicInformation( nn.Module ):
     """
