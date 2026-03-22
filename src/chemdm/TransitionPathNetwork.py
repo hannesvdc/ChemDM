@@ -83,6 +83,8 @@ class TransitionPathGNN( nn.Module ):
                  s : pt.Tensor,
                ) -> pt.Tensor:
         assert pt.all( xA.Z == xB.Z ), f"`xA` and `xB` must have the same atoms in the same ordering."
+        s = s.flatten()
+        assert s.numel() == len(xA.Z), f"`s` must have the same number of elements as the number of atoms in xA and xB."
         N = len(xA.Z)
 
         # Calculate the atomic embedding
@@ -97,9 +99,8 @@ class TransitionPathGNN( nn.Module ):
         s_embed = self.arclength_embedding(s)
         if s_embed.ndim == 1:
             s_embed = s_embed[None,:]
-        s_embed = s_embed.expand(N, -1)
         h = pt.cat( (atom_embedding, hA, hB, s_embed), dim=1)
-        base = (1.0 - s) * xA.x + s * xB.x
+        base = (1.0 - s[:,None]) * xA.x + s[:,None] * xB.x
         x = base.clone()
 
         # Iterate over the layers and update the states
@@ -143,7 +144,6 @@ class TransitionPathGNN( nn.Module ):
             neighbor_update = pt.zeros_like(x)                # (N, 3)
             neighbor_update.index_add_(0, dst, edge_updates)  # sum over neighbors j for each i = dst
             x = x + neighbor_update + beta * (base - x)       # (N, 3)
-
 
         # Return just the position
         return x

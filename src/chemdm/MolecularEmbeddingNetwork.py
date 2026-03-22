@@ -12,7 +12,8 @@ class MolecularEmbeddingGNN( nn.Module ):
                   state_size : int,
                   message_size : int,
                   n_layers : int,
-                  d_cutoff : float ) -> None:
+                  d_cutoff : float,
+                  dtype = pt.float32 ) -> None:
         super().__init__()
 
         self.state_size = state_size # c
@@ -21,7 +22,7 @@ class MolecularEmbeddingGNN( nn.Module ):
         self.d_cutoff = d_cutoff
 
         # Embedding of molecular information
-        self.molecule_information = MoleculeInformation()
+        self.molecule_information = MoleculeInformation( dtype=dtype )
         info_neurons_per_layer = [self.molecule_information.numberOfOutputs(), 64, self.state_size]
         self.molecule_info_embedding = MultiLayerPerceptron( info_neurons_per_layer, nn.GELU, "molecule_embedding" )
 

@@ -8,7 +8,7 @@ class Trajectory:
     Z : pt.Tensor
     xA : pt.Tensor
     xB : pt.Tensor
-    GA : List[Set[int]]
-    GB : List[Set[int]]
+    GA : pt.Tensor
+    GB : pt.Tensor
     s : pt.Tensor
     x : pt.Tensor

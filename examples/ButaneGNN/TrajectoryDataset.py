@@ -23,7 +23,7 @@ class TrajectoryDataset( Dataset ):
 
         # Construct the neighbor graph
         self.Z = pt.tensor([6, 6, 6, 6], dtype=pt.long)
-        self.G = [ set([1]), set([0,2]), set([1,3]), set([2]) ]
+        self.G = pt.tensor( [[0, 1], [1, 0], [1, 2], [2, 1], [2, 3], [3, 2]], dtype=pt.long )
 
     def to( self, device : pt.device, dtype : pt.dtype ):
         self.trajectories.to(device=device, dtype=dtype)
@@ -31,6 +31,7 @@ class TrajectoryDataset( Dataset ):
         self.xB.to(device=device, dtype=dtype)
         self.arclengths.to(device=device, dtype=dtype)
         self.Z.to(device=device)
+        self.G.to(device=device)
         return self
         
     def __len__( self ) -> int:
