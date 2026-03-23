@@ -42,6 +42,7 @@ class TransitionPathDataset( Dataset ):
         """
         Just return every piece of information at the current state of the reaction.
         """
+        print('loading from file')
         file_name = os.path.join( self.data_directory, f"{self.name}_reaction_{idx}.pkl")
         with open( file_name, "rb" ) as file:
             tp_list = pickle.load( file )

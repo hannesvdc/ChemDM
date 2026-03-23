@@ -1,6 +1,7 @@
 import os
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
+import json
 import random
 import torch as pt
 from torch.optim import Adam
@@ -20,6 +21,7 @@ from typing import List, Tuple
 
 def collate_molecules(batch : List[List[Trajectory]]
                      ) -> Tuple[BatchedMoleculeGraph, BatchedMoleculeGraph, pt.Tensor, pt.Tensor]:
+    print('collating')
     trajectories = list(itertools.chain.from_iterable( batch )) # squash the nested list of trajectories
 
     # Sample random points on the trajectory for each molecule
@@ -44,8 +46,12 @@ def collate_molecules(batch : List[List[Trajectory]]
     return xA, xB, s, x_ref
 
 def main():
-    B = 2
-    data_directory = "/Users/hannesvdc/transition1x/processed"
+    with open( './data_config.json', "r" ) as f:
+        data_config = json.load( f )
+    data_directory = data_config["data_folder"]
+    device_name = data_config["device"]
+
+    B = 1
     train_dataset = TransitionPathDataset( "train", data_directory )
     train_loader = DataLoader(
         train_dataset,
@@ -86,7 +92,7 @@ def main():
         return pt.mean( (x - xs)**2 ) # average over N and 3
 
     # Move to the GPU
-    device = pt.device( "mps" )
+    device = pt.device( device_name )
     dtype = pt.float32
     tp_network.to( device=device, dtype=dtype )
 
@@ -98,7 +104,7 @@ def main():
         print('Evaluating batch', len(xA.Z))
         xs = tp_network( xA, xB, s )
         loss = loss_fcn( x_ref, xs )
-        print('Done')
+        # print('Done')
         return loss
 
     train_counter = []
@@ -122,7 +128,11 @@ def main():
             loss = evaluate_batch( xA, xB, s, x_ref )
             epoch_loss += float( loss.item() )
 
+            # Make sure to clean up any memory
+            del xA, xB, s, x_ref
+
             # Make an optmizer step
+            print('Evaluating gradient')
             loss.backward()
             grad_norm = getGradientNorm( tp_network )
             pt.nn.utils.clip_grad_norm_( tp_network.parameters(), 1.0 )
@@ -157,6 +167,9 @@ def main():
             # Evalute the loss
             loss = evaluate_batch( xA, xB, s, x_ref )
             epoch_loss += float( loss.item() )
+
+            # Make sure to clean up any memory
+            del xA, xB, s, x_ref
 
             # Print some information
             epoch_idx = epoch + (batch_idx+1.0) / n_batches
