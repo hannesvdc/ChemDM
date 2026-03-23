@@ -170,12 +170,17 @@ def main():
 
     # The simplest of training loops for now.            
     n_epochs = 3 * step_size
+    best_val_loss = pt.inf
     try:
         for epoch in range(n_epochs):
             train_loss = train( epoch )
             print( "Train Epoch {} \tTotal Loss: {}\n".format(epoch, train_loss) )
             valid_loss = validate( epoch )
             print( "Validation Epoch {} \tTotal Loss: {}\n".format(epoch, valid_loss) )
+            if valid_loss < best_val_loss:
+                print('Saving best model')
+                best_val_loss = valid_loss
+                pt.save( tp_network.state_dict(), './models/gnn.pth' )
             scheduler.step()
     except KeyboardInterrupt:
         print('Aborting Training due to KeyboardInterrupt')
