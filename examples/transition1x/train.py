@@ -6,6 +6,7 @@ import torch as pt
 from torch.optim import Adam
 import matplotlib.pyplot as plt
 
+import itertools
 from torch.utils.data import DataLoader
 
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
@@ -19,8 +20,7 @@ from typing import List, Tuple
 
 def collate_molecules(batch : List[List[Trajectory]]
                      ) -> Tuple[BatchedMoleculeGraph, BatchedMoleculeGraph, pt.Tensor, pt.Tensor]:
-    assert len(batch) == 1, f"This training routine only supports batches of one reaction for now."
-    trajectories = batch[0]
+    trajectories = list(itertools.chain.from_iterable( batch )) # squash the nested list of trajectories
 
     # Sample random points on the trajectory for each molecule
     xA_molecules = []
@@ -44,33 +44,25 @@ def collate_molecules(batch : List[List[Trajectory]]
     return xA, xB, s, x_ref
 
 def main():
-    B = 1 # Must be one (1 list of trajectories for the same reaction / molecule )
+    B = 2
     data_directory = "/Users/hannesvdc/transition1x/processed"
     train_dataset = TransitionPathDataset( "train", data_directory )
     train_loader = DataLoader(
         train_dataset,
         batch_size=B,
         shuffle=True,
-        num_workers=4,
         collate_fn=collate_molecules,
-        pin_memory=False,   # True only really helps with CUDA, not MPS/CPU
-        persistent_workers=True,
-        prefetch_factor=5,
     )
     valid_dataset = TransitionPathDataset( "val", data_directory )
     valid_loader = DataLoader(
         valid_dataset,
         batch_size=B,
         shuffle=True,
-        num_workers=4,
         collate_fn=collate_molecules,
-        pin_memory=False,   # True only really helps with CUDA, not MPS/CPU
-        persistent_workers=True,
-        prefetch_factor=5,
     )
 
     # Global molecular information
-    d_cutoff = 5.0 # Amstrong
+    d_cutoff = 5.0 # Angstrom
 
     # Construct the neural network architecture
     embedding_state_size = 64
@@ -94,7 +86,7 @@ def main():
         return pt.mean( (x - xs)**2 ) # average over N and 3
 
     # Move to the GPU
-    device = pt.device( "cpu" )
+    device = pt.device( "mps" )
     dtype = pt.float32
     tp_network.to( device=device, dtype=dtype )
 
@@ -103,8 +95,10 @@ def main():
                         xB : BatchedMoleculeGraph,
                         s : pt.Tensor,
                         x_ref : pt.Tensor ) -> pt.Tensor:
+        print('Evaluating batch', len(xA.Z))
         xs = tp_network( xA, xB, s )
         loss = loss_fcn( x_ref, xs )
+        print('Done')
         return loss
 
     train_counter = []

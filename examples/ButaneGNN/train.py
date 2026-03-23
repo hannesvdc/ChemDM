@@ -42,7 +42,7 @@ def collate_molecules(batch : List[Trajectory]
     return xA, xB, s, x_ref
 
 def main():
-    B = 128
+    B = 256
     train_dataset = TrajectoryDataset( "train"  )
     train_loader = DataLoader(
         train_dataset,
