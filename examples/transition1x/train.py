@@ -51,7 +51,7 @@ def main():
     data_directory = data_config["data_folder"]
     device_name = data_config["device"]
 
-    B = 1
+    B = 8
     train_dataset = TransitionPathDataset( "train", data_directory )
     train_loader = DataLoader(
         train_dataset,

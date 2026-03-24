@@ -1,0 +1,20 @@
+#!/bin/bash
+#SBATCH --job-name=transition1x
+#SBATCH --output=transition1x.out
+#SBATCH --error=transition1x.err
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=12
+#SBATCH --time=3-00:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --partition=a100
+
+# Load environment modules if needed
+source /apps/Lmod
+
+# Activate your virtual environment
+source /home/hvandec1/chem/bin/activate
+
+# Run the experiment with the array task ID as job_id
+cd /home/hvandec1/ChemDM/examples/transition1x/
+
+python3 train.py
