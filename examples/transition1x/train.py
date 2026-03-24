@@ -1,8 +1,6 @@
-import os
-os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-
 import json
 import random
+import numpy as np
 import torch as pt
 from torch.optim import Adam
 import matplotlib.pyplot as plt
@@ -21,7 +19,6 @@ from typing import List, Tuple
 
 def collate_molecules(batch : List[List[Trajectory]]
                      ) -> Tuple[BatchedMoleculeGraph, BatchedMoleculeGraph, pt.Tensor, pt.Tensor]:
-    print('collating')
     trajectories = list(itertools.chain.from_iterable( batch )) # squash the nested list of trajectories
 
     # Sample random points on the trajectory for each molecule
@@ -51,20 +48,27 @@ def main():
     data_directory = data_config["data_folder"]
     device_name = data_config["device"]
 
-    B = 8
+    B = 16
     train_dataset = TransitionPathDataset( "train", data_directory )
     train_loader = DataLoader(
         train_dataset,
         batch_size=B,
         shuffle=True,
+        num_workers=8,
         collate_fn=collate_molecules,
+        persistent_workers=True, 
+        prefetch_factor=2,
     )
     valid_dataset = TransitionPathDataset( "val", data_directory )
     valid_loader = DataLoader(
         valid_dataset,
         batch_size=B,
-        shuffle=True,
+        shuffle=False,
+        num_workers=4,
         collate_fn=collate_molecules,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
     )
 
     # Global molecular information
@@ -101,10 +105,8 @@ def main():
                         xB : BatchedMoleculeGraph,
                         s : pt.Tensor,
                         x_ref : pt.Tensor ) -> pt.Tensor:
-        print('Evaluating batch', len(xA.Z))
         xs = tp_network( xA, xB, s )
         loss = loss_fcn( x_ref, xs )
-        # print('Done')
         return loss
 
     train_counter = []
@@ -132,7 +134,6 @@ def main():
             del xA, xB, s, x_ref
 
             # Make an optmizer step
-            print('Evaluating gradient')
             loss.backward()
             grad_norm = getGradientNorm( tp_network )
             pt.nn.utils.clip_grad_norm_( tp_network.parameters(), 1.0 )
@@ -182,14 +183,27 @@ def main():
 
     # The simplest of training loops for now.            
     n_epochs = 5000
+    best_val_loss = pt.inf
     try:
         for epoch in range(n_epochs):
             train_loss = train( epoch )
             print( "Train Epoch {} \tTotal Loss: {}\n".format(epoch, train_loss) )
             valid_loss = validate( epoch )
             print( "Validation Epoch {} \tTotal Loss: {}\n".format(epoch, valid_loss) )
+            if valid_loss < best_val_loss:
+                print('Saving best model')
+                best_val_loss = valid_loss
+                pt.save( tp_network.state_dict(), './models/best_gnn.pth' )
+
+            if epoch % 10 == 0:
+                pt.save( tp_network.state_dict(), './models/gnn.pth' )
+                pt.save( optimizer.state_dict(), './models/optimizer.pth' )
     except KeyboardInterrupt:
         print('Aborting Training due to KeyboardInterrupt')
+
+    # Store training convergence
+    np.save( './models/train_convergence.npy', np.vstack( (np.array(train_counter), np.array(train_losses), np.array(train_grads)) ) )
+    np.save( './models/valid_convergence.npy', np.vstack( (np.array(valid_counter), np.array(valid_losses) ) ) )
 
     # Plot the loss and grad norm
     plt.semilogy( train_counter, train_losses, label='Losses', alpha=0.5)
