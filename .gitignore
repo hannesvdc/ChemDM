@@ -6,6 +6,7 @@ __pycache__/
 **/*.json
 **/wandb/**
 **/*.job
+**/*.dcd
 
 # C extensions
 *.so
