@@ -32,7 +32,7 @@ def main():
     outdir.mkdir( exist_ok=True )
 
     report_stride = 1000
-    n_steps = 2_000_000
+    n_steps = 20_000_000
 
     torsion_angles = np.linspace(-180, 180, 10, endpoint=False)
     jobs = [(phi, psi) for phi in torsion_angles for psi in torsion_angles]
