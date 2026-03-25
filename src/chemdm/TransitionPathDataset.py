@@ -1,5 +1,4 @@
 import os
-import torch as pt
 from torch.utils.data import Dataset
 
 from chemdm.Trajectory import Trajectory
@@ -42,12 +41,7 @@ class TransitionPathDataset( Dataset ):
         """
         Just return every piece of information at the current state of the reaction.
         """
-        print('loading from file')
         file_name = os.path.join( self.data_directory, f"{self.name}_reaction_{idx}.pkl")
         with open( file_name, "rb" ) as file:
             tp_list = pickle.load( file )
         return tp_list
-    
-if __name__ == '__main__':
-    tp_dataset = TransitionPathDataset( "train", "/Users/hannesvdc/transition1x")
-    print(tp_dataset[1001])
