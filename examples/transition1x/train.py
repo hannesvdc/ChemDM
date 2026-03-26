@@ -2,11 +2,13 @@ import json
 import random
 import numpy as np
 import torch as pt
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
 import matplotlib.pyplot as plt
 
 import itertools
 from torch.utils.data import DataLoader
+
+import wandb
 
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
 from chemdm.TransitionPathDataset import TransitionPathDataset, Trajectory
@@ -43,12 +45,29 @@ def collate_molecules(batch : List[List[Trajectory]]
     return xA, xB, s, x_ref
 
 def main():
+    # Start a new wandb run to track this script.
+    lr = 1e-4
+    n_epochs = 5000
+    run = wandb.init(
+        # Set the wandb entity where your project will be logged (generally your team name).
+        entity="hannesvdc-open-numerics",
+        # Set the wandb project where this run will be logged.
+        project="transition1x",
+        # Track hyperparameters and run metadata.
+        config={
+            "learning_rate": lr,
+            "architecture": "GNN",
+            "dataset": "transition1x",
+            "epochs": n_epochs,
+        },
+    )
+
     with open( './data_config.json', "r" ) as f:
         data_config = json.load( f )
     data_directory = data_config["data_folder"]
     device_name = data_config["device"]
 
-    B = 16
+    B = 32
     train_dataset = TransitionPathDataset( "train", data_directory )
     train_loader = DataLoader(
         train_dataset,
@@ -56,6 +75,7 @@ def main():
         shuffle=True,
         num_workers=8,
         collate_fn=collate_molecules,
+        pin_memory=True,
         persistent_workers=True, 
         prefetch_factor=2,
     )
@@ -77,16 +97,16 @@ def main():
     # Construct the neural network architecture
     embedding_state_size = 64
     embedding_message_size = 64
-    n_embedding_layers = 10
+    n_embedding_layers = 5
     xA_embedding = MolecularEmbeddingGNN(embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff)
     xB_embedding = MolecularEmbeddingGNN(embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff)
-    n_tp_layers = 10
+    n_tp_layers = 5
     tp_message_size = 64
     tp_network = TransitionPathGNN( xA_embedding, xB_embedding, tp_message_size, n_tp_layers, d_cutoff )
     print( 'Number of Trainable Parameters: ', sum( [p.numel() for p in tp_network.parameters() if p.requires_grad]) )
 
     # Build the optimizer
-    lr = 1e-4
+    weight_decay = 1e-5
     optimizer = Adam( tp_network.parameters(), lr, amsgrad=True )
 
     # A simple MSE loss as a start
@@ -112,7 +132,7 @@ def main():
     train_counter = []
     train_losses = []
     train_grads = []
-    def train( epoch : int ) -> float :
+    def train( epoch : int ) -> Tuple[float,float] :
         tp_network.train()
 
         # Generate random batching indices
@@ -146,8 +166,8 @@ def main():
             train_grads.append(grad_norm)
             if (batch_idx+1) % 10 == 0:
                 print('Train Epoch: {} [{}/{}] \tLoss: {:.6f} \t Gradient Norm {:.6f} \t Learning Rate {:.2E}'
-                    .format( epoch, batch_idx+1, n_batches, loss.item(), grad_norm, optimizer.param_groups[-1]["lr"] ))
-        return epoch_loss / n_batches
+                    .format( epoch, batch_idx+1, n_batches, loss.item(), grad_norm, optimizer.param_groups[-1]["lr"] ), flush=True)
+        return epoch_loss / n_batches, grad_norm
 
     valid_counter = []
     valid_losses = []
@@ -161,7 +181,7 @@ def main():
         for batch_idx, (xA, xB, s, x_ref) in enumerate( valid_loader ):
 
             xA = xA.to( device=device, dtype=dtype )
-            xB = xB.to( device=device, dtype=dtype )
+            xB = xB.to( device=device, dtype=dtype  )
             s = s.to( device=device, dtype=dtype )
             x_ref = x_ref.to( device=device, dtype=dtype )
 
@@ -178,28 +198,32 @@ def main():
             valid_losses.append(loss.item())
             if (batch_idx+1) % 10 == 0:
                 print('Vaidation Epoch: {} [{}/{}] \tLoss: {:.6f}'
-                    .format( epoch, batch_idx+1, n_batches, loss.item() ))
+                    .format( epoch, batch_idx+1, n_batches, loss.item() ), flush=True)
         return epoch_loss / n_batches
 
     # The simplest of training loops for now.            
-    n_epochs = 5000
-    best_val_loss = pt.inf
+    best_val_loss = float("inf")
     try:
         for epoch in range(n_epochs):
-            train_loss = train( epoch )
-            print( "Train Epoch {} \tTotal Loss: {}\n".format(epoch, train_loss) )
+            train_loss, train_grad = train( epoch )
+            print( "Train Epoch {} \tTotal Loss: {}\n".format(epoch, train_loss), flush=True )
             valid_loss = validate( epoch )
-            print( "Validation Epoch {} \tTotal Loss: {}\n".format(epoch, valid_loss) )
+            print( "Validation Epoch {} \tTotal Loss: {}\n".format(epoch, valid_loss), flush=True )
             if valid_loss < best_val_loss:
                 print('Saving best model')
                 best_val_loss = valid_loss
                 pt.save( tp_network.state_dict(), './models/best_gnn.pth' )
+
+            # Log to weights & biases
+            run.log({"epoch": epoch, "train_loss": train_loss, "train_grad": train_grad, "valid_loss" : valid_loss, "best_val_loss" : best_val_loss})
 
             if epoch % 10 == 0:
                 pt.save( tp_network.state_dict(), './models/gnn.pth' )
                 pt.save( optimizer.state_dict(), './models/optimizer.pth' )
     except KeyboardInterrupt:
         print('Aborting Training due to KeyboardInterrupt')
+    finally:
+        run.finish()
 
     # Store training convergence
     np.save( './models/train_convergence.npy', np.vstack( (np.array(train_counter), np.array(train_losses), np.array(train_grads)) ) )
