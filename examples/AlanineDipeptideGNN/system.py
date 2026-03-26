@@ -72,7 +72,7 @@ def build_alanine_dipeptide_simulation(
     simulation.context.setPositions(positions)
 
     if minimize:
-        simulation.minimizeEnergy()
+        simulation.minimizeEnergy( maxIterations=5 )
 
     # Return the minimized positions, not just the initial guess
     state = simulation.context.getState(getPositions=True)

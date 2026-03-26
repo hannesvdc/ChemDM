@@ -41,8 +41,11 @@ def main():
     jobs = [(phi, psi) for phi in torsion_angles for psi in torsion_angles]
     traj_list = []
     for phi, psi in jobs:
-        traj = md.load(str(outdir / f"traj_phi={phi:+06.1f}_psi={psi:+06.1f}.dcd"), top=str(outdir / "topology.pdb"))
-        traj_list.append( traj )
+        try:
+            traj = md.load(str(outdir / f"traj_phi={phi:+06.1f}_psi={psi:+06.1f}.dcd"), top=str(outdir / "topology.pdb"))
+            traj_list.append( traj )
+        except:
+            pass
     traj = md.join( traj_list )
 
     print("Atom list:")

@@ -1,6 +1,6 @@
 import torch as pt
 import numpy as np
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
 
 from typing import Tuple
 
@@ -35,7 +35,7 @@ def findAllDistanceNeighbors( x: pt.Tensor,
     points = x.detach().cpu().numpy()
 
     # Construct the KDTree and query for neighbors
-    tree = cKDTree(points)
+    tree = KDTree(points)
     pairs = tree.query_pairs( r=cutoff, p=2.0)
     pairs = np.array(list( pairs ), dtype=np.int64)
 
