@@ -109,7 +109,7 @@ def compute_clustering():
         atom_indices=None,
         rmsd_threshold=0.03,
         min_cluster_size=3,
-        max_reps_per_basin=100,
+        max_reps_per_basin=15,
         representative_mode="medoid",
         max_candidates_per_basin=2000,
         rng_seed=0,
@@ -119,6 +119,9 @@ def compute_clustering():
         print(f"{basin_name}:")
         print("  frames:", len(info["frame_indices"]))
         print("  representatives:", info["representative_indices"])
+
+        rep_idx = info["representative_indices"]
+        np.save( f"outputs/{basin_name}_representatives.npy", xyz[rep_idx,:,:])
 
     # labels are the same in every basin result entry, so just grab them once
     labels = next(iter(results.values()))["labels"]
