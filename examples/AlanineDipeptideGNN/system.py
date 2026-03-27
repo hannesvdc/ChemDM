@@ -90,23 +90,99 @@ def wrap_to_pi(angle: float) -> float:
     return (angle + np.pi) % (2.0 * np.pi) - np.pi
 
 
-def compute_dihedral(p0, p1, p2, p3) -> float:
+def compute_dihedral(p0, p1, p2, p3):
     """
-    Signed dihedral angle in radians for four 3D points.
+    Signed dihedral angle in radians.
+
+    Parameters
+    ----------
+    p0, p1, p2, p3 : np.ndarray
+        Arrays of shape (..., 3)
+
+    Returns
+    -------
+    angle : np.ndarray
+        Array of shape (...) with signed dihedral angles in radians.
     """
+    p0 = np.asarray(p0)
+    p1 = np.asarray(p1)
+    p2 = np.asarray(p2)
+    p3 = np.asarray(p3)
+
     b0 = p1 - p0
     b1 = p2 - p1
     b2 = p3 - p2
 
-    b1_hat = b1 / np.linalg.norm(b1)
+    b1_norm = np.linalg.norm(b1, axis=-1, keepdims=True)
+    b1_hat = b1 / (b1_norm + 1e-12)
 
-    v = b0 - np.dot(b0, b1_hat) * b1_hat
-    w = b2 - np.dot(b2, b1_hat) * b1_hat
+    v = b0 - np.sum(b0 * b1_hat, axis=-1, keepdims=True) * b1_hat
+    w = b2 - np.sum(b2 * b1_hat, axis=-1, keepdims=True) * b1_hat
 
-    x = np.dot(v, w)
-    y = np.dot(np.cross(b1_hat, v), w)
+    x = np.sum(v * w, axis=-1)
+    y = np.sum(np.cross(b1_hat, v) * w, axis=-1)
 
     return np.arctan2(y, x)
+
+def compute_torsion_from_xyz(xyz, atoms):
+    """
+    Compute one torsion angle from coordinates.
+
+    Parameters
+    ----------
+    xyz : np.ndarray
+        Array of shape (..., n_atoms, 3)
+    atoms : tuple[int, int, int, int]
+        Atom quartet defining the torsion.
+
+    Returns
+    -------
+    angle : np.ndarray
+        Array of shape (...) in radians.
+    """
+    xyz = np.asarray(xyz)
+    if xyz.ndim < 2 or xyz.shape[-1] != 3:
+        raise ValueError(f"xyz must have shape (..., n_atoms, 3), got {xyz.shape}")
+
+    i, j, k, l = atoms
+    return wrap_to_pi(
+        compute_dihedral(
+            xyz[..., i, :],
+            xyz[..., j, :],
+            xyz[..., k, :],
+            xyz[..., l, :],
+        )
+    )
+
+def compute_phi_psi_from_xyz(
+    xyz,
+    phi_atoms=(4, 6, 8, 14),
+    psi_atoms=(6, 8, 14, 16),
+):
+    """
+    Compute alanine-dipeptide phi/psi torsions from Cartesian coordinates.
+
+    Parameters
+    ----------
+    xyz : np.ndarray
+        Array of shape (..., n_atoms, 3)
+    phi_atoms : tuple[int, int, int, int]
+        Atom quartet defining phi.
+    psi_atoms : tuple[int, int, int, int]
+        Atom quartet defining psi.
+
+    Returns
+    -------
+    phi, psi : np.ndarray
+        Arrays of shape (...) in radians.
+    """
+    xyz = np.asarray(xyz)
+    if xyz.ndim < 2 or xyz.shape[-1] != 3:
+        raise ValueError(f"xyz must have shape (..., n_atoms, 3), got {xyz.shape}")
+
+    phi = compute_torsion_from_xyz(xyz, phi_atoms)
+    psi = compute_torsion_from_xyz(xyz, psi_atoms)
+    return phi, psi
 
 
 def rodrigues_rotation_matrix(axis: np.ndarray, angle: float) -> np.ndarray:
