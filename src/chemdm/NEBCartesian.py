@@ -3,44 +3,7 @@ import openmm as mm
 import openmm.unit as unit
 from typing import Callable, Optional, Tuple
 
-
-# ============================================================
-# Basic geometry helpers
-# ============================================================
-
-def center_xyz(xyz: pt.Tensor) -> pt.Tensor:
-    """
-    xyz: (..., n_atoms, 3)
-    Returns coordinates centered by geometric centroid.
-    """
-    return xyz - xyz.mean(dim=-2, keepdim=True)
-
-
-def kabsch_align_torch(P: pt.Tensor, 
-                       Q: pt.Tensor) -> pt.Tensor:
-    """
-    Align P onto Q with Kabsch.
-    P, Q: (n_atoms, 3)
-    Returns aligned P, centered around the origin.
-    """
-    Pc = P - P.mean(dim=0, keepdim=True)
-    Qc = Q - Q.mean(dim=0, keepdim=True)
-
-    C = Pc.T @ Qc
-    U, S, Vh = pt.linalg.svd(C)
-
-    det = pt.linalg.det(U @ Vh)
-    D = pt.diag(
-        pt.tensor(
-            [1.0, 1.0, 1.0 if det >= 0 else -1.0],
-            dtype=P.dtype,
-            device=P.device,
-        )
-    )
-
-    R = U @ D @ Vh
-    return Pc @ R
-
+from chemdm.geometry import center_xyz_torch, kabsch_align_torch
 
 def align_endpoints_cartesian(
     xA_xyz: pt.Tensor,
@@ -49,8 +12,8 @@ def align_endpoints_cartesian(
     """
     Center xA and xB, then rotate xB onto xA.
     """
-    xA_xyz = center_xyz(xA_xyz)
-    xB_xyz = center_xyz(xB_xyz)
+    xA_xyz = center_xyz_torch(xA_xyz)
+    xB_xyz = center_xyz_torch(xB_xyz)
     xB_xyz = kabsch_align_torch(xB_xyz, xA_xyz)
     return xA_xyz, xB_xyz
 
