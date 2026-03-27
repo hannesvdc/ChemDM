@@ -9,7 +9,9 @@ from endpoint_selection import BasinCircle
 
 from chemdm.NEBCartesian import OpenMMEnergyForceEvaluator, computeMEP_openmm_cartesian
 
-def load_representatives(outdir: Path, basin_name: str, max_n: int | None = None) -> np.ndarray:
+def load_representatives(outdir: Path, 
+                         basin_name: str, 
+                         max_n: int | None = None) -> pt.Tensor:
     """
     Load representative coordinates for one basin from:
         outputs/{basin_name}_representatives.npy
@@ -22,7 +24,7 @@ def load_representatives(outdir: Path, basin_name: str, max_n: int | None = None
     if not path.exists():
         raise FileNotFoundError(f"Missing representative file: {path}")
 
-    xyz = np.load(path)
+    xyz = pt.from_numpy( np.load(path) )
     if max_n is not None:
         xyz = xyz[:max_n]
     return xyz
@@ -55,7 +57,6 @@ def run_neb_family(
     k: float = 5.0,
     n_steps: int = 2000,
     lr: float = 1e-3,
-    device: str = "cpu",
 ):
     """
     Compute NEB trajectories for all representative pairs between basin_A and basin_B.
@@ -96,8 +97,8 @@ def run_neb_family(
         for j in range(nB):
             print(f"[{i+1:02d}/{nA}] x [{j+1:02d}/{nB}]   {basin_A}_{i:02d} <-> {basin_B}_{j:02d}")
 
-            xA_xyz = pt.tensor(reps_A[i], dtype=pt.float64, device=device)
-            xB_xyz = pt.tensor(reps_B[j], dtype=pt.float64, device=device)
+            xA_xyz = reps_A[i]
+            xB_xyz = reps_B[j]
 
             x0, x_opt, F_opt = computeMEP_openmm_cartesian(
                 evaluator=evaluator,
@@ -107,7 +108,7 @@ def run_neb_family(
                 k=k,
                 n_steps=n_steps,
                 lr=lr,
-                verbose=False,
+                verbose=True,
                 generate_initial_path=None,
                 project_band=True,
             )
@@ -190,18 +191,23 @@ def run_neb_family(
     plt.ylabel(r"$\psi$ [deg]")
     plt.tight_layout()
     plt.savefig(outdir / f"{basin_A}__{basin_B}__neb_paths.png", dpi=200)
-    plt.close()
+    plt.show()
 
 if __name__ == "__main__":
+    outdir=Path("outputs")
+    left_center = load_representatives(outdir, "left_center", max_n=15)
+    left_wrap = load_representatives(outdir, "left_wrap", max_n=15)
+    right_lower = load_representatives( outdir, "right_lower", max_n=15)
+    right_upper = load_representatives( outdir, "right_upper", max_n=15)
+    
     run_neb_family(
-        outdir=Path("outputs"),
+        outdir,
         basin_A="right_lower",
         basin_B="right_upper",
         max_reps_A=15,
         max_reps_B=15,
         N_images_minus_1=100,
         k=500.0,
-        n_steps=2000,
-        lr=1e-3,
-        device="cpu",
+        n_steps=5000,
+        lr=1e-4,
     )

@@ -1,9 +1,11 @@
 from pathlib import Path
 import numpy as np
+import torch as pt
 import mdtraj as md
 import matplotlib.pyplot as plt
 
 from endpoint_selection import BasinCircle, select_basin_representatives
+from system import compute_phi_psi_from_xyz
 
 def wrap_to_pi(x):
     return (x + np.pi) % (2 * np.pi) - np.pi
@@ -80,14 +82,14 @@ def load_alanine_dipeptide_dataset(
     psi = np.concatenate(psi_list, axis=0)
     seed_labels = np.concatenate(seed_label_list, axis=0)
 
-    return xyz, phi, psi, seed_labels
+    return xyz, phi, psi, seed_labels, traj.topology
 
 def compute_clustering():
 
     outdir = Path("outputs")
     torsion_angles = np.linspace(-180, 180, 10, endpoint=False)
 
-    xyz, phi, psi, seed_labels = load_alanine_dipeptide_dataset(
+    xyz, phi, psi, seed_labels, topology = load_alanine_dipeptide_dataset(
         outdir=outdir,
         torsion_angles=torsion_angles,
         burnin_fraction=0.2,
@@ -115,12 +117,28 @@ def compute_clustering():
         rng_seed=0,
     )
 
+    phi_atoms=(4, 6, 8, 14)
+    psi_atoms=(6, 8, 14, 16)
+    phi_atoms = np.array([[4, 6, 8, 14]], dtype=int)
+    psi_atoms = np.array([[6, 8, 14, 16]], dtype=int)
     for basin_name, info in results.items():
         print(f"{basin_name}:")
         print("  frames:", len(info["frame_indices"]))
         print("  representatives:", info["representative_indices"])
 
         rep_idx = info["representative_indices"]
+        print(' md torsion angles')
+        traj_rep = md.Trajectory(
+            xyz=xyz[rep_idx, :, :],
+            topology=topology,   # or whatever MDTraj topology object you already have
+        )
+        print(traj_rep)
+        phi_rep = md.compute_dihedrals(traj_rep, phi_atoms)[:, 0]
+        psi_rep = md.compute_dihedrals(traj_rep, psi_atoms)[:, 0]
+        print( phi_rep )
+
+        print('Torsion angles of basin', basin_name)
+        print( compute_phi_psi_from_xyz(pt.from_numpy(xyz[rep_idx,:,:])) )
         np.save( f"outputs/{basin_name}_representatives.npy", xyz[rep_idx,:,:])
 
     # labels are the same in every basin result entry, so just grab them once

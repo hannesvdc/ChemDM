@@ -1,9 +1,10 @@
+import math
+import torch as pt
 import openmm as mm
 import openmm.app as app
 import openmm.unit as unit
 
 from openmmtools import testsystems
-
 
 def build_alanine_dipeptide_simulation(
     temperature=300.0,
@@ -86,67 +87,64 @@ import numpy as np
 from collections import deque
 
 
-def wrap_to_pi(angle: float) -> float:
-    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+def wrap_to_pi( angle ):
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
-def compute_dihedral(p0, p1, p2, p3):
+def compute_dihedral(p0 : pt.Tensor, 
+                     p1 : pt.Tensor, 
+                     p2 : pt.Tensor, 
+                     p3 : pt.Tensor) -> pt.Tensor:
     """
     Signed dihedral angle in radians.
 
     Parameters
     ----------
-    p0, p1, p2, p3 : np.ndarray
+    p0, p1, p2, p3 : Tensor
         Arrays of shape (..., 3)
 
     Returns
     -------
-    angle : np.ndarray
+    angle : Tensor
         Array of shape (...) with signed dihedral angles in radians.
     """
-    p0 = np.asarray(p0)
-    p1 = np.asarray(p1)
-    p2 = np.asarray(p2)
-    p3 = np.asarray(p3)
-
-    b0 = p1 - p0
+    b0 = p0 - p1
     b1 = p2 - p1
     b2 = p3 - p2
 
-    b1_norm = np.linalg.norm(b1, axis=-1, keepdims=True)
+    b1_norm = pt.norm(b1, dim=-1, keepdim=True)
     b1_hat = b1 / (b1_norm + 1e-12)
 
-    v = b0 - np.sum(b0 * b1_hat, axis=-1, keepdims=True) * b1_hat
-    w = b2 - np.sum(b2 * b1_hat, axis=-1, keepdims=True) * b1_hat
+    v = b0 - pt.sum(b0 * b1_hat, dim=-1, keepdim=True) * b1_hat
+    w = b2 - pt.sum(b2 * b1_hat, dim=-1, keepdim=True) * b1_hat
 
-    x = np.sum(v * w, axis=-1)
-    y = np.sum(np.cross(b1_hat, v) * w, axis=-1)
+    x = pt.sum(v * w, dim=-1)
+    y = pt.sum( pt.cross(b1_hat, v, dim=-1) * w, dim=-1 )
 
-    return np.arctan2(y, x)
+    return pt.arctan2(y, x)
 
-def compute_torsion_from_xyz(xyz, atoms):
+def compute_torsion_from_xyz(xyz : pt.Tensor, 
+                             atoms : tuple[int,int,int,int]):
     """
     Compute one torsion angle from coordinates.
 
     Parameters
     ----------
-    xyz : np.ndarray
+    xyz : Tensor
         Array of shape (..., n_atoms, 3)
     atoms : tuple[int, int, int, int]
         Atom quartet defining the torsion.
 
     Returns
     -------
-    angle : np.ndarray
+    angle : Tensor
         Array of shape (...) in radians.
     """
-    xyz = np.asarray(xyz)
     if xyz.ndim < 2 or xyz.shape[-1] != 3:
         raise ValueError(f"xyz must have shape (..., n_atoms, 3), got {xyz.shape}")
 
     i, j, k, l = atoms
-    return wrap_to_pi(
-        compute_dihedral(
+    return wrap_to_pi( compute_dihedral(
             xyz[..., i, :],
             xyz[..., j, :],
             xyz[..., k, :],
@@ -155,7 +153,7 @@ def compute_torsion_from_xyz(xyz, atoms):
     )
 
 def compute_phi_psi_from_xyz(
-    xyz,
+    xyz : pt.Tensor,
     phi_atoms=(4, 6, 8, 14),
     psi_atoms=(6, 8, 14, 16),
 ):
@@ -164,7 +162,7 @@ def compute_phi_psi_from_xyz(
 
     Parameters
     ----------
-    xyz : np.ndarray
+    xyz : Tensor
         Array of shape (..., n_atoms, 3)
     phi_atoms : tuple[int, int, int, int]
         Atom quartet defining phi.
@@ -173,10 +171,9 @@ def compute_phi_psi_from_xyz(
 
     Returns
     -------
-    phi, psi : np.ndarray
+    phi, psi : Tensor
         Arrays of shape (...) in radians.
     """
-    xyz = np.asarray(xyz)
     if xyz.ndim < 2 or xyz.shape[-1] != 3:
         raise ValueError(f"xyz must have shape (..., n_atoms, 3), got {xyz.shape}")
 
