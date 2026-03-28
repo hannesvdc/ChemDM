@@ -182,19 +182,18 @@ def compute_phi_psi_from_xyz(
     return phi, psi
 
 
-def rodrigues_rotation_matrix(axis: np.ndarray, angle: float) -> np.ndarray:
+def rodrigues_rotation_matrix(axis: pt.Tensor, angle: float) -> pt.Tensor:
     """
     Rotation matrix for rotation by `angle` around `axis`.
     """
-    axis = np.asarray(axis, dtype=float)
-    axis = axis / np.linalg.norm(axis)
+    axis = axis / pt.norm(axis)
 
     x, y, z = axis
     c = np.cos(angle)
     s = np.sin(angle)
     C = 1.0 - c
 
-    return np.array([
+    return pt.tensor([
         [c + x*x*C,     x*y*C - z*s, x*z*C + y*s],
         [y*x*C + z*s,   c + y*y*C,   y*z*C - x*s],
         [z*x*C - y*s,   z*y*C + x*s, c + z*z*C  ],
@@ -237,16 +236,16 @@ def atoms_on_side_of_bond(graph: dict[int, set[int]], fixed_atom: int, rotating_
 
 
 def rotate_group_about_axis(
-    xyz: np.ndarray,
+    xyz: pt.Tensor,
     atom_indices: list[int],
-    axis_point1: np.ndarray,
-    axis_point2: np.ndarray,
+    axis_point1: pt.Tensor,
+    axis_point2: pt.Tensor,
     angle: float,
-) -> np.ndarray:
+) -> pt.Tensor:
     """
     Rotate selected atoms about the axis through axis_point1 -> axis_point2.
     """
-    xyz_new = xyz.copy()
+    xyz_new = pt.clone( xyz )
     R = rodrigues_rotation_matrix(axis_point2 - axis_point1, angle)
 
     for idx in atom_indices:
@@ -258,10 +257,10 @@ def rotate_group_about_axis(
 
 def set_dihedral(
     topology,
-    xyz: np.ndarray,
+    xyz: pt.Tensor,
     quartet: tuple[int, int, int, int],
     target_angle: float,
-) -> tuple[np.ndarray, float, float]:
+) -> tuple[pt.Tensor, float, float]:
     """
     Set the dihedral defined by quartet = (i, j, k, l) to target_angle.
     Rotates the side connected to atom k around bond j-k.
@@ -270,9 +269,8 @@ def set_dihedral(
         xyz_new, old_angle, new_angle
     """
     i, j, k, l = quartet
-    xyz = np.asarray(xyz, dtype=float)
 
-    old_angle = compute_dihedral(xyz[i], xyz[j], xyz[k], xyz[l])
+    old_angle = float(compute_dihedral(xyz[i], xyz[j], xyz[k], xyz[l]))
     delta = wrap_to_pi(target_angle - old_angle)
 
     graph = build_bond_graph(topology)
@@ -293,12 +291,12 @@ def set_dihedral(
 
 def set_phi_psi(
     topology,
-    xyz: np.ndarray,
+    xyz: pt.Tensor,
     phi_quartet: tuple[int, int, int, int],
     psi_quartet: tuple[int, int, int, int],
     phi_target: float,
     psi_target: float,
-) -> np.ndarray:
+) -> pt.Tensor:
     """
     Sequentially set phi then psi.
     """

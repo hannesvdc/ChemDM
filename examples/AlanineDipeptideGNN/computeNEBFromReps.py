@@ -4,7 +4,7 @@ import numpy as np
 import torch as pt
 import matplotlib.pyplot as plt
 
-from system import build_alanine_dipeptide_simulation, compute_phi_psi_from_xyz
+from system import build_alanine_dipeptide_simulation, compute_phi_psi_from_xyz, set_phi_psi
 from endpoint_selection import BasinCircle
 
 from chemdm.NEBCartesian import OpenMMEnergyForceEvaluator, computeMEP_openmm_cartesian
@@ -45,6 +45,96 @@ def save_neb_result(
         F_opt=np.array(F_opt, dtype=np.float64),
         metadata_json=np.array(json.dumps(meta)),
     )
+
+def _interp_angle_via_cos_sin(theta_a: pt.Tensor, 
+                              theta_b: pt.Tensor, 
+                              t_grid: pt.Tensor, 
+                              eps: float = 1e-12) -> pt.Tensor:
+    """
+    Interpolate angles on the unit circle by linearly interpolating
+    (cos, sin), renormalizing, then mapping back with atan2.
+
+    Parameters
+    ----------
+    theta_a, theta_b : pt.Tensor
+        Endpoint angles in radians.
+    t_grid : torch.Tensor
+        Shape (n_images,), values typically in [0, 1].
+
+    Returns
+    -------
+    theta_path : torch.Tensor
+        Shape (n_images,), interpolated wrapped angles in radians.
+    """
+
+    ca = pt.cos( theta_a )
+    sa = pt.sin( theta_a )
+    cb = pt.cos( theta_b )
+    sb = pt.sin( theta_b )
+
+    c = (1.0 - t_grid) * ca + t_grid * cb
+    s = (1.0 - t_grid) * sa + t_grid * sb
+
+    norm = pt.sqrt(c * c + s * s + eps)
+    c = c / norm
+    s = s / norm
+
+    return pt.atan2(s, c)
+
+def generate_initial_path_phi_psi_cossin(
+    xA_xyz: pt.Tensor,      # (n_atoms, 3)
+    xB_xyz: pt.Tensor,      # (n_atoms, 3)
+    t_grid: pt.Tensor,      # (n_images,)
+    topology,
+    phi_quartet=(4, 6, 8, 14),
+    psi_quartet=(6, 8, 14, 16),
+):
+    """
+    Build an initial Cartesian path by interpolating phi and psi in
+    (cos, sin) space and rotating xA to match those intermediate angles.
+
+    Strategy:
+      1. Compute (phi_A, psi_A) and (phi_B, psi_B)
+      2. Interpolate each angle via linear interpolation in (cos, sin),
+         followed by normalization back to the unit circle
+      3. For each image, rotate xA to the target (phi_t, psi_t)
+      4. Enforce exact endpoints
+
+    Returns
+    -------
+    band_xyz : torch.Tensor
+        Shape (n_images, n_atoms, 3)
+    """
+
+    # Compute endpoint torsions using your corrected routine
+    phiA, psiA = compute_phi_psi_from_xyz( xA_xyz, phi_atoms=phi_quartet, psi_atoms=psi_quartet )
+    phiB, psiB = compute_phi_psi_from_xyz( xB_xyz, phi_atoms=phi_quartet, psi_atoms=psi_quartet )
+
+    # Interpolate torsions on the circle
+    phi_path = _interp_angle_via_cos_sin(phiA, phiB, t_grid)
+    psi_path = _interp_angle_via_cos_sin(psiA, psiB, t_grid)
+
+    # Build each image by rotating xA
+    band = []
+
+    for k in range(len(t_grid)):
+        xyz_k = set_phi_psi(
+            topology=topology,
+            xyz=xA_xyz,
+            phi_quartet=phi_quartet,
+            psi_quartet=psi_quartet,
+            phi_target=float(phi_path[k].detach().cpu().item()),
+            psi_target=float(psi_path[k].detach().cpu().item()),
+        )
+        band.append( xyz_k )
+
+    band = pt.stack(band, dim=0)
+
+    # Enforce exact endpoints
+    band[0] = xA_xyz
+    band[-1] = xB_xyz
+
+    return band
 
 def run_neb_family(
     outdir: Path,
@@ -109,7 +199,7 @@ def run_neb_family(
                 n_steps=n_steps,
                 lr=lr,
                 verbose=True,
-                generate_initial_path=None,
+                generate_initial_path=lambda a, b, t: generate_initial_path_phi_psi_cossin(  a, b, t, topology=topology ),
                 project_band=True,
             )
 
@@ -172,7 +262,7 @@ def run_neb_family(
     # --------------------------------------------------------
     plt.figure(figsize=(7, 6))
     for path_xyz in xopt_all:
-        phi_path, psi_path = compute_phi_psi_from_xyz(path_xyz)
+        phi_path, psi_path = compute_phi_psi_from_xyz( pt.tensor(path_xyz) )
         plt.plot(np.degrees(phi_path), np.degrees(psi_path), "-o", ms=3, alpha=0.7)
 
     for basin in [
@@ -206,8 +296,8 @@ if __name__ == "__main__":
         basin_B="right_upper",
         max_reps_A=15,
         max_reps_B=15,
-        N_images_minus_1=100,
-        k=500.0,
+        N_images_minus_1=50,
+        k=50000.0,
         n_steps=5000,
         lr=1e-4,
     )

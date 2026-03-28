@@ -85,7 +85,8 @@ class OpenMMEnergyForceEvaluator:
 
         x_cpu = x.detach().cpu()
 
-        for i in range(N_images): # Could we vectorize this?
+        # Unfortunately, OpenMM doesn't do vectorization well yet.
+        for i in range(N_images):
             xyz = x_cpu[i].numpy()
             self.context.setPositions(xyz * unit.nanometer)
 
@@ -258,9 +259,7 @@ def computeMEP_openmm_cartesian(
     # Optimize only interior images
     x_inner = pt.nn.Parameter(x0[1:-1].clone())   # (N-1, n_atoms, 3)
     optimizer = pt.optim.Adam([x_inner], lr=lr)
-    scheduler = pt.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=n_steps, eta_min=lr / 1000
-    )
+    scheduler = pt.optim.lr_scheduler.StepLR( optimizer, step_size=2000, gamma=0.1 )
 
     neb_force = force_factory_openmm(evaluator, k)
 
@@ -297,13 +296,9 @@ def computeMEP_openmm_cartesian(
         if verbose and (step % 100 == 0 or step == n_steps - 1):
             maxF = F_norms.max().item()
             meanF = F_norms.mean().item()
-            print(
-                f"step {step:5d} | "
-                f"mean|F| {meanF:.3e} | "
-                f"max|F| {maxF:.3e} | "
-                f"Emin {E.min().item():.4f} | "
-                f"Emax {E.max().item():.4f}"
-            )
+            lr = float(scheduler.get_last_lr()[-1])
+            print( f"step {step:5d} | ", f"mean|F| {meanF:.3e} | ", f"max|F| {maxF:.3e} | ", 
+                   f"Emin {E.min().item():.4f} | ", f"Emax {E.max().item():.4f} | ", f"lr {lr:.3e}")
 
     if x_optimal is None:
         x_optimal = pt.cat([xA_xyz[None, :, :], x_inner, xB_xyz[None, :, :]], dim=0).detach()
