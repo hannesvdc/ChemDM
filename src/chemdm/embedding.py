@@ -18,13 +18,13 @@ class SinusoidalEmbedding(nn.Module):
         freqs = (2.0 * math.pi) * (2.0 ** pt.arange(self.n_freq, device=t.device, dtype=t.dtype))
         t = t[:, None]  # (B,1)
         emb = pt.cat([ pt.sin(freqs[None, :] * t), pt.cos(freqs[None, :] * t)], dim=1 )
-        return emb  # (B, 1+2*n_freq)
+        return emb  # (, 2+2*n_freq)
     
 class ArcLengthEmbedding(nn.Module):
     """
     Standard sinusoidal embedding for the normalized arclength s in [0,1],
     but with `s` and `1-s` concatenated so the network can figure out end points.
-    Output shape: (B, 2*n_freq+2)
+    Output shape: (s.shape, 2*n_freq+2)
     """
     def __init__(self, n_freq: int = 16):
         super().__init__()
@@ -35,10 +35,13 @@ class ArcLengthEmbedding(nn.Module):
         return self.n_embeddings
 
     def forward(self, s: pt.Tensor) -> pt.Tensor:
-        # s: (B,)
-        # frequencies: (n_freq,)
+        """
+        s: Any shape
+        frequencies: (n_freq,)
+        """
         freqs = 2.0 * math.pi * pt.arange(1, self.n_freq + 1, device=s.device, dtype=s.dtype)
         s = pt.atleast_1d( s ) # to handle scalar ege cases
-        s = s[:, None]  # (B,1)
-        emb = pt.cat([s, 1.0-s, pt.sin(freqs[None, :] * s), pt.cos(freqs[None, :] * s)], dim=1)
-        return emb  # (B, 2*n_freq)
+        s = s[..., None]  # (...,1)
+        angles = s * freqs
+        emb = pt.cat([s, 1.0-s, pt.sin( angles ), pt.cos( angles )], dim=-1)
+        return emb  # (..., 2*n_freq+2)

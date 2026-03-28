@@ -4,6 +4,8 @@ import numpy as np
 import torch as pt
 import matplotlib.pyplot as plt
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 from system import build_alanine_dipeptide_simulation, compute_phi_psi_from_xyz, set_phi_psi
 from endpoint_selection import BasinCircle
 
@@ -190,7 +192,7 @@ def run_neb_family(
             xA_xyz = reps_A[i]
             xB_xyz = reps_B[j]
 
-            x0, x_opt, F_opt = computeMEP_openmm_cartesian(
+            x0, x_opt, F_opt, x_last = computeMEP_openmm_cartesian(
                 evaluator=evaluator,
                 xA_xyz=xA_xyz,
                 xB_xyz=xB_xyz,
@@ -256,48 +258,91 @@ def run_neb_family(
 
     print(f"Saved dataset to {save_path}")
     print("Done.")
+    return str(save_path)
 
-    # --------------------------------------------------------
-    # Quick plot of all optimized NEB trajectories in (phi, psi)
-    # --------------------------------------------------------
-    plt.figure(figsize=(7, 6))
-    for path_xyz in xopt_all:
-        phi_path, psi_path = compute_phi_psi_from_xyz( pt.tensor(path_xyz) )
-        plt.plot(np.degrees(phi_path), np.degrees(psi_path), "-o", ms=3, alpha=0.7)
+def plot_all_neb_families(outdir: Path, dataset_paths: list[str] ) -> None:
+    """
+    Load all saved family files and plot all optimized NEB trajectories together.
+    """
+    plt.figure(figsize=(8, 7))
 
-    for basin in [
+    basins = [
         BasinCircle("left_wrap",   phi0=np.deg2rad(-140), psi0=np.deg2rad(160),  radius=np.deg2rad(35)),
         BasinCircle("left_center", phi0=np.deg2rad(-70),  psi0=np.deg2rad(-50),  radius=np.deg2rad(30)),
         BasinCircle("right_lower", phi0=np.deg2rad(50),   psi0=np.deg2rad(-100), radius=np.deg2rad(30)),
         BasinCircle("right_upper", phi0=np.deg2rad(50),   psi0=np.deg2rad(50),   radius=np.deg2rad(30)),
-    ]:
-        circ = plt.Circle((np.degrees(basin.phi0), np.degrees(basin.psi0)),# type: ignore
-                          np.degrees(basin.radius), fill=False, ls="--", lw=1.2, color="black")
+    ]
+
+    for dataset_path in dataset_paths:
+        data = np.load(dataset_path, allow_pickle=True)
+        xopt_all = data["x_opt"]  # (n_paths, n_images, n_atoms, 3)
+
+        for path_xyz in xopt_all:
+            phi_path, psi_path = compute_phi_psi_from_xyz(path_xyz)
+            plt.plot(np.degrees(phi_path), np.degrees(psi_path), "-o", ms=2, alpha=0.4)
+
+    for basin in basins:
+        circ = plt.Circle(
+            (np.degrees(basin.phi0), np.degrees(basin.psi0)),
+            np.degrees(basin.radius),
+            fill=False,
+            ls="--",
+            lw=1.2,
+            color="black",
+        )
         plt.gca().add_patch(circ)
+        plt.text(
+            np.degrees(basin.phi0) + 2,
+            np.degrees(basin.psi0) + 2,
+            basin.name,
+            fontsize=9,
+        )
 
     plt.xlim(-180, 180)
     plt.ylim(-180, 180)
     plt.xlabel(r"$\phi$ [deg]")
     plt.ylabel(r"$\psi$ [deg]")
     plt.tight_layout()
-    plt.savefig(outdir / f"{basin_A}__{basin_B}__neb_paths.png", dpi=200)
+    plt.savefig(outdir / "all_neb_paths.png", dpi=200)
     plt.show()
 
+
 if __name__ == "__main__":
-    outdir=Path("outputs")
-    left_center = load_representatives(outdir, "left_center", max_n=15)
-    left_wrap = load_representatives(outdir, "left_wrap", max_n=15)
-    right_lower = load_representatives( outdir, "right_lower", max_n=15)
-    right_upper = load_representatives( outdir, "right_upper", max_n=15)
-    
-    run_neb_family(
-        outdir,
-        basin_A="right_lower",
-        basin_B="right_upper",
-        max_reps_A=15,
-        max_reps_B=15,
-        N_images_minus_1=50,
-        k=50000.0,
-        n_steps=5000,
-        lr=1e-4,
-    )
+    # Ordered pairs: 4 * 3 = 12
+    outdir = Path("outputs")
+    centers = ["left_center", "left_wrap", "right_lower", "right_upper"]
+    basin_pairs = [(a, b) for a in centers for b in centers if a != b]
+
+    # NEB parameters
+    max_reps = 15
+    N_images = 50
+    k = 1.0e4
+    n_steps = 5000
+    lr = 1e-4
+
+    dataset_paths: list[str] = []
+    max_workers = 6
+    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+        futures = [
+            ex.submit(
+                run_neb_family,
+                outdir,
+                basin_A,
+                basin_B,
+                max_reps_A=max_reps,
+                max_reps_B=max_reps,
+                N_images_minus_1=N_images,
+                k=k,
+                n_steps=n_steps,
+                lr=lr,
+            )
+            for basin_A, basin_B in basin_pairs
+        ]
+
+        for fut in as_completed(futures):
+            dataset_path = fut.result()
+            dataset_paths.append(dataset_path)
+            print(f"Finished family dataset: {dataset_path}")
+
+    print("All NEB families done.")
+    plot_all_neb_families( outdir, dataset_paths )

@@ -1,5 +1,4 @@
 import torch as pt
-import openmm as mm
 import openmm.unit as unit
 from typing import Callable, Optional, Tuple
 
@@ -202,6 +201,66 @@ def generate_linear_cartesian_path(
 # Main Cartesian NEB driver
 # ============================================================
 
+import torch as pt
+
+
+def reparameterize_band_by_arclength(x: pt.Tensor, eps: float = 1e-12) -> pt.Tensor:
+    """
+    Redistribute a Cartesian band so images are equally spaced by arc length.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        Shape (N_images, n_atoms, 3)
+    eps : float
+        Small number to avoid division by zero.
+
+    Returns
+    -------
+    x_new : torch.Tensor
+        Shape (N_images, n_atoms, 3), same endpoints, interior images
+        redistributed by arc length.
+    """
+    assert x.ndim == 3, f"x must have shape (N_images, n_atoms, 3), got {x.shape}"
+    N = x.shape[0]
+    if N <= 2:
+        return x.clone()
+
+    # Segment lengths
+    dx = x[1:] - x[:-1]                                  # (N-1, n_atoms, 3)
+    seglen = pt.sqrt(pt.sum(dx * dx, dim=(1, 2)) + eps) # (N-1,)
+
+    # Cumulative arc length
+    s = pt.zeros(N, dtype=x.dtype, device=x.device)
+    s[1:] = pt.cumsum(seglen, dim=0)
+
+    total_length = s[-1]
+    if total_length.item() < eps:
+        return x.clone()
+
+    # Target equally spaced arc-length positions
+    s_target = pt.linspace(0.0, total_length.item(), N, dtype=x.dtype, device=x.device)
+
+    x_new = pt.empty_like(x)
+    x_new[0] = x[0]
+    x_new[-1] = x[-1]
+
+    # For each target interior point, find enclosing segment and interpolate
+    j = 0
+    for i in range(1, N - 1):
+        st = s_target[i]
+
+        while j < N - 2 and s[j + 1] < st:
+            j += 1
+
+        s0 = s[j]
+        s1 = s[j + 1]
+        alpha = (st - s0) / (s1 - s0 + eps)
+
+        x_new[i] = (1.0 - alpha) * x[j] + alpha * x[j + 1]
+
+    return x_new
+
 def computeMEP_openmm_cartesian(
     evaluator: OpenMMEnergyForceEvaluator,
     xA_xyz: pt.Tensor,   # (n_atoms, 3), nm
@@ -214,7 +273,7 @@ def computeMEP_openmm_cartesian(
     verbose: bool = False,
     generate_initial_path: Optional[Callable] = None,
     project_band: bool = True,
-) -> Tuple[pt.Tensor, pt.Tensor, float]:
+) -> Tuple[pt.Tensor, pt.Tensor, float, pt.Tensor]:
     """
     Cartesian NEB with OpenMM energies/forces.
 
@@ -242,6 +301,7 @@ def computeMEP_openmm_cartesian(
     x0        : initial band, shape (N+1, n_atoms, 3)
     x_optimal : best band found, shape (N+1, n_atoms, 3)
     F_optimal : best mean NEB force norm
+    x_last    : The last point computed during optimization.
     """
     device = xA_xyz.device
     dtype = xA_xyz.dtype
@@ -266,7 +326,7 @@ def computeMEP_openmm_cartesian(
     F_optimal = pt.inf
     x_optimal = None
 
-    for step in range(n_steps):
+    for step in range(1, n_steps+1):
         optimizer.zero_grad(set_to_none=True)
 
         # Full band
@@ -286,6 +346,12 @@ def computeMEP_openmm_cartesian(
                 x_proj = project_centered_band(x_proj)
                 x_inner.data.copy_(x_proj[1:-1])
 
+        if step % 25 == 0:
+            with pt.no_grad():
+                x_full = pt.cat([xA_xyz[None], x_inner, xB_xyz[None]], dim=0)
+                x_full = reparameterize_band_by_arclength(x_full)
+                x_inner.data.copy_(x_full[1:-1])
+
         F_norms = image_norm(F).reshape(-1)
         F_mean = F_norms.mean().item()
 
@@ -300,7 +366,9 @@ def computeMEP_openmm_cartesian(
             print( f"step {step:5d} | ", f"mean|F| {meanF:.3e} | ", f"max|F| {maxF:.3e} | ", 
                    f"Emin {E.min().item():.4f} | ", f"Emax {E.max().item():.4f} | ", f"lr {lr:.3e}")
 
+    x_last = pt.cat([xA_xyz[None, :, :], x_inner, xB_xyz[None, :, :]], dim=0).detach()
     if x_optimal is None:
-        x_optimal = pt.cat([xA_xyz[None, :, :], x_inner, xB_xyz[None, :, :]], dim=0).detach()
+        x_optimal = pt.clone( x_last )
 
-    return x0.detach(), x_optimal, F_optimal
+
+    return x0.detach(), x_optimal, F_optimal, x_last

@@ -21,6 +21,9 @@ from typing import List, Tuple
 
 def collate_molecules(batch : List[List[Trajectory]]
                      ) -> Tuple[BatchedMoleculeGraph, BatchedMoleculeGraph, pt.Tensor, pt.Tensor]:
+    """
+    Batching molecules and random points on the path.
+    """
     trajectories = list(itertools.chain.from_iterable( batch )) # squash the nested list of trajectories
 
     # Sample random points on the trajectory for each molecule
@@ -45,27 +48,29 @@ def collate_molecules(batch : List[List[Trajectory]]
     return xA, xB, s, x_ref
 
 def main():
-    # Start a new wandb run to track this script.
-    lr = 1e-4
-    n_epochs = 5000
-    run = wandb.init(
-        # Set the wandb entity where your project will be logged (generally your team name).
-        entity="hannesvdc-open-numerics",
-        # Set the wandb project where this run will be logged.
-        project="transition1x",
-        # Track hyperparameters and run metadata.
-        config={
-            "learning_rate": lr,
-            "architecture": "GNN",
-            "dataset": "transition1x",
-            "epochs": n_epochs,
-        },
-    )
-
     with open( './data_config.json', "r" ) as f:
         data_config = json.load( f )
     data_directory = data_config["data_folder"]
     device_name = data_config["device"]
+    setup_wandb = data_config.get("setup_wandb", True)
+
+    # Start a new wandb run to track this script.
+    lr = 1e-4
+    n_epochs = 5000
+    if setup_wandb:
+        run = wandb.init(
+            # Set the wandb entity where your project will be logged (generally your team name).
+            entity="hannesvdc-open-numerics",
+            # Set the wandb project where this run will be logged.
+            project="transition1x",
+            # Track hyperparameters and run metadata.
+            config={
+                "learning_rate": lr,
+                "architecture": "GNN",
+                "dataset": "transition1x",
+                "epochs": n_epochs,
+            },
+        )
 
     B = 32
     train_dataset = TransitionPathDataset( "train", data_directory )
@@ -107,7 +112,7 @@ def main():
 
     # Build the optimizer
     weight_decay = 1e-5
-    optimizer = Adam( tp_network.parameters(), lr, amsgrad=True )
+    optimizer = AdamW( tp_network.parameters(), lr, weight_decay=weight_decay, amsgrad=True )
 
     # A simple MSE loss as a start
     def loss_fcn( x : pt.Tensor,
@@ -215,7 +220,10 @@ def main():
                 pt.save( tp_network.state_dict(), './models/best_gnn.pth' )
 
             # Log to weights & biases
-            run.log({"epoch": epoch, "train_loss": train_loss, "train_grad": train_grad, "valid_loss" : valid_loss, "best_val_loss" : best_val_loss})
+            if setup_wandb:
+                run.log({"epoch": epoch, "train_loss": train_loss, 
+                         "train_grad": train_grad, "valid_loss" : valid_loss, 
+                         "best_val_loss" : best_val_loss})
 
             if epoch % 10 == 0:
                 pt.save( tp_network.state_dict(), './models/gnn.pth' )
@@ -223,7 +231,8 @@ def main():
     except KeyboardInterrupt:
         print('Aborting Training due to KeyboardInterrupt')
     finally:
-        run.finish()
+        if setup_wandb:
+            run.finish()
 
     # Store training convergence
     np.save( './models/train_convergence.npy', np.vstack( (np.array(train_counter), np.array(train_losses), np.array(train_grads)) ) )
