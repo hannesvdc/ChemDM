@@ -34,9 +34,7 @@ class TrajectoryDataset( Dataset ):
             basin_A, basin_B = basin_pair
             filtered_path = outdir / f"{basin_A}__{basin_B}__neb_dataset_filtered.npz"
             filtered_trajectories = np.load( filtered_path )["x_opt"] # (n_trajectories, n_images, 22, 3)
-            print(filtered_trajectories.shape)
             filtered_arclenghts = self.normalized_arclengths( filtered_trajectories ) # (n_trajectories, n_images)
-            print(filtered_arclenghts.shape)
 
             trajectories.append( pt.tensor(filtered_trajectories) )
             xAs.append( pt.tensor(filtered_trajectories[:,0,:,:]) )
@@ -55,6 +53,20 @@ class TrajectoryDataset( Dataset ):
                                    [6,7], [6,8], [8,9], [8,10], [8,14], [10,11],
                                    [10,12], [10,13], [14,15], [14,16], [16,17],
                                    [16,18], [18,19], [18,20], [18,21]])
+        
+    def apply_mask( self, mask : pt.Tensor ) -> None:
+        """
+        Mask which trajectories to keep. Useful for training / validation split.
+
+        mask: torch.tensor( dtype=bool ). Flattened before using. Must be the same size as len(self).
+        """
+        mask = mask.flatten()
+        assert len(mask) == self.trajectories.shape[0]
+
+        self.trajectories = self.trajectories[mask,:,:,:]
+        self.xA = self.xA[mask,:,:]
+        self.xB = self.xB[mask,:,:]
+        self.arclengths = self.arclengths[mask,:]
 
     def normalized_arclengths(self, X: np.ndarray, eps: float = 1e-12) -> np.ndarray:
         """
@@ -108,3 +120,5 @@ class TrajectoryDataset( Dataset ):
     
 if __name__ == '__main__':
     dataset = TrajectoryDataset()
+    print( len(dataset) )
+    print( dataset[467] )
