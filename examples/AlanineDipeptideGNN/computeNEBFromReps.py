@@ -1,10 +1,11 @@
 from pathlib import Path
+import math
 import json
 import numpy as np
 import torch as pt
 import matplotlib.pyplot as plt
 
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 
 from system import build_alanine_dipeptide_simulation, compute_phi_psi_from_xyz, set_phi_psi
 from endpoint_selection import BasinCircle
@@ -260,11 +261,26 @@ def run_neb_family(
     print("Done.")
     return str(save_path)
 
-def plot_all_neb_families(outdir: Path, dataset_paths: list[str] ) -> None:
+def plot_all_neb_families( outdir: Path ) -> None:
     """
     Load all saved family files and plot all optimized NEB trajectories together.
     """
-    plt.figure(figsize=(8, 7))
+    def unwrap_angle_path(theta : pt.Tensor) -> pt.Tensor:
+        out = pt.clone(theta)
+        for i in range(1, len(out)):
+            d = out[i] - out[i - 1]
+            if d > math.pi:
+                out[i:] -= 2 * math.pi
+            elif d < -math.pi:
+                out[i:] += 2 * math.pi
+        return out
+    
+    max_step_deg = 25.0
+    def max_step_size_deg(phi_path: pt.Tensor, psi_path: pt.Tensor) -> float:
+        dphi = phi_path[1:] - phi_path[:-1]
+        dpsi = psi_path[1:] - psi_path[:-1]
+        step = pt.sqrt(dphi * dphi + dpsi * dpsi)
+        return float(pt.rad2deg(step.max()).item())
 
     basins = [
         BasinCircle("left_wrap",   phi0=np.deg2rad(-140), psi0=np.deg2rad(160),  radius=np.deg2rad(35)),
@@ -273,45 +289,89 @@ def plot_all_neb_families(outdir: Path, dataset_paths: list[str] ) -> None:
         BasinCircle("right_upper", phi0=np.deg2rad(50),   psi0=np.deg2rad(50),   radius=np.deg2rad(30)),
     ]
 
-    for dataset_path in dataset_paths:
-        data = np.load(dataset_path, allow_pickle=True)
-        xopt_all = data["x_opt"]  # (n_paths, n_images, n_atoms, 3)
+    centers = ["left_center", "left_wrap", "right_lower", "right_upper"]
+    basin_pairs = [(a, b) for a in centers for b in centers if a != b]
+    total_all = 0
+    kept_all = 0
+    for basin in basin_pairs:
+        basin_A, basin_B = basin
+        data = np.load( outdir / f"{basin_A}__{basin_B}__neb_dataset.npz", allow_pickle=True)
+        xopt_all = pt.tensor( data["x_opt"] ) # (n_paths, n_images, n_atoms, 3)
 
+        plt.figure()
+        n_kept = 0
+        n_total = len(xopt_all)
+        keep_mask = []
         for path_xyz in xopt_all:
             phi_path, psi_path = compute_phi_psi_from_xyz(path_xyz)
+            phi_path = unwrap_angle_path( phi_path )
+            psi_path = unwrap_angle_path( psi_path )
+
+            max_step = max_step_size_deg(phi_path, psi_path)
+            if max_step > max_step_deg:
+                keep_mask.append(False)
+                continue
+            keep_mask.append(True)
+
+            n_kept += 1
             plt.plot(np.degrees(phi_path), np.degrees(psi_path), "-o", ms=2, alpha=0.4)
 
-    for basin in basins:
-        circ = plt.Circle(
-            (np.degrees(basin.phi0), np.degrees(basin.psi0)),
-            np.degrees(basin.radius),
-            fill=False,
-            ls="--",
-            lw=1.2,
-            color="black",
-        )
-        plt.gca().add_patch(circ)
-        plt.text(
-            np.degrees(basin.phi0) + 2,
-            np.degrees(basin.psi0) + 2,
-            basin.name,
-            fontsize=9,
+        keep_mask = np.asarray(keep_mask, dtype=bool)
+        n_filtered = n_total - n_kept
+        pct_filtered = 100.0 * n_filtered / n_total if n_total > 0 else 0.0
+        total_all += n_total
+        kept_all += n_kept
+
+        filtered_path = outdir / f"{basin_A}__{basin_B}__neb_dataset_filtered.npz"
+        np.savez( filtered_path, x_opt=xopt_all[keep_mask],
+            basin_A=np.array(basin_A, dtype=object),
+            basin_B=np.array(basin_B, dtype=object) )
+
+        print(
+            f"{basin_A} -> {basin_B}: "
+            f"kept {n_kept}/{n_total}, "
+            f"filtered {n_filtered} ({pct_filtered:.1f}%)"
         )
 
-    plt.xlim(-180, 180)
-    plt.ylim(-180, 180)
-    plt.xlabel(r"$\phi$ [deg]")
-    plt.ylabel(r"$\psi$ [deg]")
-    plt.tight_layout()
-    plt.savefig(outdir / "all_neb_paths.png", dpi=200)
+        plt.title(
+            f"{basin_A} -> {basin_B}  |  "
+            f"kept {n_kept}/{n_total}, filtered {pct_filtered:.1f}%"
+        )
+        for plot_basin in basins:
+            circ = plt.Circle(
+                (np.degrees(plot_basin.phi0), np.degrees(plot_basin.psi0)),
+                np.degrees(plot_basin.radius),
+                fill=False,
+                ls="--",
+                lw=1.2,
+                color="black",
+            )
+            plt.gca().add_patch(circ)
+            plt.text(
+                np.degrees(plot_basin.phi0) + 2,
+                np.degrees(plot_basin.psi0) + 2,
+                plot_basin.name,
+                fontsize=9,
+            )
+
+        plt.xlim(-180, 180)
+        plt.ylim(-180, 180)
+        plt.xlabel(r"$\phi$ [deg]")
+        plt.ylabel(r"$\psi$ [deg]")
+        plt.tight_layout()
+    
+
     plt.show()
 
 
 if __name__ == "__main__":
+
     # Ordered pairs: 4 * 3 = 12
     outdir = Path("outputs")
     centers = ["left_center", "left_wrap", "right_lower", "right_upper"]
     basin_pairs = [(a, b) for a in centers for b in centers if a != b]
+    plot_all_neb_families( outdir )
+    exit(0)
 
     # NEB parameters
     max_reps = 15
@@ -320,11 +380,9 @@ if __name__ == "__main__":
     n_steps = 5000
     lr = 1e-4
 
-    dataset_paths: list[str] = []
     max_workers = 6
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        futures = [
-            ex.submit(
+        futures = [ ex.submit(
                 run_neb_family,
                 outdir,
                 basin_A,
@@ -336,13 +394,7 @@ if __name__ == "__main__":
                 n_steps=n_steps,
                 lr=lr,
             )
-            for basin_A, basin_B in basin_pairs
-        ]
-
-        for fut in as_completed(futures):
-            dataset_path = fut.result()
-            dataset_paths.append(dataset_path)
-            print(f"Finished family dataset: {dataset_path}")
+            for basin_A, basin_B in basin_pairs ]
 
     print("All NEB families done.")
-    plot_all_neb_families( outdir, dataset_paths )
+    plot_all_neb_families( outdir )
