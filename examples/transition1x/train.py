@@ -53,6 +53,7 @@ def main():
     data_directory = data_config["data_folder"]
     device_name = data_config["device"]
     setup_wandb = data_config.get("setup_wandb", True)
+    exp_name = data_config.get( "name", "")
 
     # Start a new wandb run to track this script.
     lr = 1e-4
@@ -72,7 +73,7 @@ def main():
             },
         )
 
-    B = 32
+    B = 8
     train_dataset = TransitionPathDataset( "train", data_directory )
     train_loader = DataLoader(
         train_dataset,
@@ -97,21 +98,21 @@ def main():
     )
 
     # Global molecular information
-    d_cutoff = 5.0 # Angstrom
+    d_cutoff = 12.0 # Angstrom
 
     # Construct the neural network architecture
     embedding_state_size = 64
     embedding_message_size = 64
-    n_embedding_layers = 5
+    n_embedding_layers = 10
     xA_embedding = MolecularEmbeddingGNN(embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff)
     xB_embedding = MolecularEmbeddingGNN(embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff)
-    n_tp_layers = 5
+    n_tp_layers = 10
     tp_message_size = 64
     tp_network = TransitionPathGNN( xA_embedding, xB_embedding, tp_message_size, n_tp_layers, d_cutoff )
     print( 'Number of Trainable Parameters: ', sum( [p.numel() for p in tp_network.parameters() if p.requires_grad]) )
 
     # Build the optimizer
-    weight_decay = 1e-5
+    weight_decay = 1e-2
     optimizer = AdamW( tp_network.parameters(), lr, weight_decay=weight_decay, amsgrad=True )
 
     # A simple MSE loss as a start
@@ -217,7 +218,7 @@ def main():
             if valid_loss < best_val_loss:
                 print('Saving best model')
                 best_val_loss = valid_loss
-                pt.save( tp_network.state_dict(), './models/best_gnn.pth' )
+                pt.save( tp_network.state_dict(), f"./models/{exp_name}best_gnn.pth" )
 
             # Log to weights & biases
             if setup_wandb:
@@ -226,8 +227,8 @@ def main():
                          "best_val_loss" : best_val_loss})
 
             if epoch % 10 == 0:
-                pt.save( tp_network.state_dict(), './models/gnn.pth' )
-                pt.save( optimizer.state_dict(), './models/optimizer.pth' )
+                pt.save( tp_network.state_dict(), f"./models/{exp_name}_gnn.pth" )
+                pt.save( optimizer.state_dict(), f"./models/{exp_name}_optimizer.pth" )
     except KeyboardInterrupt:
         print('Aborting Training due to KeyboardInterrupt')
     finally:
@@ -235,8 +236,8 @@ def main():
             run.finish()
 
     # Store training convergence
-    np.save( './models/train_convergence.npy', np.vstack( (np.array(train_counter), np.array(train_losses), np.array(train_grads)) ) )
-    np.save( './models/valid_convergence.npy', np.vstack( (np.array(valid_counter), np.array(valid_losses) ) ) )
+    np.save( f"./models/{exp_name}_train_convergence.npy", np.vstack( (np.array(train_counter), np.array(train_losses), np.array(train_grads)) ) )
+    np.save( f"./models/{exp_name}_valid_convergence.npy", np.vstack( (np.array(valid_counter), np.array(valid_losses) ) ) )
 
     # Plot the loss and grad norm
     plt.semilogy( train_counter, train_losses, label='Losses', alpha=0.5)
