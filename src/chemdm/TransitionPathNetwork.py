@@ -47,7 +47,7 @@ class TransitionPathGNN( nn.Module ):
 
         # Edge features
         self.rbf = DistanceRBFEmbedding( 0.0, d_cutoff, n_rbf=10 )
-        self.n_edge_features = 3 * self.rbf.out_dim + 6
+        self.n_edge_features = 3 * self.rbf.out_dim + 7
 
         # Nonlinear Message and Nodal Update layers
         hidden_neurons = max(64, self.message_size )
@@ -132,7 +132,7 @@ class TransitionPathGNN( nn.Module ):
             rbf_B = self.rbf( dist_xB )
             edge_features = pt.cat( (is_bond_A[:,None], 
                                      is_bond_B[:,None], 
-                                     dist, dist_xA, dist_xB, dist_xA - dist_xB, 
+                                     dist, dist**2, dist_xA, dist_xB, dist_xA - dist_xB, 
                                      rbf_embedding, rbf_A, rbf_B), dim=1 )
 
             # Compute the edge messages

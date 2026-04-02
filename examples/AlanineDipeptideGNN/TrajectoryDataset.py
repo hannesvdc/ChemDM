@@ -20,8 +20,7 @@ class TrajectoryDataset( Dataset ):
                         ("right_upper", "right_lower"),
                         ("left_center", "right_lower"),
                         ("left_wrap", "right_lower"),
-                        ("right_lower", "left_wrap"),
-                        ("right_upper", "left_wrap"),]
+                        ("right_lower", "left_wrap"), ]
         
         # Setup the datastructure.
         trajectories = []
