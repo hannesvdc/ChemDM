@@ -5,7 +5,7 @@ from chemdm.AtomicOnlyInformation import AtomicInformation
 from chemdm.MLP import MultiLayerPerceptron
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.embedding import ArcLengthEmbedding
-from chemdm.MoleculeGraph import Molecule, findAllNeighborsReactantProduct
+from chemdm.MoleculeGraph import Molecule, findAllNeighborsReactantProduct, recenterMolecule
 from chemdm.DistanceRBFEmbedding import DistanceRBFEmbedding
 
 class TransitionPathGNN( nn.Module ):
@@ -88,11 +88,11 @@ class TransitionPathGNN( nn.Module ):
                  xA : Molecule,
                  xB : Molecule,
                  s : pt.Tensor,
-               ) -> pt.Tensor:
+               ) -> Molecule:
         assert pt.all( xA.Z == xB.Z ), f"`xA` and `xB` must have the same atoms in the same ordering."
         s = s.flatten()
         assert s.numel() == len(xA.Z), f"`s` must have the same number of elements as the number of atoms in xA and xB."
-        N = len(xA.Z)
+        N = len( xA.Z )
 
         # Calculate the atomic embedding
         Z_info = self.atom_information( xA ) # (N, info)
@@ -156,8 +156,10 @@ class TransitionPathGNN( nn.Module ):
             edge_updates = alpha * dx
             neighbor_update = pt.zeros_like(x)                # (N, 3)
             neighbor_update.index_add_(0, dst, edge_updates)  # sum over neighbors j for each i = dst
-            x = x + neighbor_update + beta * s[:,None] * (xA.x - x) \
-                                    + gamma * (1.0 - s[:,None]) * (xB.x - x)     # (N, 3)
+            x = x + neighbor_update + beta  * (1.0 - s[:, None]) * (xA.x - x) \
+                                    + gamma * s[:, None]         * (xB.x - x) # (N, 3)
 
-        # Return just the position
-        return x
+        # Ensure a zero center of mass
+        x_molecule = xA.copyWithNewPositions( x )
+        x_molecule = recenterMolecule( x_molecule )
+        return x_molecule

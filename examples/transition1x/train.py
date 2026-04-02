@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 
 import wandb
 
-from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
+from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, Molecule
 from chemdm.TransitionPathDataset import TransitionPathDataset, Trajectory
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
@@ -46,6 +46,25 @@ def collate_molecules(batch : List[List[Trajectory]]
     xA = batchMolecules( xA_molecules )
     xB = batchMolecules( xB_molecules )
     return xA, xB, s, x_ref
+
+def bond_distance_loss( xA : Molecule, 
+                        xB : Molecule,
+                        x_ref : pt.Tensor,
+                        xs : pt.Tensor ) -> pt.Tensor:
+    """
+    Distance-based structural loss over the union of bonds in A and B.
+
+    x_ref, xs: (N, 3)
+    """
+    bonds_A = xA.edge_index
+    bonds_B = xB.edge_index
+    all_bonds = pt.unique( pt.cat( (bonds_A, bonds_B), dim=0 ), dim=0 )
+    src = all_bonds[:,0]
+    dst = all_bonds[:,1]
+    ref_distances = pt.norm( x_ref[dst,:] - x_ref[src,:], dim=1 )
+    xs_distances = pt.norm( xs[dst,:] - xs[src,:], dim=1 )
+
+    return pt.mean( (ref_distances - xs_distances)**2 )
 
 def main():
     with open( './data_config.json', "r" ) as f:
@@ -117,7 +136,7 @@ def main():
 
     # A simple MSE loss as a start
     def loss_fcn( x : pt.Tensor,
-                xs : pt.Tensor ) -> pt.Tensor:
+                  xs : pt.Tensor ) -> pt.Tensor:
         assert x.shape == xs.shape, f"`x` and `xs` must have the same (unbatched) shape, but got {x.shape} and {xs.shape}."
         return pt.mean( (x - xs)**2 ) # average over N and 3
 
@@ -127,12 +146,13 @@ def main():
     tp_network.to( device=device, dtype=dtype )
 
     # General Batch evaluation function
+    lambda_mix = 0.1
     def evaluate_batch( xA : BatchedMoleculeGraph,
                         xB : BatchedMoleculeGraph,
                         s : pt.Tensor,
                         x_ref : pt.Tensor ) -> pt.Tensor:
         xs = tp_network( xA, xB, s )
-        loss = loss_fcn( x_ref, xs )
+        loss = loss_fcn( x_ref, xs.x ) + lambda_mix * bond_distance_loss( xA, xB, x_ref, xs.x )
         return loss
 
     train_counter = []
