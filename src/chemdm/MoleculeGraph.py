@@ -259,3 +259,31 @@ def findAllNeighborsReactantProduct( moleculeA : Molecule,
     is_bond_B = pt.scatter_reduce(is_bond_B, 0, inverse, edge_type_B, reduce="amax", include_self=False)
 
     return all_neighbors, is_bond_A, is_bond_B
+
+def recenterMolecule( molecule : Molecule ) -> Molecule:
+    """
+    Center the molecule to have zero unweighted center of mass. If the input 
+    molecule is batched, recentering is done on the level of the constituent molecules.
+    
+    This function does not alter the input molecule and returns a new molecule object.
+    """
+    if isinstance( molecule, MoleculeGraph ):
+        x_centered = molecule.x - pt.mean( molecule.x, dim=0, keepdim=True )
+    elif isinstance( molecule, BatchedMoleculeGraph ):
+        x = molecule.x
+
+        # Get indices of atoms per molecule.
+        unique_ids, inverse = pt.unique( molecule.molecule_id, sorted=True, return_inverse=True )
+        n_molecules = unique_ids.numel()
+        counts = pt.bincount(inverse, minlength=n_molecules).to(x.dtype)
+
+        # Sum positions per molecule: (B, 3)
+        sums = pt.zeros(n_molecules, 3, device=x.device, dtype=x.dtype)
+        sums.index_add_(0, inverse, x)
+
+        com = sums / counts[:, None]
+        x_centered = x - com[inverse]
+    else:
+        raise TypeError(f"Unsupported molecule type: {type(molecule)}")
+
+    return molecule.copyWithNewPositions( x_centered )
