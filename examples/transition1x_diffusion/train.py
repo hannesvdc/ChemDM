@@ -63,7 +63,7 @@ def main():
     lr = 1e-4
     n_epochs = 5000
     weight_decay = 1e-3
-    B = 1
+    B = 8
     d_cutoff = 12.0       # Angstrom
 
     # Diffusion
@@ -267,7 +267,6 @@ def main():
     plt.xlabel( "Epoch" )
     plt.legend()
     plt.show()
-
 
 if __name__ == "__main__":
     main()
