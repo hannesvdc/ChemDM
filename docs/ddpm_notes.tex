@@ -1,0 +1,280 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{bm}
+\usepackage{hyperref}
+
+\newcommand{\xb}{\bm{x}}
+\newcommand{\eps}{\bm{\varepsilon}}
+\newcommand{\abar}{\bar{\alpha}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathcal{N}}
+
+\title{Denoising Diffusion Probabilistic Models (DDPMs)}
+\author{Notes for ChemDM}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Setup}
+
+We have data $\xb_0 \sim q(\xb_0)$ in $\R^d$ and want to learn a generative
+model that can produce new samples from $q(\xb_0)$.  The idea is to
+\emph{gradually destroy} the data by adding noise (the forward process) and
+then \emph{learn to reverse} that destruction (the reverse process).
+
+\section{Forward process}
+
+Define a sequence of noise levels through a \textbf{variance schedule}
+$\beta_1, \beta_2, \ldots, \beta_T \in (0,1)$.  The forward process adds
+Gaussian noise in $T$ steps:
+\begin{equation}
+    q(\xb_t \mid \xb_{t-1})
+    = \N\!\left(\xb_t;\; \sqrt{1 - \beta_t}\,\xb_{t-1},\; \beta_t \bm{I}\right).
+\end{equation}
+Each step shrinks the signal by $\sqrt{1-\beta_t}$ and adds noise with
+variance $\beta_t$.  After many steps, $\xb_T$ is approximately standard
+Gaussian regardless of $\xb_0$.
+
+\subsection{Closed-form sampling at arbitrary $t$}
+
+Define $\alpha_t = 1 - \beta_t$ and $\abar_t = \prod_{s=1}^{t} \alpha_s$.
+Then we can jump directly from $\xb_0$ to $\xb_t$ without simulating
+intermediate steps:
+\begin{equation}\label{eq:q_sample}
+    q(\xb_t \mid \xb_0)
+    = \N\!\left(\xb_t;\; \sqrt{\abar_t}\,\xb_0,\;
+      (1 - \abar_t)\bm{I}\right),
+\end{equation}
+or equivalently,
+\begin{equation}\label{eq:reparam}
+    \xb_t = \sqrt{\abar_t}\,\xb_0 + \sqrt{1 - \abar_t}\,\eps,
+    \qquad \eps \sim \N(\bm{0}, \bm{I}).
+\end{equation}
+This is the \textbf{reparameterization trick} and is what we use during
+training to generate noisy samples.
+
+\paragraph{Proof sketch.}
+Each forward step is a linear Gaussian map.  Composing $t$ of them gives
+$\xb_t = \bigl(\prod_{s=1}^t \sqrt{\alpha_s}\bigr)\xb_0 + \text{noise}$,
+with the noise terms accumulating into a single Gaussian with variance
+$1 - \prod_{s=1}^t \alpha_s = 1 - \abar_t$.
+
+\subsection{Variance schedule}
+
+Two common choices:
+\begin{itemize}
+    \item \textbf{Linear:} $\beta_t$ increases linearly from $\beta_1
+          \approx 10^{-4}$ to $\beta_T \approx 0.02$.
+    \item \textbf{Cosine} (Nichol \& Dhariwal, 2021): define $\abar_t$
+          directly as
+          \[
+              \abar_t = \frac{f(t)}{f(0)},
+              \qquad f(t) = \cos^2\!\left(\frac{t/T + s}{1+s}
+              \cdot \frac{\pi}{2}\right),
+          \]
+          with a small offset $s=0.008$ to avoid $\beta_t$ becoming too
+          small near $t=0$.  Then $\beta_t = 1 - \abar_t / \abar_{t-1}$.
+          This schedule spends more of the diffusion budget at intermediate
+          noise levels, where the denoising task is most informative.
+\end{itemize}
+
+\section{Reverse process}
+
+The key insight: if $\beta_t$ is small, each forward step
+$q(\xb_t \mid \xb_{t-1})$ is nearly Gaussian, so the true reverse step
+$q(\xb_{t-1} \mid \xb_t)$ is \emph{also} nearly Gaussian.  We can therefore
+parameterize a learned reverse:
+\begin{equation}
+    p_\theta(\xb_{t-1} \mid \xb_t)
+    = \N\!\left(\xb_{t-1};\; \bm{\mu}_\theta(\xb_t, t),\;
+      \sigma_t^2 \bm{I}\right),
+\end{equation}
+where $\bm{\mu}_\theta$ is a neural network and $\sigma_t^2$ is set to
+a known value (see below).  Sampling starts from $\xb_T \sim \N(\bm{0},
+\bm{I})$ and iterates $\xb_{t-1} \sim p_\theta(\xb_{t-1} \mid \xb_t)$ for
+$t = T, T{-}1, \ldots, 1$.
+
+\subsection{The true posterior}
+
+If we \emph{knew} $\xb_0$, the reverse step would be tractable:
+\begin{equation}\label{eq:posterior}
+    q(\xb_{t-1} \mid \xb_t, \xb_0)
+    = \N\!\left(\xb_{t-1};\; \tilde{\bm{\mu}}_t(\xb_t, \xb_0),\;
+      \tilde{\beta}_t \bm{I}\right),
+\end{equation}
+with
+\begin{align}
+    \tilde{\bm{\mu}}_t(\xb_t, \xb_0)
+    &= \frac{\sqrt{\abar_{t-1}}\,\beta_t}{1 - \abar_t}\,\xb_0
+     + \frac{\sqrt{\alpha_t}\,(1 - \abar_{t-1})}{1 - \abar_t}\,\xb_t,
+    \label{eq:posterior_mean} \\[6pt]
+    \tilde{\beta}_t
+    &= \frac{(1 - \abar_{t-1})}{1 - \abar_t}\,\beta_t.
+    \label{eq:posterior_var}
+\end{align}
+The posterior mean is a weighted average of $\xb_0$ (the clean data) and
+$\xb_t$ (the current noisy state).
+
+\section{Training objective}
+
+\subsection{Variational bound}
+
+The DDPM training objective is derived from the variational lower bound
+(ELBO) on $\log p_\theta(\xb_0)$.  After standard manipulations, it
+decomposes into $T$ KL-divergence terms, each comparing the learned reverse
+$p_\theta(\xb_{t-1} \mid \xb_t)$ against the true posterior
+$q(\xb_{t-1} \mid \xb_t, \xb_0)$.  Since both are Gaussians with the
+same (fixed) variance $\tilde\beta_t$, the KL reduces to a squared
+difference between their means.
+
+The upshot: training reduces to teaching $\bm\mu_\theta(\xb_t, t)$ to
+approximate $\tilde{\bm\mu}_t(\xb_t, \xb_0)$.
+
+\subsection{Parameterization choices}
+
+We can parameterize $\bm\mu_\theta$ in several equivalent ways.  From~\eqref{eq:reparam} we can express $\xb_0$ and $\eps$ in terms of each
+other:
+\begin{equation}
+    \xb_0 = \frac{\xb_t - \sqrt{1-\abar_t}\,\eps}{\sqrt{\abar_t}},
+    \qquad
+    \eps = \frac{\xb_t - \sqrt{\abar_t}\,\xb_0}{\sqrt{1-\abar_t}}.
+\end{equation}
+
+\paragraph{$\eps$-prediction (Ho et al., 2020).}
+Let the network predict the noise: $\eps_\theta(\xb_t, t) \approx \eps$.
+Substituting into \eqref{eq:posterior_mean}:
+\begin{equation}
+    \bm{\mu}_\theta(\xb_t, t)
+    = \frac{1}{\sqrt{\alpha_t}}
+      \left(\xb_t - \frac{\beta_t}{\sqrt{1-\abar_t}}\,
+      \eps_\theta(\xb_t, t)\right).
+\end{equation}
+The simplified training loss is:
+\begin{equation}\label{eq:eps_loss}
+    L_\text{simple}
+    = \E_{t,\, \xb_0,\, \eps}\!\left[
+        \bigl\|\eps - \eps_\theta(\xb_t, t)\bigr\|^2
+      \right],
+\end{equation}
+where $t \sim \mathrm{Uniform}\{1,\ldots,T\}$, $\xb_0 \sim q(\xb_0)$,
+$\eps \sim \N(\bm{0},\bm{I})$, and $\xb_t$ is given
+by~\eqref{eq:reparam}.
+
+\paragraph{$\xb_0$-prediction.}
+Let the network predict the clean data directly:
+$\hat{\xb}_0 = f_\theta(\xb_t, t) \approx \xb_0$.  The training loss is:
+\begin{equation}\label{eq:x0_loss}
+    L_{x_0}
+    = \E_{t,\, \xb_0,\, \eps}\!\left[
+        \bigl\|\xb_0 - f_\theta(\xb_t, t)\bigr\|^2
+      \right].
+\end{equation}
+At sampling time, plug the predicted $\hat\xb_0$ into the posterior
+mean~\eqref{eq:posterior_mean} to get $\bm\mu_\theta$, then sample:
+\begin{equation}
+    \xb_{t-1}
+    = \tilde{\bm\mu}_t(\xb_t,\, \hat\xb_0)
+    + \sqrt{\tilde\beta_t}\,\bm{z},
+    \qquad \bm{z} \sim \N(\bm{0}, \bm{I}),
+\end{equation}
+with no noise added at $t=1$ (i.e.\ we return $\hat\xb_0$ directly).
+
+\paragraph{Equivalence.}
+The two parameterizations are related by the linear
+map~\eqref{eq:reparam}.  The losses~\eqref{eq:eps_loss}
+and~\eqref{eq:x0_loss} differ only by a $t$-dependent reweighting factor
+$\abar_t / (1 - \abar_t)$.  In practice, $\xb_0$-prediction tends to work
+better when combined with a cosine schedule, while $\eps$-prediction is the
+original DDPM formulation.
+
+\section{Training algorithm}
+
+The full training procedure is:
+\begin{enumerate}
+    \item Sample a data point $\xb_0 \sim q(\xb_0)$.
+    \item Sample a random timestep $t \sim \mathrm{Uniform}\{0, 1,
+          \ldots, T{-}1\}$.
+    \item Sample noise $\eps \sim \N(\bm{0}, \bm{I})$.
+    \item Compute $\xb_t = \sqrt{\abar_t}\,\xb_0
+          + \sqrt{1-\abar_t}\,\eps$.
+    \item Predict $\hat{\xb}_0 = f_\theta(\xb_t, t)$
+          \quad (or $\hat{\eps} = \eps_\theta(\xb_t, t)$).
+    \item Compute loss: $\|\xb_0 - \hat{\xb}_0\|^2$
+          \quad (or $\|\eps - \hat{\eps}\|^2$).
+    \item Backpropagate and update $\theta$.
+\end{enumerate}
+Note that each gradient step uses a \emph{single random} $t$.  Over many
+iterations the network learns to denoise at all noise levels.
+
+\section{Sampling algorithm}
+
+\begin{enumerate}
+    \item Sample $\xb_T \sim \N(\bm{0}, \bm{I})$.
+    \item For $t = T, T{-}1, \ldots, 1$:
+    \begin{enumerate}
+        \item Predict $\hat\xb_0 = f_\theta(\xb_t, t)$.
+        \item Compute the posterior mean $\tilde{\bm\mu}_t$ using
+              \eqref{eq:posterior_mean} with $\hat\xb_0$.
+        \item Sample $\bm{z} \sim \N(\bm{0}, \bm{I})$ if $t > 1$, else
+              $\bm{z} = \bm{0}$.
+        \item Set $\xb_{t-1} = \tilde{\bm\mu}_t
+              + \sqrt{\tilde\beta_t}\,\bm{z}$.
+    \end{enumerate}
+    \item Return $\xb_0$.
+\end{enumerate}
+
+\section{Connection to score-based models}
+
+The \textbf{score} of a distribution is $\nabla_{\xb} \log p(\xb)$.  For
+the forward marginal $q(\xb_t \mid \xb_0)$ from~\eqref{eq:q_sample}:
+\begin{equation}
+    \nabla_{\xb_t} \log q(\xb_t \mid \xb_0)
+    = -\frac{\xb_t - \sqrt{\abar_t}\,\xb_0}{1 - \abar_t}
+    = -\frac{\eps}{\sqrt{1 - \abar_t}}.
+\end{equation}
+So predicting $\eps$ is equivalent to estimating the score (up to a known
+scaling).  Score-based generative models (Song \& Ermon, 2019) take this
+perspective and work in continuous time, replacing the discrete chain with
+a stochastic differential equation (SDE).  The DDPM discrete chain can be
+seen as an Euler--Maruyama discretization of that SDE.
+
+\section{Application to transition paths}
+
+In our setting, $\xb_0 = \xb(s) \in \R^{N_\text{atoms} \times 3}$ is the
+atomic configuration at normalized arclength $s$ along a transition path.
+The denoising network $f_\theta$ is conditioned on:
+\begin{itemize}
+    \item $\xb_A$, $\xb_B$: reactant and product geometries (fixed graphs),
+    \item $s \in [0,1]$: position along the path,
+    \item $t$: diffusion noise level.
+\end{itemize}
+The network predicts the clean configuration $\hat\xb_0 = f_\theta(\xb_t,
+\xb_A, \xb_B, s, t)$.
+
+Because the reverse process is \emph{stochastic}, sampling with the same
+$(\xb_A, \xb_B, s)$ but different random seeds produces
+\textbf{different transition paths}.  This is precisely the property we
+want: for a given reaction, multiple mechanistically valid pathways can
+exist, and a diffusion model can represent this multi-modality naturally,
+whereas a deterministic regression model is forced to average over them.
+
+At the boundaries, the conditioning enforces $\hat\xb_0 \approx \xb_A$
+when $s \approx 0$ and $\hat\xb_0 \approx \xb_B$ when $s \approx 1$,
+regardless of the noise level $t$.
+
+\section*{Key references}
+\begin{itemize}
+    \item Ho, Jain \& Abbeel. \textit{Denoising Diffusion Probabilistic
+          Models.} NeurIPS, 2020.
+    \item Nichol \& Dhariwal. \textit{Improved Denoising Diffusion
+          Probabilistic Models.} ICML, 2021.
+    \item Song \& Ermon. \textit{Generative Modeling by Estimating Gradients
+          of the Data Distribution.} NeurIPS, 2019.
+    \item Song et al. \textit{Score-Based Generative Modeling through
+          Stochastic Differential Equations.} ICLR, 2021.
+\end{itemize}
+
+\end{document}
