@@ -68,7 +68,7 @@ def main():
     lr = 1e-3
     n_epochs = 4000
     weight_decay = 1e-3
-    B = 128
+    B = 512
 
     # Note: alanine dipeptide coordinates from OpenMM are in nm (not Angstrom).
     # The cutoff is therefore also in nm. The molecule is ~1 nm across.
@@ -133,10 +133,10 @@ def main():
 
     def evaluate_batch( xA, xB, s, x_ref ):
         """Forward-noise x_ref, predict x_0, return loss."""
-        t_int = sample_timesteps( xA.molecule_id )
-        x_t, _noise = diffusion_schedule.q_sample( x_ref, t_int )
-
-        t_normalized = t_int.float() / (T_diffusion - 1)
+        with pt.no_grad():
+            t_int = sample_timesteps( xA.molecule_id )
+            x_t, _noise = diffusion_schedule.q_sample( x_ref, t_int )
+            t_normalized = t_int.float() / (T_diffusion - 1)
         x_0_pred = network( x_t, xA, xB, s, t_normalized )
         return loss_fcn( x_ref, x_0_pred.x )
 
@@ -169,6 +169,11 @@ def main():
             grad_norm = getGradientNorm( network )
             pt.nn.utils.clip_grad_norm_( network.parameters(), 1.0 )
             optimizer.step()
+
+            # MPS doesn't free memory eagerly — sync first, then clear the cache.
+            if device.type == "mps":
+                pt.mps.synchronize()
+                pt.mps.empty_cache()
 
             # Logging
             epoch_idx = epoch + (batch_idx + 1.0) / n_batches

@@ -163,7 +163,9 @@ class TransitionPathDiffusionGNN( nn.Module ):
 
         # Walk through the message-passing layers.
         for l in range( self.n_layers ):
-            all_edges, is_bond_A, is_bond_B = findAllNeighborsReactantProduct( xA, xB, x, self.d_cutoff )
+            all_edges, is_bond_A, is_bond_B = findAllNeighborsReactantProduct(
+                xA, xB, x, self.d_cutoff
+            )
             src = all_edges[:, 0]
             dst = all_edges[:, 1]
 
