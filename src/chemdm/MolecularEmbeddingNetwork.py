@@ -2,11 +2,9 @@ import torch as pt
 import torch.nn as nn
 
 from chemdm.MoleculeGraph import Molecule, findAllNeighbors
-from chemdm.AtomicAndGraphInformation import AtomicAndGraphInformation, MoleculeInformation
+from chemdm.AtomicAndGraphInformation import MoleculeInformation
 from chemdm.MLP import MultiLayerPerceptron
 from chemdm.DistanceRBFEmbedding import DistanceRBFEmbedding
-
-from typing import List, Set
 
 class MolecularEmbeddingGNN( nn.Module ):
     def __init__( self,

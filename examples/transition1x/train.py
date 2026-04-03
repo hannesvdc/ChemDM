@@ -11,7 +11,8 @@ from torch.utils.data import DataLoader
 import wandb
 
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, Molecule
-from chemdm.TransitionPathDataset import TransitionPathDataset, Trajectory
+from chemdm.Trajectory import Trajectory, enforceCOM
+from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.TransitionPathNetwork import TransitionPathGNN
@@ -32,6 +33,8 @@ def collate_molecules(batch : List[List[Trajectory]]
     s_list = []
     x_list = []
     for trajectory in trajectories:
+        trajectory = enforceCOM( trajectory )
+
         xA = MoleculeGraph( trajectory.Z, trajectory.xA, trajectory.GA )
         xA_molecules.append( xA )
         xB = MoleculeGraph( trajectory.Z, trajectory.xB, trajectory.GB )
@@ -92,7 +95,7 @@ def main():
             },
         )
 
-    B = 8
+    B = 1
     train_dataset = TransitionPathDataset( "train", data_directory )
     train_loader = DataLoader(
         train_dataset,
@@ -131,7 +134,7 @@ def main():
     print( 'Number of Trainable Parameters: ', sum( [p.numel() for p in tp_network.parameters() if p.requires_grad]) )
 
     # Build the optimizer
-    weight_decay = 1e-2
+    weight_decay = 1e-3
     optimizer = AdamW( tp_network.parameters(), lr, weight_decay=weight_decay, amsgrad=True )
 
     # A simple MSE loss as a start
