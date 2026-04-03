@@ -77,7 +77,9 @@ def main():
     dtype = pt.float32
 
     # Global molecular information
-    d_cutoff = 10.0 # Angstrom
+    # Note: alanine dipeptide coordinates from OpenMM are in nm (not Angstrom).
+    # The cutoff is therefore also in nm. The molecule is ~1 nm across.
+    d_cutoff = 1.0 # nm
 
     # Construct the neural network architecture
     embedding_state_size = 32

@@ -3,7 +3,7 @@ import numpy as np
 import torch as pt
 from torch.utils.data import Dataset
 
-from chemdm.Trajectory import Trajectory
+from chemdm.Trajectory import Trajectory, enforceCOM
 from typing import List
 
 class TrajectoryDataset( Dataset ):
@@ -108,14 +108,14 @@ class TrajectoryDataset( Dataset ):
         return self.trajectories.shape[0] 
     
     def __getitem__( self, idx : int ) -> Trajectory:
-        trajectory = Trajectory(self.Z, 
-                                self.xA[idx,:,:], 
-                                self.xB[idx,:,:], 
-                                self.G, 
-                                self.G, 
-                                self.arclengths[idx,:], 
+        trajectory = Trajectory(self.Z,
+                                self.xA[idx,:,:],
+                                self.xB[idx,:,:],
+                                self.G,
+                                self.G,
+                                self.arclengths[idx,:],
                                 self.trajectories[idx,:,:,] )
-        return trajectory
+        return enforceCOM( trajectory )
     
 if __name__ == '__main__':
     dataset = TrajectoryDataset()

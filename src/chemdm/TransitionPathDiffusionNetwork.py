@@ -149,22 +149,21 @@ class TransitionPathDiffusionGNN( nn.Module ):
         hA = self.xA_embedding_network( xA )  # (N, c_A)
         hB = self.xB_embedding_network( xB )  # (N, c_B)
 
-        # Arclength and diffusion-time embedding and combine
+        # Arclength and diffusion-time embedding
         s_embed = self.arclength_embedding( s ) # (N, 2*n_s_freq+2)
         t_embed = self.timestep_embedding( t ) # (N, 2*n_t_freq)
         if s_embed.ndim == 1:
             s_embed = s_embed[None, :]
         if t_embed.ndim == 1:
             t_embed = t_embed[None, :]
+
+        # Combine and initialize from noisy input
         h = pt.cat( (atom_embedding, hA, hB, s_embed, t_embed), dim=1 )
-
-
-        # --- Initialize positions from the noisy input ---
         x = x_t
+
+        # Walk through the message-passing layers.
         for l in range( self.n_layers ):
-            all_edges, is_bond_A, is_bond_B = findAllNeighborsReactantProduct(
-                xA, xB, x, self.d_cutoff
-            )
+            all_edges, is_bond_A, is_bond_B = findAllNeighborsReactantProduct( xA, xB, x, self.d_cutoff )
             src = all_edges[:, 0]
             dst = all_edges[:, 1]
 
