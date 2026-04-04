@@ -153,12 +153,14 @@ def main():
         return loss_fcn( x_ref, x_0_pred.x )
 
     @pt.no_grad()
-    def evaluate_rmse_t0( loader ) -> float:
-        """Evaluate per-coordinate RMSE at t=0 (clean input) over a full loader."""
+    def evaluate_rmse_t0( loader, max_batches : int = 20 ) -> float:
+        """Evaluate per-coordinate RMSE at t=0 (clean input) over a limited number of batches."""
         network.eval()
         rmse_sum = 0.0
-        n_batches = len(loader)
-        for xA, xB, s, x_ref in loader:
+        n_batches = min( max_batches, len(loader) )
+        for batch_idx, (xA, xB, s, x_ref) in enumerate( loader ):
+            if batch_idx >= max_batches:
+                break
             xA    = xA.to( device=device, dtype=dtype )
             xB    = xB.to( device=device, dtype=dtype )
             s     = s.to( device=device, dtype=dtype )

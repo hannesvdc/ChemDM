@@ -159,12 +159,14 @@ def main():
         return loss
 
     @pt.no_grad()
-    def evaluate_rmse( loader ) -> float:
-        """Evaluate per-coordinate RMSE over a full loader."""
+    def evaluate_rmse( loader, max_batches : int = 20 ) -> float:
+        """Evaluate per-coordinate RMSE over a limited number of batches."""
         tp_network.eval()
         rmse_sum = 0.0
-        n_batches = len(loader)
-        for xA, xB, s, x_ref in loader:
+        n_batches = min( max_batches, len(loader) )
+        for batch_idx, (xA, xB, s, x_ref) in enumerate( loader ):
+            if batch_idx >= max_batches:
+                break
             xA    = xA.to( device=device, dtype=dtype )
             xB    = xB.to( device=device, dtype=dtype )
             s     = s.to( device=device, dtype=dtype )
