@@ -16,7 +16,7 @@ from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.TransitionPathNetwork import TransitionPathGNN
-from chemdm.util import getGradientNorm
+from chemdm.util import getGradientNorm, perCoordinateRMSE
 
 from typing import List, Tuple
 
@@ -158,6 +158,22 @@ def main():
         loss = loss_fcn( x_ref, xs.x ) + lambda_mix * bond_distance_loss( xA, xB, x_ref, xs.x )
         return loss
 
+    @pt.no_grad()
+    def evaluate_rmse( loader ) -> float:
+        """Evaluate per-coordinate RMSE over a full loader."""
+        tp_network.eval()
+        rmse_sum = 0.0
+        n_batches = len(loader)
+        for xA, xB, s, x_ref in loader:
+            xA    = xA.to( device=device, dtype=dtype )
+            xB    = xB.to( device=device, dtype=dtype )
+            s     = s.to( device=device, dtype=dtype )
+            x_ref = x_ref.to( device=device, dtype=dtype )
+
+            xs = tp_network( xA, xB, s )
+            rmse_sum += perCoordinateRMSE( x_ref, xs.x )
+        return rmse_sum / n_batches
+
     train_counter = []
     train_losses = []
     train_grads = []
@@ -237,7 +253,10 @@ def main():
             train_loss, train_grad = train( epoch )
             print( "Train Epoch {} \tTotal Loss: {}\n".format(epoch, train_loss), flush=True )
             valid_loss = validate( epoch )
-            print( "Validation Epoch {} \tTotal Loss: {}\n".format(epoch, valid_loss), flush=True )
+            train_rmse = evaluate_rmse( train_loader )
+            valid_rmse = evaluate_rmse( valid_loader )
+            print( "Validation Epoch {} \tTotal Loss: {} \tTrain RMSE: {:.6f} \tValid RMSE: {:.6f}\n"
+                   .format(epoch, valid_loss, train_rmse, valid_rmse), flush=True )
             if valid_loss < best_val_loss:
                 print('Saving best model')
                 best_val_loss = valid_loss
@@ -245,9 +264,10 @@ def main():
 
             # Log to weights & biases
             if setup_wandb:
-                run.log({"epoch": epoch, "train_loss": train_loss, 
-                         "train_grad": train_grad, "valid_loss" : valid_loss, 
-                         "best_val_loss" : best_val_loss})
+                run.log({"epoch": epoch, "train_loss": train_loss,
+                         "train_grad": train_grad, "valid_loss" : valid_loss,
+                         "best_val_loss" : best_val_loss,
+                         "train_rmse": train_rmse, "valid_rmse": valid_rmse})
 
             if epoch % 10 == 0:
                 pt.save( tp_network.state_dict(), f"./models/{exp_name}_gnn.pth" )

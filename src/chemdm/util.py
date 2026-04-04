@@ -9,6 +9,26 @@ def getGradientNorm( model : pt.nn.Module ):
     return pt.norm(grads).item()
 
 @pt.no_grad()
+def perCoordinateRMSE( x : pt.Tensor,
+                       x_pred : pt.Tensor ) -> float:
+    """
+    Root-mean-square error per Cartesian coordinate between two position tensors.
+
+    Arguments
+    ---------
+    x : (N, 3) reference positions.
+    x_pred : (N, 3) predicted positions.
+
+    Returns
+    -------
+    rmse : float
+        sqrt( mean( (x - x_pred)^2 ) ), averaged over all N*3 entries.
+    """
+    assert x.shape == x_pred.shape, \
+        f"`x` and `x_pred` must have the same shape, got {x.shape} and {x_pred.shape}."
+    return pt.sqrt( pt.mean( (x - x_pred) ** 2 ) ).item()
+
+@pt.no_grad()
 def isInteger( x : pt.Tensor,
               float_tol : float = 1e-7 ) -> pt.Tensor:
     """

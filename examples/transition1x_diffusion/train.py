@@ -16,7 +16,7 @@ from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.TransitionPathDiffusionNetwork import TransitionPathDiffusionGNN
 from chemdm.DDPMSchedule import DDPMSchedule
-from chemdm.util import getGradientNorm
+from chemdm.util import getGradientNorm, perCoordinateRMSE
 
 from typing import List, Tuple
 
@@ -152,6 +152,26 @@ def main():
         x_0_pred = network( x_t, xA, xB, s, t_normalized )
         return loss_fcn( x_ref, x_0_pred.x )
 
+    @pt.no_grad()
+    def evaluate_rmse_t0( loader ) -> float:
+        """Evaluate per-coordinate RMSE at t=0 (clean input) over a full loader."""
+        network.eval()
+        rmse_sum = 0.0
+        n_batches = len(loader)
+        for xA, xB, s, x_ref in loader:
+            xA    = xA.to( device=device, dtype=dtype )
+            xB    = xB.to( device=device, dtype=dtype )
+            s     = s.to( device=device, dtype=dtype )
+            x_ref = x_ref.to( device=device, dtype=dtype )
+
+            t_int = pt.zeros( x_ref.shape[0], dtype=pt.long, device=device )
+            x_t, _ = diffusion_schedule.q_sample( x_ref, t_int )
+            t_normalized = pt.zeros( x_ref.shape[0], dtype=dtype, device=device )
+
+            x_0_pred = network( x_t, xA, xB, s, t_normalized )
+            rmse_sum += perCoordinateRMSE( x_ref, x_0_pred.x )
+        return rmse_sum / n_batches
+
     #  training loop
     train_counter, train_losses, train_grads = [], [], []
     def train( epoch : int ) -> Tuple[float, float]:
@@ -230,7 +250,10 @@ def main():
             print( f"Train Epoch {epoch} \tTotal Loss: {train_loss}\n", flush=True )
 
             valid_loss = validate( epoch )
-            print( f"Validation Epoch {epoch} \tTotal Loss: {valid_loss}\n", flush=True )
+            train_rmse = evaluate_rmse_t0( train_loader )
+            valid_rmse = evaluate_rmse_t0( valid_loader )
+            print( f"Validation Epoch {epoch} \tTotal Loss: {valid_loss} "
+                   f"\tTrain RMSE(t=0): {train_rmse:.6f} \tValid RMSE(t=0): {valid_rmse:.6f}\n", flush=True )
 
             if valid_loss < best_val_loss:
                 print( "Saving best model" )
@@ -244,6 +267,8 @@ def main():
                     "train_grad": train_grad,
                     "valid_loss": valid_loss,
                     "best_val_loss": best_val_loss,
+                    "train_rmse_t0": train_rmse,
+                    "valid_rmse_t0": valid_rmse,
                 })
 
             if epoch % 10 == 0:
