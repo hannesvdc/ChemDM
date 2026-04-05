@@ -12,7 +12,7 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 
 from chemdm.MoleculeGraph import BatchedMoleculeGraph, MoleculeGraph, batchMolecules
-from chemdm.Trajectory import Trajectory
+from chemdm.Trajectory import Trajectory, alignToReactant
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.TransitionPathDiffusionNetwork import TransitionPathDiffusionGNN
 from chemdm.DDPMSchedule import DDPMSchedule
@@ -33,6 +33,8 @@ def collate_molecules( batch : List[Trajectory]
     s_list = []
     x_list = []
     for trajectory in batch:
+        trajectory = alignToReactant( trajectory )
+
         xA = MoleculeGraph( trajectory.Z, trajectory.xA, trajectory.GA )
         xA_molecules.append( xA )
         xB = MoleculeGraph( trajectory.Z, trajectory.xB, trajectory.GB )
@@ -67,8 +69,8 @@ def main():
     # hyperparameteres
     lr = 1e-3
     n_epochs = 4000
-    weight_decay = 1e-3
-    B = 512
+    weight_decay = 1e-3 # less and we get some quick overfitting.
+    B = 256
 
     # Note: alanine dipeptide coordinates from OpenMM are in nm (not Angstrom).
     # The cutoff is therefore also in nm. The molecule is ~1 nm across.
@@ -79,11 +81,11 @@ def main():
     schedule = "cosine"
 
     # Network
-    embedding_state_size = 32
-    embedding_message_size = 32
+    embedding_state_size = 64
+    embedding_message_size = 64
     n_embedding_layers = 5
     n_tp_layers = 5
-    tp_message_size = 32
+    tp_message_size = 64
 
     # Datasets
     train_dataset = TrajectoryDataset( outdir=Path(data_directory) )
@@ -127,7 +129,7 @@ def main():
     # training helpers
     def sample_timesteps( molecule_id : pt.Tensor ) -> pt.Tensor:
         """Sample one diffusion timestep per molecule, expand to per-atom."""
-        n_molecules = molecule_id.max().item() + 1
+        n_molecules = int(molecule_id.max().item()) + 1
         t_per_mol = pt.randint( 0, T_diffusion, (n_molecules,), device=molecule_id.device )
         return t_per_mol[molecule_id]
 
@@ -168,6 +170,7 @@ def main():
 
         n_batches  = len(train_loader)
         epoch_loss = 0.0
+        epoch_grad = 0.0
         grad_norm  = 0.0
         for batch_idx, (xA, xB, s, x_ref) in enumerate( train_loader ):
             optimizer.zero_grad( set_to_none=True )
@@ -188,6 +191,7 @@ def main():
             # Gradient step
             loss.backward()
             grad_norm = getGradientNorm( network )
+            epoch_grad += grad_norm
             pt.nn.utils.clip_grad_norm_( network.parameters(), 1.0 )
             optimizer.step()
 
@@ -205,7 +209,7 @@ def main():
                 print( f"Train Epoch: {epoch} [{batch_idx+1}/{n_batches}] "
                        f"\tLoss: {loss.item():.6f} \tGrad: {grad_norm:.6f} "
                        f"\tLR: {optimizer.param_groups[-1]['lr']:.2E}", flush=True )
-        return epoch_loss / n_batches, grad_norm
+        return epoch_loss / n_batches, epoch_grad / n_batches
 
     valid_counter, valid_losses = [], []
 
@@ -239,7 +243,7 @@ def main():
     try:
         for epoch in range( n_epochs ):
             train_loss, train_grad = train( epoch )
-            print( f"Train Epoch {epoch} \tTotal Loss: {train_loss}\n", flush=True )
+            print( f"Train Epoch {epoch} \tTotal Loss: {train_loss} \tAvg Grad: {train_grad:.6f}\n", flush=True )
 
             valid_loss = validate( epoch )
             train_rmse = evaluate_rmse_t0( train_loader )

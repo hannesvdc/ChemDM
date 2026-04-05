@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 
 from chemdm.MoleculeGraph import BatchedMoleculeGraph, MoleculeGraph, batchMolecules
 from TrajectoryDataset import TrajectoryDataset
-from chemdm.Trajectory import Trajectory
+from chemdm.Trajectory import Trajectory, alignToReactant
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.TransitionPathNetwork import TransitionPathGNN
 from chemdm.util import getGradientNorm
@@ -26,6 +26,8 @@ def collate_molecules(batch : List[Trajectory]
     s_list = []
     x_list = []
     for trajectory in batch:
+        trajectory = alignToReactant( trajectory )
+
         xA = MoleculeGraph( trajectory.Z, trajectory.xA, trajectory.GA )
         xA_molecules.append( xA )
         xB = MoleculeGraph( trajectory.Z, trajectory.xB, trajectory.GB )

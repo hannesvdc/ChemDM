@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 import wandb
 
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, BatchedMoleculeGraph
-from chemdm.Trajectory import Trajectory, enforceCOM
+from chemdm.Trajectory import Trajectory, enforceCOM, alignToReactant
 from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.TransitionPathDiffusionNetwork import TransitionPathDiffusionGNN
@@ -35,6 +35,7 @@ def collate_molecules( batch : List[List[Trajectory]]
     x_list  = []
     for trajectory in trajectories:
         trajectory = enforceCOM( trajectory )
+        trajectory = alignToReactant( trajectory )
 
         xA = MoleculeGraph( trajectory.Z, trajectory.xA, trajectory.GA )
         xA_molecules.append( xA )

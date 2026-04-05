@@ -66,3 +66,33 @@ def kabsch_align_torch(P: pt.Tensor,
 
     R = U @ D @ Vh
     return Pc @ R
+
+
+def kabsch_rotation_torch(P: pt.Tensor,
+                          Q: pt.Tensor) -> pt.Tensor:
+    """
+    Compute the Kabsch rotation matrix that best aligns P onto Q.
+    Both are centered before computing R.
+
+    P, Q: (n_atoms, 3)
+
+    Returns
+    -------
+    R : (3, 3) rotation matrix. Apply as X_aligned = X_centered @ R.
+    """
+    Pc = P - P.mean(dim=0, keepdim=True)
+    Qc = Q - Q.mean(dim=0, keepdim=True)
+
+    C = Pc.T @ Qc
+    U, S, Vh = pt.linalg.svd(C)
+
+    det = pt.linalg.det(U @ Vh)
+    D = pt.diag(
+        pt.tensor(
+            [1.0, 1.0, 1.0 if det >= 0 else -1.0],
+            dtype=P.dtype,
+            device=P.device,
+        )
+    )
+
+    return U @ D @ Vh

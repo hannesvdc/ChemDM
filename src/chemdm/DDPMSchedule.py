@@ -118,3 +118,65 @@ class DDPMSchedule( nn.Module ):
         x_prev = mu + mask * pt.sqrt( var ) * noise
 
         return x_prev
+
+    @pt.no_grad()
+    def ddim_sample_step( self,
+                          x_0_pred : pt.Tensor,
+                          x_t : pt.Tensor,
+                          t : pt.Tensor,
+                          t_prev : pt.Tensor,
+                          eta : float = 0.0
+                        ) -> pt.Tensor:
+        """
+        Single DDIM reverse step: x_{t_prev} given x_t and predicted x_0.
+
+        Supports arbitrary step sizes (t and t_prev need not be consecutive)
+        and an interpolation parameter eta between deterministic (eta=0) and
+        stochastic DDPM (eta=1).
+
+        Arguments
+        ---------
+        x_0_pred : (N, 3) predicted clean positions.
+        x_t      : (N, 3) current noisy positions.
+        t        : (N,)   current integer timesteps.
+        t_prev   : (N,)   target integer timesteps (t_prev < t).
+                   Use -1 to indicate the final step (alpha_bar_prev = 1).
+        eta      : float  interpolation between deterministic (0) and DDPM (1).
+
+        Returns
+        -------
+        x_prev : (N, 3) sample at timestep t_prev.
+        """
+        alpha_bar_t = self.alpha_bar[t][:, None]
+
+        # For t_prev = -1, use alpha_bar_prev = 1.0 (clean)
+        is_final = (t_prev < 0)
+        t_prev_clamped = pt.clamp( t_prev, min=0 )
+        alpha_bar_prev_t = pt.where(
+            is_final[:, None],
+            pt.ones( 1, device=x_t.device, dtype=x_t.dtype ),
+            self.alpha_bar[t_prev_clamped][:, None]
+        )
+
+        # Predicted noise from x_0_pred
+        eps_pred = (x_t - pt.sqrt(alpha_bar_t) * x_0_pred) / pt.sqrt(1.0 - alpha_bar_t)
+
+        # DDIM variance
+        sigma = eta * pt.sqrt(
+            (1.0 - alpha_bar_prev_t) / (1.0 - alpha_bar_t) *
+            (1.0 - alpha_bar_t / alpha_bar_prev_t)
+        )
+
+        # Direction pointing to x_t
+        dir_xt = pt.sqrt( 1.0 - alpha_bar_prev_t - sigma**2 ) * eps_pred
+
+        # DDIM update
+        x_prev = pt.sqrt( alpha_bar_prev_t ) * x_0_pred + dir_xt
+
+        # Add noise (only when eta > 0 and not the final step)
+        if eta > 0:
+            noise = pt.randn_like( x_t )
+            mask = (~is_final).float()[:, None]
+            x_prev = x_prev + mask * sigma * noise
+
+        return x_prev

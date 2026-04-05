@@ -2,6 +2,7 @@ import os
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 import json
+import math
 import numpy as np
 import torch as pt
 import matplotlib.pyplot as plt
@@ -28,11 +29,13 @@ def sample_transition_path(
     s_grid : pt.Tensor,
     device : pt.device,
     dtype : pt.dtype,
+    n_steps : int = 50,
+    eta : float = 0.0,
 ) -> pt.Tensor:
     """
-    Sample a full transition path by running reverse diffusion for each s in s_grid.
+    Sample a full transition path using DDIM reverse diffusion.
 
-    All s values are batched together for efficiency: at each reverse step t,
+    All s values are batched together for efficiency: at each reverse step,
     the network processes all s values in one forward pass.
 
     Arguments
@@ -42,6 +45,8 @@ def sample_transition_path(
     xA_graph, xB_graph : molecules (one copy per s value).
     s_grid : (n_s,) grid of arclength values.
     device, dtype : torch device and dtype.
+    n_steps : number of DDIM reverse steps (subsampled from T).
+    eta : DDIM stochasticity. 0 = deterministic, 1 = DDPM-like.
 
     Returns
     -------
@@ -54,19 +59,33 @@ def sample_transition_path(
     # Expand s to per-atom: each molecule in the batch gets one s value
     s = pt.repeat_interleave( s_grid, n_atoms_per_mol ).to( device=device, dtype=dtype )
 
+    # Build a subsequence of timesteps evenly spaced over {0, ..., T-1}
+    timesteps = pt.linspace( T - 1, 0, n_steps + 1, dtype=pt.long )
+    timesteps = pt.unique( timesteps, sorted=True )
+    timesteps = pt.flip( timesteps, [0] )  # descending: T-1, ..., 0
+
     # Start from pure noise
     x_t = pt.randn( N_total, 3, device=device, dtype=dtype )
 
-    # Reverse diffusion loop
-    for t_val in reversed( range(T) ):
-        t_int = pt.full( (N_total,), t_val, dtype=pt.long, device=device )
+    # DDIM reverse loop
+    for i in range( len(timesteps) - 1 ):
+        t_val      = timesteps[i].item()
+        t_prev_val = timesteps[i + 1].item()
+
+        t_int      = pt.full( (N_total,), t_val,      dtype=pt.long, device=device )
+        t_prev_int = pt.full( (N_total,), t_prev_val,  dtype=pt.long, device=device )
         t_normalized = t_int.float() / (T - 1)
 
         x_0_pred = network( x_t, xA_graph, xB_graph, s, t_normalized )
-        x_t = schedule.p_sample_step( x_0_pred.x, x_t, t_int )
+        x_t = schedule.ddim_sample_step( x_0_pred.x, x_t, t_int, t_prev_int, eta=eta )
+
+    # Final step: predict x_0 directly at the last timestep
+    t_int = pt.full( (N_total,), timesteps[-1].item(), dtype=pt.long, device=device )
+    t_normalized = t_int.float() / (T - 1)
+    x_0_pred = network( x_t, xA_graph, xB_graph, s, t_normalized )
 
     # Reshape to (n_s, n_atoms, 3)
-    x_path = x_t.reshape( len(s_grid), n_atoms_per_mol, 3 )
+    x_path = x_0_pred.x.reshape( len(s_grid), n_atoms_per_mol, 3 )
     return x_path
 
 
@@ -90,6 +109,18 @@ def build_batched_endpoints(
     return xA, xB
 
 
+def unwrap_angle_path( theta : pt.Tensor ) -> pt.Tensor:
+    """Unwrap an angle path to remove jumps at the ±pi boundary."""
+    out = pt.clone( theta )
+    for i in range( 1, len(out) ):
+        d = out[i] - out[i - 1]
+        if d > math.pi:
+            out[i:] -= 2 * math.pi
+        elif d < -math.pi:
+            out[i:] += 2 * math.pi
+    return out
+
+
 def plot_path_in_phi_psi(
     sampled_paths : List[pt.Tensor],
     ground_truth : pt.Tensor,
@@ -101,29 +132,29 @@ def plot_path_in_phi_psi(
     sampled_paths : list of (n_s, n_atoms, 3) tensors, one per sample.
     ground_truth : (n_images, n_atoms, 3) the reference NEB path.
     """
-    plt.figure( figsize=(7, 6) )
+    fig, ax = plt.subplots( figsize=(7, 6) )
 
     # Ground truth
     gt_phi, gt_psi = compute_phi_psi_from_xyz( ground_truth )
-    plt.plot( gt_phi.numpy() * 180 / np.pi,
-              gt_psi.numpy() * 180 / np.pi,
-              "k-o", ms=4, lw=2, label="Ground truth (NEB)", zorder=10 )
+    gt_phi = unwrap_angle_path( gt_phi )
+    gt_psi = unwrap_angle_path( gt_psi )
+    ax.plot( np.degrees(gt_phi.numpy()), np.degrees(gt_psi.numpy()),
+             "k-o", ms=4, lw=2, label="Ground truth (NEB)", zorder=10 )
 
     # Sampled paths
     for i, path in enumerate( sampled_paths ):
         phi, psi = compute_phi_psi_from_xyz( path )
+        phi = unwrap_angle_path( phi )
+        psi = unwrap_angle_path( psi )
         label = "Sampled paths" if i == 0 else None
-        plt.plot( phi.numpy() * 180 / np.pi,
-                  psi.numpy() * 180 / np.pi,
-                  "-o", ms=3, alpha=0.5, label=label )
+        ax.plot( np.degrees(phi.numpy()), np.degrees(psi.numpy()),
+                 "-o", ms=3, alpha=0.5, label=label )
 
-    plt.xlim( -180, 180 )
-    plt.ylim( -180, 180 )
-    plt.xlabel( r"$\phi$ [deg]" )
-    plt.ylabel( r"$\psi$ [deg]" )
-    plt.legend()
-    plt.title( title )
-    plt.tight_layout()
+    ax.set_xlabel( r"$\phi$ [deg]" )
+    ax.set_ylabel( r"$\psi$ [deg]" )
+    ax.legend()
+    ax.set_title( title )
+    fig.tight_layout()
 
 
 def main():

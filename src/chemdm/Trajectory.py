@@ -1,5 +1,6 @@
 import torch as pt
 
+from chemdm.geometry import kabsch_rotation_torch
 from dataclasses import dataclass
 
 @dataclass
@@ -30,4 +31,32 @@ def enforceCOM( trajectory : Trajectory ) -> Trajectory:
         GB=trajectory.GB,
         s=trajectory.s,
         x=x_centered,
+    )
+
+@pt.no_grad()
+def alignToReactant( trajectory : Trajectory ) -> Trajectory:
+    """
+    Kabsch-align xB and each path image individually onto xA (rotation only).
+    Each image gets its own optimal rotation since intermediate geometries
+    differ from both xA and xB.
+    Assumes zero center of mass (call enforceCOM first).
+    Returns a copy of the trajectory.
+    """
+    R_B = kabsch_rotation_torch( trajectory.xB, trajectory.xA )
+    xB_aligned = trajectory.xB @ R_B
+
+    n_images = trajectory.x.shape[0]
+    x_aligned = pt.empty_like( trajectory.x )
+    for k in range( n_images ):
+        R_k = kabsch_rotation_torch( trajectory.x[k], trajectory.xA )
+        x_aligned[k] = trajectory.x[k] @ R_k
+
+    return Trajectory(
+        Z=trajectory.Z,
+        xA=trajectory.xA,
+        xB=xB_aligned,
+        GA=trajectory.GA,
+        GB=trajectory.GB,
+        s=trajectory.s,
+        x=x_aligned,
     )
