@@ -209,9 +209,14 @@ class TransitionPathDiffusionGNN( nn.Module ):
 
             x = x + neighbor_update \
                   + beta  * (1.0 - s[:, None]) * (xA.x - x) \
-                  + gamma * s[:, None]         * (xB.x - x)
+                  + gamma * s[:, None] * (xB.x - x)
+
+        # Enforce Dirichlet boundary conditions: x(0) = xA, x(1) = xB
+        base = (1.0 - s[:, None]) * xA.x + s[:, None] * xB.x
+        correction = x - base
+        x_final = base + s[:, None] * (1.0 - s[:, None]) * correction
 
         # Wrap in a Molecule and enforce zero center of mass
-        x_molecule = xA.copyWithNewPositions( x )
+        x_molecule = xA.copyWithNewPositions( x_final )
         x_molecule = recenterMolecule( x_molecule )
         return x_molecule
