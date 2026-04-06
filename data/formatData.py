@@ -9,15 +9,26 @@ from rdkit.Chem import rdDetermineBonds
 
 from chemdm.Trajectory import Trajectory
 
+import matplotlib.pyplot as plt
+
 from typing import List, Set
 
 def local_minima_indices( d : np.ndarray,
-                          drop : float = 0.4
+                          drop_fraction : float = 0.85,
                         ):
-    indices = np.where( (d[1:-1] < d[:-2]) & (d[1:-1] <= d[2:]))[0] + 1
-    to_keep = (d[indices] < drop * d[indices-1])
-    indices = indices[to_keep]
-    return indices
+    """
+    Find local minima that represent a significant drop from the preceding peak.
+    """
+    candidates = np.where( (d[1:-1] < d[:-2]) & (d[1:-1] <= d[2:]) )[0] + 1
+
+    accepted = []
+    prev_min_idx = 0
+    for idx in candidates:
+        peak = np.max( d[prev_min_idx:idx] ) if idx > prev_min_idx else d[idx]
+        if d[idx] < drop_fraction * peak:
+            accepted.append( idx )
+            prev_min_idx = idx
+    return np.array( accepted, dtype=int )
 
 def normalized_arclength(tp: np.ndarray) -> np.ndarray:
     """
@@ -32,7 +43,7 @@ def normalized_arclength(tp: np.ndarray) -> np.ndarray:
     assert tp.ndim == 3, f"Expected shape (n_points, n_atoms, 3), got {tp.shape}"
 
     # differences between consecutive path images
-    dX = tp[1:] - tp[:-1]                        # (n_points-1, n_atoms, 3)
+    dX = tp[1:,:,:] - tp[:-1,:,:]  # (n_points-1, n_atoms, 3)
 
     # Euclidean distance in full configuration space R^{3N}
     ds = np.linalg.norm(dX.reshape(dX.shape[0], -1), axis=1)   # (n_points-1,)
@@ -117,6 +128,7 @@ def prune_bonds_by_valence(bonds, x, z):
     return bonds
 
 # Download the data from huggingface
+plot_trajectories = False
 data_directory = "/Users/hannesvdc/transition1x/"
 store_directory = data_directory + "processed/"
 with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
@@ -124,13 +136,19 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
         data = f[evaltype]
         molecules = list(data.keys())
 
+        # Count total reactions for progress display
+        total_reactions = sum( len(data[mol].keys()) for mol in molecules )
+
         storage_counter = 0
+        reaction_counter = -1
         for molecule in molecules:
             print('molecule', molecule)
             molecule_data = data[molecule]
             reactions = molecule_data.keys()
 
             for reaction in reactions:
+                reaction_counter += 1
+
                 reaction_data = molecule_data[reaction]
                 Z = reaction_data['atomic_numbers'][:]
                 positions = reaction_data['positions']
@@ -139,6 +157,8 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                 ts = reaction_data['transition_state']
                 
                 positions_data = np.array(positions[:])
+                energies = np.array(reaction_data['wB97x_6-31G(d).energy'][:])
+                forces = np.array(reaction_data['wB97x_6-31G(d).forces'][:])
                 
                 # Do some essential checks
                 assert (reactant['atomic_numbers'][:] == product['atomic_numbers'][:]).all()
@@ -162,7 +182,56 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                 distance_from_product = np.linalg.norm( (positions_data - xB[np.newaxis,:,:]).reshape(positions_data.shape[0], -1), axis=1)
                 indices = local_minima_indices( distance_from_reactant )
                 indices = np.insert( indices, 0, [1] )
-                
+                indices = indices[-10:] # only keep the last 10 trajectories
+                contains_long_path = (max(indices[1:] - indices[0:-1]) > 15) or ((len(distance_from_reactant) - indices[-1]) > 15)
+                non_overlapping = (np.max(distance_from_product[np.min(indices):]) < np.min(distance_from_reactant[np.min(indices)]))
+
+                # Flag reactions where any split point is far from xA
+                max_split_distance = np.max( distance_from_reactant[indices] )
+                split_distance_threshold = 1.0
+                # print(storage_counter, contains_long_path, non_overlapping, np.max(distance_from_product[np.min(indices):]), np.min(distance_from_reactant[np.min(indices):]))
+                is_flagged = contains_long_path or non_overlapping #or (max_split_distance > split_distance_threshold)
+
+                if plot_trajectories and is_flagged:
+                    fig, axes = plt.subplots( 3, 1, figsize=(10, 10), sharex=True )
+
+                    # Panel 1: distance from xA and xB
+                    ax = axes[0]
+                    ax.plot( distance_from_reactant, color="tab:blue", lw=0.8, label=r"$\|x - x_A\|$" )
+                    ax.plot( distance_from_product, color="tab:orange", lw=0.8, alpha=0.5, label=r"$\|x - x_B\|$" )
+                    for idx_val in indices:
+                        ax.axvline( idx_val, color="red", ls="--", lw=0.6, alpha=0.7 )
+                    ax.scatter( indices, distance_from_reactant[indices], color="red", s=30, zorder=5, label="Split points" )
+                    ax.set_ylabel( "Distance (flattened Euclidean)" )
+                    ax.set_title( f"[{storage_counter}/{total_reactions}] {evaltype} / {molecule} / {reaction}  "
+                                  f"({len(indices)} traj, max split dist: {max_split_distance:.2f})" )
+                    ax.legend()
+
+                    # Panel 2: energy per frame
+                    ax = axes[1]
+                    E_A = reactant['wB97x_6-31G(d).energy'][:][0]
+                    ax.plot( (energies - E_A) * 27.211, color="tab:green", lw=0.8 )
+                    for idx_val in indices:
+                        ax.axvline( idx_val, color="red", ls="--", lw=0.6, alpha=0.7 )
+                    ax.set_ylabel( "Energy relative to reactant [eV]" )
+
+                    # Panel 3: max force norm per frame
+                    ax = axes[2]
+                    max_force_norm = np.max( np.linalg.norm(forces, axis=2), axis=1 )
+                    ax.plot( max_force_norm, color="tab:purple", lw=0.8 )
+                    for idx_val in indices:
+                        ax.axvline( idx_val, color="red", ls="--", lw=0.6, alpha=0.7 )
+                    ax.set_ylabel( "Max atomic force norm [Ha/Å]" )
+                    ax.set_xlabel( "Frame index" )
+
+                    plt.tight_layout()
+                    plt.show()
+
+                #
+                if is_flagged:
+                    print('Not storing Flagged reaction', reaction_counter)
+                    continue
+
                 reaction_trajectories = []
                 for t_idx in range( len(indices) ):
                     start_idx = indices[t_idx]
@@ -191,7 +260,7 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                     reaction_trajectories.append( trajectory )
 
                 # Save the trajectories for this reaction.
-                with open( os.path.join(store_directory, f"{evaltype}_reaction_{storage_counter}.pkl"), "wb") as sf:
-                    pickle.dump( reaction_trajectories, sf )
+                with open( os.path.join(store_directory, f"{evaltype}_reaction_{reaction_counter}.pkl"), "wb") as sf:
+                   pickle.dump( reaction_trajectories, sf )
                 storage_counter += 1
-        print( f"Number of {evaltype} reactions store: {storage_counter}" )
+        print( f"Number of {evaltype} reactions store: {storage_counter} / {reaction_counter}" )
