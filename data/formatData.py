@@ -227,7 +227,6 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                     plt.tight_layout()
                     plt.show()
 
-                #
                 if is_flagged:
                     print('Not storing Flagged reaction', reaction_counter)
                     continue

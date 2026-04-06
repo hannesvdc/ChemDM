@@ -28,8 +28,8 @@ class TransitionPathDataset( Dataset ):
         file_names.sort(
             key=lambda fn: int(fn[len(prefix):-len(suffix)])
         )
-        self.n_files = len(file_names)
         self.file_names = file_names
+        self.n_files = len( self.file_names )
 
         print(f"...Done ({self.n_files} files)")
 
@@ -41,7 +41,9 @@ class TransitionPathDataset( Dataset ):
         """
         Just return every piece of information at the current state of the reaction.
         """
-        file_name = os.path.join( self.data_directory, f"{self.name}_reaction_{idx}.pkl")
+        data_filename = self.file_names[idx]
+        file_name = os.path.join( self.data_directory, data_filename )
+        # file_name = os.path.join( self.data_directory, f"{self.name}_reaction_{idx}.pkl")
         with open( file_name, "rb" ) as file:
             tp_list = pickle.load( file )
         return tp_list
