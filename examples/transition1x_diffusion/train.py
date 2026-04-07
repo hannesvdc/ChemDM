@@ -63,7 +63,7 @@ def main():
 
     lr = 1e-4
     n_epochs = 5000
-    weight_decay = 1e-3
+    weight_decay = 1e-2
     B = 8
     d_cutoff = 12.0       # Angstrom
 
@@ -72,11 +72,12 @@ def main():
     schedule  = "cosine"
 
     # Network
-    embedding_state_size  = 64
-    embedding_message_size = 64
+    embedding_state_size = 128
+    embedding_message_size = 128
     n_embedding_layers = 10
     n_tp_layers = 10
-    tp_message_size = 64
+    tp_message_size = 128
+    dropout = 0.1
 
     if setup_wandb:
         wandb.init(
@@ -108,17 +109,10 @@ def main():
 
     # networks
     diffusion_schedule = DDPMSchedule( T=T_diffusion, schedule=schedule )
-    xA_embedding = MolecularEmbeddingGNN(
-        embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff
-    )
-    xB_embedding = MolecularEmbeddingGNN(
-        embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff
-    )
-    network = TransitionPathDiffusionGNN(
-        xA_embedding, xB_embedding, tp_message_size, n_tp_layers, d_cutoff
-    )
-    print( "Number of trainable parameters:",
-           sum( p.numel() for p in network.parameters() if p.requires_grad ) )
+    xA_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff  )
+    xB_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
+    network = TransitionPathDiffusionGNN( xA_embedding, xB_embedding, tp_message_size, n_tp_layers, d_cutoff, dropout=dropout )
+    print( "Number of trainable parameters:", sum( p.numel() for p in network.parameters() if p.requires_grad ) )
 
     # optimizer
     optimizer = AdamW( network.parameters(), lr=lr, weight_decay=weight_decay, amsgrad=True )

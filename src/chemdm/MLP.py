@@ -10,7 +10,8 @@ class MultiLayerPerceptron( nn.Module ):
     def __init__(self, neurons_per_layer : List[int],
                        act : Callable[[], nn.Module],
                        name : str = "",
-                       init_zero=False):
+                       init_zero=False,
+                       dropout : float = 0.0):
         super().__init__()
 
         assert len(neurons_per_layer) >= 2, "`neurons_per_layer` must contain at least two elements."
@@ -26,6 +27,8 @@ class MultiLayerPerceptron( nn.Module ):
             layers.append( ( f"{name}linear_{n}", nn.Linear(n_in, n_out, bias=True) ) )
             if n < len(self.neurons_per_layer)-1:
                 layers.append( ( f"{name}act_{n}", act() ) )
+                if dropout > 0.0:
+                    layers.append( ( f"{name}dropout_{n}", nn.Dropout(dropout) ) )
         self.layers = nn.Sequential( OrderedDict(layers) )
 
         if init_zero:

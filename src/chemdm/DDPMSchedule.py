@@ -99,8 +99,8 @@ class DDPMSchedule( nn.Module ):
         -------
         x_prev : (N, 3) sample at timestep t-1.
         """
-        beta_t          = self.beta[t][:, None]
-        alpha_bar_t     = self.alpha_bar[t][:, None]
+        beta_t = self.beta[t][:, None]
+        alpha_bar_t = self.alpha_bar[t][:, None]
         alpha_bar_prev_t = self.alpha_bar_prev[t][:, None]
 
         # Posterior mean

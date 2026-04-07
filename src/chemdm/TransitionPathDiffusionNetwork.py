@@ -32,6 +32,7 @@ class TransitionPathDiffusionGNN( nn.Module ):
                   d_cutoff : float,
                   n_s_freq : int = 8,
                   n_t_freq : int = 8,
+                  dropout : float = 0.0,
                 ) -> None:
         super().__init__()
 
@@ -75,7 +76,7 @@ class TransitionPathDiffusionGNN( nn.Module ):
         message_networks = []
         for l in range( self.n_layers ):
             message_networks.append(
-                MultiLayerPerceptron( message_neurons, nn.GELU, f"message_layer_{l}" )
+                MultiLayerPerceptron( message_neurons, nn.GELU, f"message_layer_{l}", dropout=dropout )
             )
         self.message_networks = nn.ModuleList( message_networks )
 
@@ -85,27 +86,20 @@ class TransitionPathDiffusionGNN( nn.Module ):
         state_networks = []
         for l in range( self.n_layers ):
             state_networks.append(
-                MultiLayerPerceptron( state_neurons, nn.GELU, f"state_layer_{l}", init_zero=True )
+                MultiLayerPerceptron( state_neurons, nn.GELU, f"state_layer_{l}", init_zero=True, dropout=dropout )
             )
         self.state_networks = nn.ModuleList( state_networks )
 
         # --- Equivariant position-update networks ---
-        alpha_neurons = [ 2 * self.state_size + self.n_edge_features,
-                          hidden_neurons, hidden_neurons, 1 ]
+        alpha_neurons = [ 2 * self.state_size + self.n_edge_features, hidden_neurons, hidden_neurons, 1 ]
         beta_neurons  = [ self.state_size, hidden_neurons, hidden_neurons, 1 ]
         gamma_neurons = [ self.state_size, hidden_neurons, hidden_neurons, 1 ]
 
         alpha_networks, beta_networks, gamma_networks = [], [], []
         for l in range( self.n_layers ):
-            alpha_networks.append(
-                MultiLayerPerceptron( alpha_neurons, nn.GELU, f"alpha_layer_{l}", init_zero=True )
-            )
-            beta_networks.append(
-                MultiLayerPerceptron( beta_neurons, nn.GELU, f"beta_layer_{l}", init_zero=True )
-            )
-            gamma_networks.append(
-                MultiLayerPerceptron( gamma_neurons, nn.GELU, f"gamma_layer_{l}", init_zero=True )
-            )
+            alpha_networks.append( MultiLayerPerceptron( alpha_neurons, nn.GELU, f"alpha_layer_{l}", init_zero=True, dropout=dropout ) )
+            beta_networks.append( MultiLayerPerceptron( beta_neurons, nn.GELU, f"beta_layer_{l}", init_zero=True, dropout=dropout ) )
+            gamma_networks.append( MultiLayerPerceptron( gamma_neurons, nn.GELU, f"gamma_layer_{l}", init_zero=True, dropout=dropout ) )
         self.alpha_networks = nn.ModuleList( alpha_networks )
         self.beta_networks  = nn.ModuleList( beta_networks )
         self.gamma_networks = nn.ModuleList( gamma_networks )
