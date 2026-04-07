@@ -7,7 +7,7 @@ import pickle
 from rdkit import Chem
 from rdkit.Chem import rdDetermineBonds
 
-from chemdm.Trajectory import Trajectory
+from chemdm.Trajectory import Trajectory, enforceCOM
 
 import matplotlib.pyplot as plt
 
@@ -256,6 +256,7 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                                              toBondStructure( pruned_bonds_B ),
                                              pt.tensor(s),
                                              pt.tensor(tp) )
+                    trajectory = enforceCOM( trajectory )
                     reaction_trajectories.append( trajectory )
 
                 # Save the trajectories for this reaction.
