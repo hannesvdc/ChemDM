@@ -11,7 +11,6 @@ os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 import json
 import random
-import itertools
 import numpy as np
 import torch as pt
 import matplotlib.pyplot as plt
