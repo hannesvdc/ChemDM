@@ -29,8 +29,8 @@ def sample_transition_path(
     s_grid : pt.Tensor,
     device : pt.device,
     dtype : pt.dtype,
-    n_steps : int = 50,
-    eta : float = 0.0,
+    n_steps : int = 2,
+    eta : float = 0.00,
 ) -> pt.Tensor:
     """
     Sample a full transition path using DDIM reverse diffusion.
@@ -170,12 +170,12 @@ def main():
     T_diffusion = 1000
     schedule = DDPMSchedule( T=T_diffusion, schedule="cosine" )
 
-    embedding_state_size = 32
-    embedding_message_size = 32
+    embedding_state_size = 64
+    embedding_message_size = 64
     n_embedding_layers = 5
     n_tp_layers = 5
-    tp_message_size = 32
-    d_cutoff = 1.0
+    tp_message_size = 64
+    d_cutoff = 1.0 # nm
     xA_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
     xB_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
     network = TransitionPathDiffusionGNN( xA_embedding, xB_embedding, tp_message_size, n_tp_layers, d_cutoff )

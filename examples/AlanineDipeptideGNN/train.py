@@ -3,7 +3,7 @@ os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 import random
 import torch as pt
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
 import matplotlib.pyplot as plt
 
 from torch.utils.data import DataLoader
@@ -13,7 +13,7 @@ from TrajectoryDataset import TrajectoryDataset
 from chemdm.Trajectory import Trajectory, alignToReactant
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.TransitionPathNetwork import TransitionPathGNN
-from chemdm.util import getGradientNorm
+from chemdm.util import getGradientNorm, perCoordinateRMSE
 
 from typing import List, Tuple
 
@@ -84,13 +84,13 @@ def main():
     d_cutoff = 1.0 # nm
 
     # Construct the neural network architecture
-    embedding_state_size = 32
-    embedding_message_size = 32
+    embedding_state_size = 64
+    embedding_message_size = 64
     n_embedding_layers = 5
     xA_embedding = MolecularEmbeddingGNN(embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
     xB_embedding = MolecularEmbeddingGNN(embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
     n_tp_layers = 5
-    tp_message_size = 32
+    tp_message_size = 64
     tp_network = TransitionPathGNN( xA_embedding, xB_embedding, tp_message_size, n_tp_layers, d_cutoff )
     print( 'Number of Trainable Parameters: ', sum( [p.numel() for p in tp_network.parameters() if p.requires_grad]) )
 
@@ -101,7 +101,8 @@ def main():
 
     # Build the optimizer
     lr = 1e-3
-    optimizer = Adam( tp_network.parameters(), lr, amsgrad=True )
+    weight_decay = 1e-3
+    optimizer = AdamW( tp_network.parameters(), lr, weight_decay=weight_decay, amsgrad=True )
     step_size = 1000
     scheduler = pt.optim.lr_scheduler.StepLR( optimizer, step_size=step_size, gamma=0.1)
 
@@ -117,8 +118,26 @@ def main():
                         s : pt.Tensor,
                         x_ref : pt.Tensor ) -> pt.Tensor:
         xs = tp_network( xA, xB, s )
-        loss = loss_fcn( x_ref, xs )
+        loss = loss_fcn( x_ref, xs.x )
         return loss
+
+    @pt.no_grad()
+    def evaluate_rmse( loader, max_batches : int = 20 ) -> float:
+        """Evaluate per-coordinate RMSE over a limited number of batches."""
+        tp_network.eval()
+        rmse_sum = 0.0
+        n_batches = min( max_batches, len(loader) )
+        for batch_idx, (xA, xB, s, x_ref) in enumerate( loader ):
+            if batch_idx >= max_batches:
+                break
+            xA    = xA.to( device=device, dtype=dtype )
+            xB    = xB.to( device=device, dtype=dtype )
+            s     = s.to( device=device, dtype=dtype )
+            x_ref = x_ref.to( device=device, dtype=dtype )
+
+            xs = tp_network( xA, xB, s )
+            rmse_sum += perCoordinateRMSE( x_ref, xs.x )
+        return rmse_sum / n_batches
 
     train_counter = []
     train_losses = []
@@ -194,7 +213,10 @@ def main():
             train_loss = train( epoch )
             print( "Train Epoch {} \tTotal Loss: {}\n".format(epoch, train_loss) )
             valid_loss = validate( epoch )
-            print( "Validation Epoch {} \tTotal Loss: {}\n".format(epoch, valid_loss) )
+            train_rmse = evaluate_rmse( train_loader )
+            valid_rmse = evaluate_rmse( valid_loader )
+            print( "Validation Epoch {} \tTotal Loss: {} \tTrain RMSE: {:.6f} \tValid RMSE: {:.6f}\n"
+                   .format(epoch, valid_loss, train_rmse, valid_rmse) )
             if valid_loss < best_val_loss:
                 print('Saving best model')
                 best_val_loss = valid_loss

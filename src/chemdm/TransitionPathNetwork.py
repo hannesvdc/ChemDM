@@ -107,8 +107,7 @@ class TransitionPathGNN( nn.Module ):
         if s_embed.ndim == 1:
             s_embed = s_embed[None,:]
         h = pt.cat( (atom_embedding, hA, hB, s_embed), dim=1)
-        base = (1.0 - s[:,None]) * xA.x + s[:,None] * xB.x
-        x = base.clone()
+        x = (1.0 - s[:, None]) * xA.x + s[:, None] * xB.x
 
         # Iterate over the layers and update the states
         for l in range( self.n_layers ):
@@ -159,7 +158,12 @@ class TransitionPathGNN( nn.Module ):
             x = x + neighbor_update + beta  * (1.0 - s[:, None]) * (xA.x - x) \
                                     + gamma * s[:, None]         * (xB.x - x) # (N, 3)
 
+        # Learn a correction over the linear path with Dirichlet BCs
+        base = (1.0 - s[:, None]) * xA.x + s[:, None] * xB.x
+        correction = x - base
+        x_final = base + s[:, None] * (1.0 - s[:, None]) * correction
+
         # Ensure a zero center of mass
-        x_molecule = xA.copyWithNewPositions( x )
+        x_molecule = xA.copyWithNewPositions( x_final )
         x_molecule = recenterMolecule( x_molecule )
         return x_molecule

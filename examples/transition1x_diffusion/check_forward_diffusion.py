@@ -6,8 +6,6 @@ Because molecules have varying numbers of atoms, the check is done:
   1. Globally (all Cartesian components pooled).
   2. Stratified by molecule size (number of atoms).
 """
-import os
-os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 import json
 import random
@@ -19,7 +17,7 @@ from collections import defaultdict
 
 from chemdm.DDPMSchedule import DDPMSchedule
 from chemdm.TransitionPathDataset import TransitionPathDataset
-from chemdm.Trajectory import Trajectory, enforceCOM, alignToReactant
+from chemdm.Trajectory import enforceCOM, alignToReactant
 
 
 def load_positions( dataset : TransitionPathDataset,
