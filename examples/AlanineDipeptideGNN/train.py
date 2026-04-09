@@ -101,7 +101,7 @@ def main():
 
     # Build the optimizer
     lr = 1e-3
-    weight_decay = 1e-3
+    weight_decay = 1e-2
     optimizer = AdamW( tp_network.parameters(), lr, weight_decay=weight_decay, amsgrad=True )
     step_size = 1000
     scheduler = pt.optim.lr_scheduler.StepLR( optimizer, step_size=step_size, gamma=0.1)
