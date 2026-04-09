@@ -51,7 +51,10 @@ class FiLMTransitionPathGNN( nn.Module ):
         self.xB_embedding_network = xB_embedding_network
 
         # Node state: atomic info + arclength (no hA, hB)
-        self.state_size = self.atomic_information_outputs + self.arclength_embedding.getNumberOfFeatures()
+        self.state_size = self.xA_embedding_network.state_size \
+                        + self.xB_embedding_network.state_size \
+                        + self.atomic_information_outputs \
+                        + self.arclength_embedding.getNumberOfFeatures()
 
         # FiLM conditioning input: hA + hB + s_embed
         film_input_size = ( self.xA_embedding_network.state_size
@@ -121,7 +124,7 @@ class FiLMTransitionPathGNN( nn.Module ):
             s_embed = s_embed[None, :]
 
         # Node state: atomic info + arclength only
-        h = pt.cat( (atom_embedding, s_embed), dim=1 )
+        h = pt.cat( (atom_embedding, hA, hB, s_embed), dim=1 )
 
         # FiLM conditioning input (constant across layers)
         film_input = pt.cat( (hA, hB, s_embed), dim=1 )

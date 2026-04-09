@@ -59,7 +59,7 @@ def generateTrainValidMask( n : int, train_fraction : float ) -> pt.Tensor:
 
 
 def main():
-    B = 128
+    B = 4
     train_dataset = TrajectoryDataset()
     valid_dataset = TrajectoryDataset()
     train_mask = generateTrainValidMask( len(train_dataset), 0.9 )

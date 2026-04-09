@@ -146,7 +146,7 @@ def main():
     s_grid = pt.linspace( 0.0, 1.0, n_s )
     n_test_trajectories = 5
 
-    test_indices = np.linspace( 0, len(dataset) - 1, n_test_trajectories, dtype=int )
+    test_indices = [101, 201, 401, 801, 1601]
 
     for idx in test_indices:
         trajectory = dataset[idx]
