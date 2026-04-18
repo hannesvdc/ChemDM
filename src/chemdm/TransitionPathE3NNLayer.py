@@ -56,7 +56,6 @@ class TransitionPathE3NNLayer(nn.Module):
         # Tensor product for edge messages:
         #   message_ij = TP( f_j, Y(r_ij); weights(edge_scalar) )
         self.tp = o3.FullyConnectedTensorProduct( self.irreps_node, self.irreps_sh, self.irreps_node, shared_weights=False)
-        print('Number of TPFullyConnected weights: ', self.tp.weight_numel)
 
         # Radial MLP produces tensor-product weights from scalar edge features
         self.radial_network = MultiLayerPerceptron(
@@ -68,7 +67,7 @@ class TransitionPathE3NNLayer(nn.Module):
         self.self_interaction = o3.Linear(self.irreps_node, self.irreps_node)
         with pt.no_grad():
             for p in self.self_interaction.parameters():
-                p.mul_( 0.2 )
+                p.mul_( 0.0 )
 
         # Read out scalar-even channels for coordinate gates
         self.irreps_0e = o3.Irreps([ 
@@ -88,7 +87,7 @@ class TransitionPathE3NNLayer(nn.Module):
         # The input is scalar-only, so this remains equivariant.
         self.edge_coordinate_network = MultiLayerPerceptron(
             [self.n_edge_scalar + 2 * self.irreps_0e.dim, 64, 64, 1],
-            nn.GELU, "e3nn_edge_coordinate_network", )
+            nn.GELU, "e3nn_edge_coordinate_network" )
 
     def forward( self, xA: Molecule, xB: Molecule, s: pt.Tensor,  state: E3State ) -> E3State:
         # Unpack the equivariant state.

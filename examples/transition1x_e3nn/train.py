@@ -96,7 +96,7 @@ def main( exp_name : str ):
     print( "Number of Trainable Parameters: ", n_params )
 
     # Build the optimizer
-    lr = 1e-3
+    lr = 1e-4
     n_epochs = 5000
     weight_decay = 1e-4
     optimizer = AdamW( tp_network.parameters(), lr, weight_decay=weight_decay, amsgrad=True )
