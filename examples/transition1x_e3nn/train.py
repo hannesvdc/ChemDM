@@ -75,13 +75,13 @@ def main( exp_name : str ):
     # Endpoint embedding networks
     embedding_state_size = 64
     embedding_message_size = 64
-    n_embedding_layers = 5   # maybe 5 first; 10 is fine but expensive
+    n_embedding_layers = 5
     xA_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
     xB_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
 
     # E3NN transition-path network
     irreps_node_str = "64x0e + 16x1o + 8x1e"
-    n_e3_layers = 7
+    n_e3_layers = 10
     tp_network = TransitionPathE3NN(
         xA_embedding_network=xA_embedding,
         xB_embedding_network=xB_embedding,
@@ -95,7 +95,7 @@ def main( exp_name : str ):
     print( "Number of Trainable Parameters: ", n_params )
 
     # Build the optimizer
-    lr = 1e-4
+    lr = 1e-3
     n_epochs = 5000
     weight_decay = 1e-4
     optimizer = AdamW( tp_network.parameters(), lr, weight_decay=weight_decay, amsgrad=True )
@@ -204,7 +204,7 @@ def main( exp_name : str ):
             train_counter.append(epoch_idx)
             train_losses.append(loss.item())
             train_grads.append(grad_norm)
-            if (batch_idx+1) % 10 == 0:
+            if (batch_idx+1) % 1 == 0:
                 print('Train Epoch: {} [{}/{}] \tLoss: {:.6f} \t Gradient Norm {:.6f} \t Learning Rate {:.2E}'
                     .format( epoch, batch_idx+1, n_batches, loss.item(), grad_norm, optimizer.param_groups[-1]["lr"] ), flush=True)
         return epoch_loss / n_batches, grad_norm

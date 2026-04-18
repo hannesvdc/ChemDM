@@ -39,7 +39,7 @@ class MolecularEmbeddingGNN( nn.Module ):
         for l in range( n_layers ):
             message_network = MultiLayerPerceptron( message_neurons_per_layer, nn.GELU, f"message_layer_{l}")
             message_networks.append( message_network )
-            update_network = MultiLayerPerceptron( update_neurons_per_layer, nn.GELU, f"update_layer_{l}", init_zero=True )
+            update_network = MultiLayerPerceptron( update_neurons_per_layer, nn.GELU, f"update_layer_{l}" )
             state_update_networks.append( update_network )
         self.message_networks = nn.ModuleList( message_networks )
         self.state_update_networks = nn.ModuleList( state_update_networks )

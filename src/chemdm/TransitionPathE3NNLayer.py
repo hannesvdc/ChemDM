@@ -61,10 +61,14 @@ class TransitionPathE3NNLayer(nn.Module):
         # Radial MLP produces tensor-product weights from scalar edge features
         self.radial_network = MultiLayerPerceptron(
             [self.n_edge_scalar, 64, 64, self.tp.weight_numel], # type: ignore
-            nn.GELU, "e3nn_radial_network", )
+            nn.GELU, "e3nn_radial_network" )
 
-        # A simple equivariant self-interaction after aggregation
+        # A simple equivariant self-interaction after aggregation.
+        # Initialize with zeros for stability.
         self.self_interaction = o3.Linear(self.irreps_node, self.irreps_node)
+        with pt.no_grad():
+            for p in self.self_interaction.parameters():
+                p.mul_( 0.2 )
 
         # Read out scalar-even channels for coordinate gates
         self.irreps_0e = o3.Irreps([ 
@@ -73,11 +77,18 @@ class TransitionPathE3NNLayer(nn.Module):
         ])
         self.scalar_readout = o3.Linear(self.irreps_node, self.irreps_0e)
         self.coordinate_gate_network = MultiLayerPerceptron(
-            [self.irreps_0e.dim, 64, 64, 3],
-            nn.GELU, "e3nn_coordinate_gates", init_zero=True, )
+            [self.irreps_0e.dim, 64, 64, 4],
+            nn.GELU, "e3nn_coordinate_gates")
 
-        # Project node features to one polar vector (1o) for coordinate updates
+        # Project node features to one polar vector (1o) for coordinate updates.
         self.coord_head = o3.Linear(self.irreps_node, o3.Irreps("1x1o"))
+
+        # Direct neighbor-position update coefficient.
+        #   edge_update_ij = alpha_ij * (x_src - x_dst)
+        # The input is scalar-only, so this remains equivariant.
+        self.edge_coordinate_network = MultiLayerPerceptron(
+            [self.n_edge_scalar + 2 * self.irreps_0e.dim, 64, 64, 1],
+            nn.GELU, "e3nn_edge_coordinate_network", )
 
     def forward( self, xA: Molecule, xB: Molecule, s: pt.Tensor,  state: E3State ) -> E3State:
         # Unpack the equivariant state.
@@ -123,7 +134,6 @@ class TransitionPathE3NNLayer(nn.Module):
         # 5. Equivariant messages
         # source node features live on src
         edge_messages = self.tp( f[src], edge_attr, weights )  # (E, irreps_node.dim)
-
         agg = pt.zeros_like(f)
         agg.index_add_( 0, dst, edge_messages )
 
@@ -133,12 +143,25 @@ class TransitionPathE3NNLayer(nn.Module):
         # 7. Coordinate update from the 1o part of f_new
         delta_x = self.coord_head( f_new )  # (N, 3)
         scalar_features = self.scalar_readout( f_new )  # (N, irreps_0e.dim)
-        coord_gates = self.coordinate_gate_network( scalar_features )  # (N, 3)
+        dx_to_src = x[src] - x[dst]  # (E, 3)
+        edge_coord_context = pt.cat( (
+                edge_scalar,
+                scalar_features[src],
+                scalar_features[dst], ), dim=1 )  # (E, n_edge_scalar + 2*irreps_0e.dim)
 
-        alpha_x = coord_gates[:, 0:1]
-        beta_A = coord_gates[:, 1:2]
-        beta_B = coord_gates[:, 2:3]
+        edge_alpha = self.edge_coordinate_network(edge_coord_context)  # (E, 1)
+        edge_position_messages = edge_alpha * dx_to_src                # (E, 3)
+        neighbor_update = pt.zeros_like(x)
+        neighbor_update.index_add_(0, dst, edge_position_messages)     # (N, 3)
 
-        x_new = x + alpha_x * delta_x + beta_A * (1.0 - s[:, None]) * (xA.x - x) + beta_B * s[:, None] * (xB.x - x)
+        coord_gates = self.coordinate_gate_network(scalar_features)    # (N, 4)
+        gate_delta_x = coord_gates[:, 0:1]
+        gate_neighbor = coord_gates[:, 1:2]
+        gate_xA = coord_gates[:, 2:3]
+        gate_xB = coord_gates[:, 3:4]
+
+        x_new = x + gate_delta_x * delta_x + gate_neighbor * neighbor_update \
+            + gate_xA * (1.0 - s[:, None]) * (xA.x - x) \
+            + gate_xB * s[:, None] * (xB.x - x)
 
         return E3State(f=f_new, x=x_new)
