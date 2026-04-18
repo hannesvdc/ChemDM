@@ -1,6 +1,7 @@
 import torch as pt
 
 from chemdm.geometry import kabsch_rotation_torch
+
 from dataclasses import dataclass
 
 @dataclass

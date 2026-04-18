@@ -1,4 +1,11 @@
+import random
 import torch as pt
+
+import itertools
+from typing import List, Tuple
+
+from chemdm.MoleculeGraph import MoleculeGraph, BatchedMoleculeGraph, batchMolecules
+from chemdm.Trajectory import Trajectory, enforceCOM, alignToReactant
 
 def getGradientNorm( model : pt.nn.Module ):
     grads = []
@@ -50,3 +57,34 @@ def isInteger( x : pt.Tensor,
     if x.dtype in [pt.uint8, pt.int8, pt.int16, pt.int32, pt.int64]:
         return pt.ones_like( x, dtype=pt.bool )
     return pt.abs( x - x.int() ) <= float_tol
+
+def collate_molecules(batch : List[List[Trajectory]]
+                     ) -> Tuple[BatchedMoleculeGraph, BatchedMoleculeGraph, pt.Tensor, pt.Tensor]:
+    """
+    Batching molecules and random points on the path.
+    """
+    trajectories = list(itertools.chain.from_iterable( batch )) # squash the nested list of trajectories
+
+    # Sample random points on the trajectory for each molecule
+    xA_molecules = []
+    xB_molecules = []
+    s_list = []
+    x_list = []
+    for trajectory in trajectories:
+        trajectory = enforceCOM( trajectory )
+        trajectory = alignToReactant( trajectory )
+
+        xA = MoleculeGraph( trajectory.Z, trajectory.xA, trajectory.GA )
+        xA_molecules.append( xA )
+        xB = MoleculeGraph( trajectory.Z, trajectory.xB, trajectory.GB )
+        xB_molecules.append( xB )
+
+        s_idx = random.randint( 0, len(trajectory.s)-1 )
+        s_list.append( trajectory.s[s_idx] * pt.ones_like(trajectory.Z) )
+        x_list.append( trajectory.x[s_idx,:,:] )
+    s = pt.cat( s_list ) # (N_atoms,)
+    x_ref = pt.cat( x_list, dim=0 ) # (N_atoms,3)
+
+    xA = batchMolecules( xA_molecules )
+    xB = batchMolecules( xB_molecules )
+    return xA, xB, s, x_ref
