@@ -42,6 +42,7 @@ def main( exp_name : str ):
     data_directory = data_config["data_folder"]
     device_name = data_config["device"]
     setup_wandb = data_config.get("setup_wandb", True)
+    root = data_config.get( "store_root" )
 
     B = 1
     train_dataset = TransitionPathDataset( "train", data_directory )
@@ -119,7 +120,7 @@ def main( exp_name : str ):
         "n_embedding_layers": n_embedding_layers,
         "n_trainable_parameters": n_params,
     }
-    exp_dir = make_experiment_dir( exp_name )
+    exp_dir = make_experiment_dir( exp_name, root=root )
     with open(exp_dir / "config.json", "w") as f:
         json.dump(experiment_config, f, indent=2)
     if setup_wandb:
