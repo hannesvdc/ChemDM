@@ -84,7 +84,7 @@ def main( exp_name : str ):
 
     # E3NN transition-path network
     irreps_node_str = "64x0e + 16x1o + 8x1e"
-    n_e3_layers = 10
+    n_e3_layers = 7
     tp_network = TransitionPathE3NN(
         xA_embedding_network=xA_embedding,
         xB_embedding_network=xB_embedding,
