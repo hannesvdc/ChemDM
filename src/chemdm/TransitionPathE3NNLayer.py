@@ -111,24 +111,20 @@ class TransitionPathE3NNLayer(nn.Module):
         edge_vec = x[dst] - x[src]  # (E, 3)
         dist = pt.sqrt( (edge_vec * edge_vec).sum(dim=1, keepdim=True).clamp_min(1e-8) )
         edge_dir = edge_vec / dist
-
         edge_vec_A = xA.x[dst] - xA.x[src]
         dist_A = pt.sqrt( (edge_vec_A * edge_vec_A).sum(dim=1, keepdim=True).clamp_min(1e-8) )
-
         edge_vec_B = xB.x[dst] - xB.x[src]
         dist_B = pt.sqrt( (edge_vec_B * edge_vec_B).sum(dim=1, keepdim=True).clamp_min(1e-8) )
-
         bondA = is_bond_A[:, None].to(x.dtype)
         bondB = is_bond_B[:, None].to(x.dtype)
-
-        edge_scalar = pt.cat( ( bondA, bondB, dist, dist**2, dist_A, dist_B, 
+        edge_features = pt.cat( ( bondA, bondB, dist, dist**2, dist_A, dist_B, 
                                dist_A - dist_B, self.rbf(dist), self.rbf(dist_A), self.rbf(dist_B), ), dim=1, )  # (E, n_edge_scalar)
 
         # 3. Spherical harmonics on edge directions
         edge_attr = o3.spherical_harmonics( self.irreps_sh, edge_dir, normalize=True, normalization="component", )  # (E, irreps_sh.dim)
 
         # 4. Radial weights from scalar edge features
-        weights = self.radial_network(edge_scalar)  # (E, tp.weight_numel)
+        weights = self.radial_network(edge_features)  # (E, tp.weight_numel)
 
         # 5. Equivariant messages
         # source node features live on src
@@ -144,7 +140,7 @@ class TransitionPathE3NNLayer(nn.Module):
         scalar_features = self.scalar_readout( f_new )  # (N, irreps_0e.dim)
         dx_to_src = x[src] - x[dst]  # (E, 3)
         edge_coord_context = pt.cat( (
-                edge_scalar,
+                edge_features,
                 scalar_features[src],
                 scalar_features[dst], ), dim=1 )  # (E, n_edge_scalar + 2*irreps_0e.dim)
 

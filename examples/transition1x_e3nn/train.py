@@ -1,6 +1,7 @@
 import numpy as np
 import torch as pt
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import matplotlib.pyplot as plt
 
 from torch.utils.data import DataLoader
@@ -35,6 +36,7 @@ def make_experiment_dir(exp_name: str, root: str = "./experiments") -> Path:
     print('Storing results in', exp_dir)
     exp_dir.mkdir(parents=True, exist_ok=True)
     return exp_dir
+
 
 def main( exp_name : str ):
     with open( './data_config.json', "r" ) as f:
@@ -95,11 +97,17 @@ def main( exp_name : str ):
     n_params = sum(p.numel() for p in tp_network.parameters() if p.requires_grad)
     print( "Number of Trainable Parameters: ", n_params )
 
-    # Build the optimizer
-    lr = 1e-4
+    # Build the optimizer and scheduler
+    lr_min = 1e-6
+    lr_max = 2e-4
     n_epochs = 5000
+    warmup_epochs = 25
     weight_decay = 1e-4
-    optimizer = AdamW( tp_network.parameters(), lr, weight_decay=weight_decay, amsgrad=True )
+
+    optimizer = AdamW( tp_network.parameters(), lr=lr_max, weight_decay=weight_decay, amsgrad=True )
+    warmup_scheduler = LinearLR( optimizer, start_factor=lr_min / lr_max, end_factor=1.0, total_iters=warmup_epochs )
+    cosine_scheduler = CosineAnnealingLR( optimizer, T_max=n_epochs - warmup_epochs, eta_min=lr_min )
+    scheduler = SequentialLR( optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_epochs], )
 
     # Everything has been set up, now log the config and initialize weights&biases
     experiment_config = {
@@ -107,7 +115,6 @@ def main( exp_name : str ):
         "experiment_name": exp_name,
         "data_directory": data_directory,
         "device": device_name,
-        "learning_rate": lr,
         "weight_decay": weight_decay,
         "batch_size": B,
         "epochs": n_epochs,
@@ -260,11 +267,15 @@ def main( exp_name : str ):
                 run.log({"epoch": epoch, "train_loss": train_loss,
                          "train_grad": train_grad, "valid_loss" : valid_loss,
                          "best_val_loss" : best_val_loss,
-                         "train_rmse": train_rmse, "valid_rmse": valid_rmse})
+                         "train_rmse": train_rmse, "valid_rmse": valid_rmse,
+                         "lr": optimizer.param_groups[0]["lr"]})
 
             if epoch % 10 == 0:
                 pt.save( tp_network.state_dict(), exp_dir / "gnn.pth" )
                 pt.save( optimizer.state_dict(), exp_dir / "optimizer.pth" )
+
+            scheduler.step()
+
     except KeyboardInterrupt:
         print('Aborting Training due to KeyboardInterrupt')
     finally:
