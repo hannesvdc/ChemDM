@@ -58,7 +58,7 @@ class TransitionPathE3NNLayer(nn.Module):
         irreps_node_str: str,
         d_cutoff: float = 5.0,
         n_rbf: int = 10,
-        self_interaction_init_scale: float = 0.0,
+        self_interaction_init_scale: float = 0.1,
         feature_residual_scale : float = 0.2
     ) -> None:
         super().__init__()
@@ -82,8 +82,14 @@ class TransitionPathE3NNLayer(nn.Module):
         self.tp = o3.FullyConnectedTensorProduct( self.irreps_node, self.irreps_sh, self.irreps_node, shared_weights=False)
 
         # Radial MLP produces tensor-product weights from scalar edge features
+        self.irreps_0e = o3.Irreps([
+            (mul, ir) for mul, ir in self.irreps_node
+            if ir.l == 0 and ir.p == 1
+        ])
+        assert self.irreps_0e.dim > 0, "TransitionPathE3NNLayer expects at least one 0e block."
+        self.radial_context_dim = self.n_edge_scalar + 2 * self.irreps_0e.dim
         self.radial_network = MultiLayerPerceptron(
-            [self.n_edge_scalar, 64, 64, self.tp.weight_numel], # type: ignore
+            [self.radial_context_dim, 64, 64, self.tp.weight_numel], # type: ignore
             nn.GELU, "e3nn_radial_network" )
 
         # A simple equivariant self-interaction after aggregation.
@@ -93,19 +99,6 @@ class TransitionPathE3NNLayer(nn.Module):
             for p in self.self_interaction.parameters():
                 p.mul_( self.self_interaction_init_scale )
 
-        # Read out scalar-even channels for coordinate gates
-        # 0e scalar channels.
-        self.irreps_0e = o3.Irreps([
-            (mul, ir) for mul, ir in self.irreps_node
-            if ir.l == 0 and ir.p == 1
-        ])
-        assert self.irreps_0e.dim > 0, "TransitionPathE3NNLayer expects at least one 0e block."
-
-        self.scalar_readout = o3.Linear(self.irreps_node, self.irreps_0e)
-        self.coordinate_gate_network = MultiLayerPerceptron(
-            [self.irreps_0e.dim, 64, 64, 4],
-            nn.GELU, "e3nn_coordinate_gates")
-
         # Gated equivariant nonlinearity for hidden feature updates.
         self._setup_gate()
 
@@ -114,6 +107,7 @@ class TransitionPathE3NNLayer(nn.Module):
         #   gate_neighbor   : direct neighbor coordinate update
         #   gate_xA         : reactant anchor
         #   gate_xB         : product anchor
+        self.scalar_readout = o3.Linear(self.irreps_node, self.irreps_0e)
         self.coordinate_gate_network = MultiLayerPerceptron(
             [self.irreps_0e.dim, 64, 64, 4],
             nn.GELU,
@@ -199,6 +193,7 @@ class TransitionPathE3NNLayer(nn.Module):
         # Current edge geometry.
         edge_vec = x[dst] - x[src]  # (E, 3)
         dist = pt.sqrt((edge_vec * edge_vec).sum(dim=1, keepdim=True).clamp_min(1e-8))
+        dist = dist / self.d_cutoff
         edge_dir = edge_vec / dist
 
         # Old sign convention for direct coordinate update:
@@ -208,9 +203,11 @@ class TransitionPathE3NNLayer(nn.Module):
         # Endpoint edge geometry.
         edge_vec_A = xA.x[dst] - xA.x[src]
         dist_A = pt.sqrt((edge_vec_A * edge_vec_A).sum(dim=1, keepdim=True).clamp_min(1e-8))
+        dist_A = dist_A / self.d_cutoff
 
         edge_vec_B = xB.x[dst] - xB.x[src]
         dist_B = pt.sqrt((edge_vec_B * edge_vec_B).sum(dim=1, keepdim=True).clamp_min(1e-8))
+        dist_B = dist_B / self.d_cutoff
 
         bondA = is_bond_A[:, None].to(x.dtype)
         bondB = is_bond_B[:, None].to(x.dtype)
@@ -230,8 +227,10 @@ class TransitionPathE3NNLayer(nn.Module):
             normalize=True,
             normalization="component",
         )
+        node_scalars = self.scalar_readout(f)  # (N, irreps_0e.dim)
 
-        weights = self.radial_network(edges.edge_features)
+        radial_context = pt.cat( ( edges.edge_features, node_scalars[edges.src], node_scalars[edges.dst], ), dim=1, )  # (E, n_edge_scalar + 2 * irreps_0e.dim)
+        weights = self.radial_network(radial_context)
 
         edge_messages = self.tp( f[edges.src], edge_attr, weights, )
         agg = pt.zeros_like(f)

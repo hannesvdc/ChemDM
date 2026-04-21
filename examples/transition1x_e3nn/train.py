@@ -83,7 +83,7 @@ def main( exp_name : str ):
     xB_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
 
     # E3NN transition-path network
-    irreps_node_str = "64x0e + 16x1o + 8x1e"
+    irreps_node_str = "48x0e + 16x1o + 16x1e"
     n_e3_layers = 7
     tp_network = TransitionPathE3NN(
         xA_embedding_network=xA_embedding,
@@ -198,7 +198,10 @@ def main( exp_name : str ):
             x_ref = x_ref.to( device=device, dtype=dtype )
 
             # Evalute the loss
-            loss = evaluate_batch( xA, xB, s, x_ref )
+            try:
+                loss = evaluate_batch( xA, xB, s, x_ref )
+            except:
+                print('Blowup during batch evaluation. Continuing.')
             epoch_loss += float( loss.item() )
 
             # Make an optmizer step
