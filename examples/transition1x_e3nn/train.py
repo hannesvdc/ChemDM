@@ -83,7 +83,7 @@ def main( exp_name : str ):
     xB_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
 
     # E3NN transition-path network
-    irreps_node_str = "48x0e + 16x1o + 16x1e"
+    irreps_node_str = "48x0e + 16x1o + 16x1e + 8x2e"
     n_e3_layers = 7
     tp_network = TransitionPathE3NN(
         xA_embedding_network=xA_embedding,

@@ -192,9 +192,9 @@ class TransitionPathE3NNLayer(nn.Module):
 
         # Current edge geometry.
         edge_vec = x[dst] - x[src]  # (E, 3)
-        dist = pt.sqrt((edge_vec * edge_vec).sum(dim=1, keepdim=True).clamp_min(1e-8))
-        dist = dist / self.d_cutoff
-        edge_dir = edge_vec / dist
+        dist_raw = pt.sqrt((edge_vec * edge_vec).sum(dim=1, keepdim=True).clamp_min(1e-8))
+        edge_dir = edge_vec / dist_raw
+        dist = dist_raw / self.d_cutoff
 
         # Old sign convention for direct coordinate update:
         # move dst along vector pointing from dst to src.
@@ -202,18 +202,18 @@ class TransitionPathE3NNLayer(nn.Module):
 
         # Endpoint edge geometry.
         edge_vec_A = xA.x[dst] - xA.x[src]
-        dist_A = pt.sqrt((edge_vec_A * edge_vec_A).sum(dim=1, keepdim=True).clamp_min(1e-8))
-        dist_A = dist_A / self.d_cutoff
+        dist_A_raw = pt.sqrt((edge_vec_A * edge_vec_A).sum(dim=1, keepdim=True).clamp_min(1e-8))
+        dist_A = dist_A_raw / self.d_cutoff
 
         edge_vec_B = xB.x[dst] - xB.x[src]
-        dist_B = pt.sqrt((edge_vec_B * edge_vec_B).sum(dim=1, keepdim=True).clamp_min(1e-8))
-        dist_B = dist_B / self.d_cutoff
+        dist_B_raw = pt.sqrt((edge_vec_B * edge_vec_B).sum(dim=1, keepdim=True).clamp_min(1e-8))
+        dist_B = dist_B_raw / self.d_cutoff
 
         bondA = is_bond_A[:, None].to(x.dtype)
         bondB = is_bond_B[:, None].to(x.dtype)
 
         edge_features = pt.cat( ( bondA, bondB, dist, dist ** 2, dist_A, dist_B,
-                dist_A - dist_B, self.rbf(dist), self.rbf(dist_A), self.rbf(dist_B), ), dim=1, )
+                dist_A - dist_B, self.rbf(dist_raw), self.rbf(dist_A_raw), self.rbf(dist_B_raw), ), dim=1, )
 
         return EdgeData( src, dst, edge_dir, dx_to_src, edge_features )
     

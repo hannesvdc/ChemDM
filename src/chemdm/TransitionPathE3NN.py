@@ -83,6 +83,12 @@ class TransitionPathE3NN(nn.Module):
             if ir.l == 1 and ir.p == 1
         ])
 
+        # 2e input: all zeros
+        self.irreps_2e_out = o3.Irreps([
+            (mul, ir) for mul, ir in self.irreps_node
+            if ir.l == 2 and ir.p == 1
+        ])
+
         # e3nn layers
         self.layers = nn.ModuleList( [  
             TransitionPathE3NNLayer(
@@ -129,9 +135,11 @@ class TransitionPathE3NN(nn.Module):
         # Vector initial features (1e). All zeros for now.
         # Ideally, this is where we include torsion information between bonds.
         f_1e = pt.zeros( N, self.irreps_1e_out.dim, device=x.device, dtype=x.dtype, )
+
+        f_2e = pt.zeros(N, self.irreps_2e_out.dim, device=x.device, dtype=x.dtype)
         
-        # Concatenate in the same order as irreps_node = " ... 0e + ... 1o + ... 1e"
-        f = pt.cat((f_0e, f_1o, f_1e), dim=1)
+        # Concatenate in the same order as irreps_node = " ... 0e + ... 1o + ... 1e + ... 2e"
+        f = pt.cat((f_0e, f_1o, f_1e, f_2e), dim=1)
         return E3State(f=f, x=x)
 
     def forward( self, xA: Molecule, xB: Molecule, s: pt.Tensor ) -> Molecule:
