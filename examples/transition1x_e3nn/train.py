@@ -72,7 +72,7 @@ def main( exp_name : str ):
     )
 
     # Global molecular information
-    d_cutoff = 6.0      # I would start smaller for e3nn
+    d_cutoff = 5.0      # I would start smaller for e3nn
     n_rbf = 10
 
     # Endpoint embedding networks

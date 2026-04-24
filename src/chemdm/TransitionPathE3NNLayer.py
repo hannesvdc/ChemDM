@@ -8,7 +8,8 @@ from dataclasses import dataclass
 
 from chemdm.MLP import MultiLayerPerceptron
 from chemdm.DistanceRBFEmbedding import DistanceRBFEmbedding
-from chemdm.MoleculeGraph import Molecule, findAllNeighborsReactantProduct
+from chemdm.MoleculeGraph import Molecule, findAllDistanceNeighbors
+# from chemdm.graph.algorithms import findAllDistanceNeighbors
 
 
 @dataclass
@@ -29,13 +30,11 @@ class EdgeData:
 
     src, dst       : edge indices, shape (E,)
     edge_dir       : unit edge direction, shape (E, 3)
-    dx_to_src      : x[src] - x[dst], shape (E, 3)
     edge_features  : scalar edge features, shape (E, n_edge_scalar)
     """
     src: pt.Tensor
     dst: pt.Tensor
     edge_dir: pt.Tensor
-    dx_to_src: pt.Tensor
     edge_features: pt.Tensor
 
 class TransitionPathE3NNLayer(nn.Module):
@@ -182,11 +181,25 @@ class TransitionPathE3NNLayer(nn.Module):
 
         return s
     
+    def _computeBondKeys( self, edge_index : pt.Tensor, N : int ) -> pt.Tensor:
+        return edge_index[:,0] * N + edge_index[:,1]
+    
     def _build_edges( self, xA: Molecule, xB: Molecule, x: pt.Tensor, ) -> EdgeData:
         """
         Neighbor search and scalar edge-feature construction.
         """
-        all_edges, is_bond_A, is_bond_B = findAllNeighborsReactantProduct( xA, xB, x, self.d_cutoff )
+        N = len( xA.Z )
+
+        # all_edges, is_bond_A, is_bond_B = findAllNeighborsReactantProduct( xA, xB, x, self.d_cutoff )
+        tempMolecule = xA.copyWithNewPositions( x )
+        # all_edges = findAllDistanceNeighbors( x, self.d_cutoff ) # (E, 2)
+        all_edges = findAllDistanceNeighbors( tempMolecule, self.d_cutoff )
+        distance_keys = self._computeBondKeys( all_edges, N )
+        bond_A_keys = self._computeBondKeys( xA.edge_index, N )
+        bond_B_keys = self._computeBondKeys( xB.edge_index, N )
+        is_bond_A = pt.isin(distance_keys, bond_A_keys, assume_unique=True )
+        is_bond_B = pt.isin(distance_keys, bond_B_keys, assume_unique=True )
+        print( 'Number of edges ', all_edges.shape[0], 'of which bonds in A: ', pt.sum(is_bond_A), 'and B: ', pt.sum(is_bond_B), '; N =', N)
         src = all_edges[:, 0]
         dst = all_edges[:, 1]
 
@@ -195,10 +208,6 @@ class TransitionPathE3NNLayer(nn.Module):
         dist_raw = pt.sqrt((edge_vec * edge_vec).sum(dim=1, keepdim=True).clamp_min(1e-8))
         edge_dir = edge_vec / dist_raw
         dist = dist_raw / self.d_cutoff
-
-        # Old sign convention for direct coordinate update:
-        # move dst along vector pointing from dst to src.
-        dx_to_src = x[src] - x[dst]  # (E, 3)
 
         # Endpoint edge geometry.
         edge_vec_A = xA.x[dst] - xA.x[src]
@@ -215,7 +224,7 @@ class TransitionPathE3NNLayer(nn.Module):
         edge_features = pt.cat( ( bondA, bondB, dist, dist ** 2, dist_A, dist_B,
                 dist_A - dist_B, self.rbf(dist_raw), self.rbf(dist_A_raw), self.rbf(dist_B_raw), ), dim=1, )
 
-        return EdgeData( src, dst, edge_dir, dx_to_src, edge_features )
+        return EdgeData( src, dst, edge_dir, edge_features )
     
     def _aggregate_messages( self, f: pt.Tensor, edges: EdgeData ) -> pt.Tensor:
         """
@@ -270,7 +279,7 @@ class TransitionPathE3NNLayer(nn.Module):
         edge_coord_context = pt.cat( ( edges.edge_features, scalar_features[edges.src], scalar_features[edges.dst], ), dim=1, )
 
         edge_step = self.edge_coordinate_network(edge_coord_context)  # (E, 1)
-        edge_position_messages = edge_step * edges.dx_to_src          # (E, 3)
+        edge_position_messages = -edge_step * edges.edge_dir          # (E, 3)
 
         neighbor_update = pt.zeros_like(x)
         neighbor_update.index_add_(0, edges.dst, edge_position_messages)

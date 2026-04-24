@@ -3,11 +3,12 @@ import h5py
 import numpy as np
 import torch as pt
 import pickle
+import json
 
 from rdkit import Chem
 from rdkit.Chem import rdDetermineBonds
 
-from chemdm.Trajectory import Trajectory, enforceCOM
+from chemdm.Trajectory import Trajectory, enforceCOM, alignToReactant
 
 import matplotlib.pyplot as plt
 
@@ -131,6 +132,7 @@ def prune_bonds_by_valence(bonds, x, z):
 plot_trajectories = False
 data_directory = "/Users/hannesvdc/transition1x/"
 store_directory = data_directory + "processed/"
+app_store_directory = data_directory + "app/"
 with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
     for evaltype in ['train', 'test', 'val']:
         data = f[evaltype]
@@ -262,5 +264,32 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                 # Save the trajectories for this reaction.
                 with open( os.path.join(store_directory, f"{evaltype}_reaction_{reaction_counter}.pkl"), "wb") as sf:
                    pickle.dump( reaction_trajectories, sf )
+                with open( os.path.join(app_store_directory, f"{evaltype}_reaction_{reaction_counter}_molecule_{molecule}.json"), "w") as sf:
+                    trajectory = reaction_trajectories[-1]
+
+                    # CoM enforcement for data validation.
+                    trajectory = enforceCOM( trajectory )
+
+                    # Store as JSON
+                    json_dict = { "Z" : trajectory.Z.tolist(), 
+                                "xA": trajectory.xA.tolist(),
+                                "xB": trajectory.xB.tolist(),
+                                "s": trajectory.s.tolist(),
+                                "x": trajectory.x.tolist(),}
+                    json.dump( json_dict, sf )
+                with open( os.path.join(app_store_directory, f"{evaltype}_reaction_{reaction_counter}_molecule_{molecule}_aligned.json"), "w") as sf:
+                    trajectory = reaction_trajectories[-1]
+
+                    # Kabsch alignment + CoM enforcement for data validation.
+                    trajectory = enforceCOM( trajectory )
+                    trajectory = alignToReactant( trajectory )
+
+                    # Store as JSON
+                    json_dict = { "Z" : trajectory.Z.tolist(), 
+                                "xA": trajectory.xA.tolist(),
+                                "xB": trajectory.xB.tolist(),
+                                "s": trajectory.s.tolist(),
+                                "x": trajectory.x.tolist(),}
+                    json.dump( json_dict, sf )
                 storage_counter += 1
         print( f"Number of {evaltype} reactions store: {storage_counter} / {reaction_counter}" )
