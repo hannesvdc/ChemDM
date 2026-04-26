@@ -10,6 +10,7 @@ import wandb
 from pathlib import Path
 import json
 import argparse
+import traceback
 
 from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
@@ -72,7 +73,7 @@ def main( exp_name : str ):
     )
 
     # Global molecular information
-    d_cutoff = 5.0      # I would start smaller for e3nn
+    d_cutoff = 5.0
     n_rbf = 10
 
     # Endpoint embedding networks
@@ -92,17 +93,17 @@ def main( exp_name : str ):
         n_layers=n_e3_layers,
         d_cutoff=d_cutoff,
         n_freq=8,
-        n_rbf=n_rbf,   # include this if your constructor has it
+        n_rbf=n_rbf,
     )
     n_params = sum(p.numel() for p in tp_network.parameters() if p.requires_grad)
     print( "Number of Trainable Parameters: ", n_params )
 
     # Build the optimizer and scheduler
     lr_min = 1e-6
-    lr_max = 2e-4
-    n_epochs = 5000
+    lr_max = 1e-3
+    n_epochs = 1500
     warmup_epochs = 25
-    weight_decay = 1e-4
+    weight_decay = 1e-2
 
     optimizer = AdamW( tp_network.parameters(), lr=lr_max, weight_decay=weight_decay, amsgrad=True )
     warmup_scheduler = LinearLR( optimizer, start_factor=lr_min / lr_max, end_factor=1.0, total_iters=warmup_epochs )
@@ -201,7 +202,9 @@ def main( exp_name : str ):
             try:
                 loss = evaluate_batch( xA, xB, s, x_ref )
             except:
+                print(traceback.format_exc())
                 print('Blowup during batch evaluation. Continuing.')
+                continue
             epoch_loss += float( loss.item() )
 
             # Make an optmizer step

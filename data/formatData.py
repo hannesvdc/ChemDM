@@ -263,7 +263,7 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
 
                 # Save the trajectories for this reaction.
                 with open( os.path.join(store_directory, f"{evaltype}_reaction_{reaction_counter}.pkl"), "wb") as sf:
-                   pickle.dump( reaction_trajectories, sf )
+                    pickle.dump( reaction_trajectories, sf )
                 with open( os.path.join(app_store_directory, f"{evaltype}_reaction_{reaction_counter}_molecule_{molecule}.json"), "w") as sf:
                     trajectory = reaction_trajectories[-1]
 

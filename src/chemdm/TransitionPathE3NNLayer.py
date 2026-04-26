@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from chemdm.MLP import MultiLayerPerceptron
 from chemdm.DistanceRBFEmbedding import DistanceRBFEmbedding
 from chemdm.MoleculeGraph import Molecule, findAllDistanceNeighbors
-# from chemdm.graph.algorithms import findAllDistanceNeighbors
-
 
 @dataclass
 class E3State:
@@ -57,7 +55,7 @@ class TransitionPathE3NNLayer(nn.Module):
         irreps_node_str: str,
         d_cutoff: float = 5.0,
         n_rbf: int = 10,
-        self_interaction_init_scale: float = 0.1,
+        self_interaction_init_scale: float = 0.0,
         feature_residual_scale : float = 0.2
     ) -> None:
         super().__init__()
@@ -90,6 +88,13 @@ class TransitionPathE3NNLayer(nn.Module):
         self.radial_network = MultiLayerPerceptron(
             [self.radial_context_dim, 64, 64, self.tp.weight_numel], # type: ignore
             nn.GELU, "e3nn_radial_network" )
+        
+        # Residual scalar gate on each raw edge message before aggregation.
+        # Zero init means: gated_message = raw_message.
+        self.edge_message_scalar_gate = MultiLayerPerceptron(
+            [self.radial_context_dim, 64, 64, 1],
+            nn.GELU,
+            "e3nn_edge_message_scalar_gate",)
 
         # A simple equivariant self-interaction after aggregation.
         # Initialize with zeros for stability.
@@ -190,16 +195,13 @@ class TransitionPathE3NNLayer(nn.Module):
         """
         N = len( xA.Z )
 
-        # all_edges, is_bond_A, is_bond_B = findAllNeighborsReactantProduct( xA, xB, x, self.d_cutoff )
         tempMolecule = xA.copyWithNewPositions( x )
-        # all_edges = findAllDistanceNeighbors( x, self.d_cutoff ) # (E, 2)
         all_edges = findAllDistanceNeighbors( tempMolecule, self.d_cutoff )
         distance_keys = self._computeBondKeys( all_edges, N )
         bond_A_keys = self._computeBondKeys( xA.edge_index, N )
         bond_B_keys = self._computeBondKeys( xB.edge_index, N )
         is_bond_A = pt.isin(distance_keys, bond_A_keys, assume_unique=True )
         is_bond_B = pt.isin(distance_keys, bond_B_keys, assume_unique=True )
-        print( 'Number of edges ', all_edges.shape[0], 'of which bonds in A: ', pt.sum(is_bond_A), 'and B: ', pt.sum(is_bond_B), '; N =', N)
         src = all_edges[:, 0]
         dst = all_edges[:, 1]
 
@@ -241,7 +243,14 @@ class TransitionPathE3NNLayer(nn.Module):
         radial_context = pt.cat( ( edges.edge_features, node_scalars[edges.src], node_scalars[edges.dst], ), dim=1, )  # (E, n_edge_scalar + 2 * irreps_0e.dim)
         weights = self.radial_network(radial_context)
 
+        # Compute the edge messages and apply nonlinear gating individually like PaiNN
         edge_messages = self.tp( f[edges.src], edge_attr, weights, )
+        
+        # Scalar residual message gate
+        gate_logits = self.edge_message_scalar_gate(radial_context)    # (E, 1)
+        gate_residual = 2.0 * (pt.sigmoid(gate_logits) - 0.5)         # (E, 1), zero at init
+        edge_messages = (1.0 + gate_residual) * edge_messages
+
         agg = pt.zeros_like(f)
         agg.index_add_(0, edges.dst, edge_messages)
 
