@@ -68,7 +68,6 @@ def main():
             [-0.605000, -0.935307,  0.000000],  # H
         ], dtype=float, )
 
-
     # OpenMM dynamics usually use nm internally.
     positions_nm = positions_A * 0.1
     system = create_xtb_system( atomic_numbers=atomic_numbers, charge=0.0, multiplicity=1, method="GFN2xTB", )

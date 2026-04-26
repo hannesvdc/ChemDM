@@ -42,3 +42,17 @@ def create_xtb_system( atomic_numbers: np.ndarray, charge: float = 0.0, multipli
     xtb_force = XtbForce( method_map[method], charge,  multiplicity, False,  particle_indices, atomic_numbers_list, )
     system.addForce(xtb_force)
     return system
+
+def create_xtb_context(atomic_numbers: np.ndarray) -> mm.Context:
+    system = create_xtb_system(atomic_numbers)
+
+    integrator = mm.VerletIntegrator(1.0 * unit.femtosecond)
+    platform = mm.Platform.getPlatformByName("CPU")
+    properties = {"Threads": "1"}
+    context = mm.Context(system, integrator, platform, properties)
+
+    # Keep references alive by attaching them.
+    context._system_ref = system
+    context._integrator_ref = integrator
+
+    return context
