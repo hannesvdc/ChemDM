@@ -81,10 +81,11 @@ def main():
     print( success[columns].describe( percentiles=[0.01, 0.05, 0.10, 0.50, 0.90, 0.95, 0.99] ) )
 
     print()
-    print("Top 20 by max displacement:")
+    max_displacement_count = 100
+    print( f"Top {max_displacement_count} by max displacement:" )
     display_cols = [ "split",  "molecule", "reaction_id", "max_displacement_A", "rmsd_displacement_A",  "energy_decrease_kj_mol", "initial_max_force_ev_A", "final_max_force_ev_A", ]
     display_cols = [c for c in display_cols if c in success.columns]
-    print(  success.sort_values("max_displacement_A", ascending=False).head(20)[display_cols].to_string(index=False) )
+    print(  success.sort_values("max_displacement_A", ascending=False).head(max_displacement_count)[display_cols].to_string(index=False) )
 
     plot_histogram( success, "energy_decrease_kj_mol", "Energy decrease after xTB relaxation [kJ/mol]" )
 
