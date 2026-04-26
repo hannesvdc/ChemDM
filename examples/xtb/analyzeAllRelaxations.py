@@ -1,9 +1,5 @@
-import argparse
-
 from pathlib import Path
-
 import pandas as pd
-
 import matplotlib.pyplot as plt
 
 def load_relaxation_table(csv_path: str | Path) -> pd.DataFrame:
@@ -53,7 +49,6 @@ def plot_scatter( df: pd.DataFrame, x: str, y: str, xlabel: str, ylabel: str ):
     plt.show()
 
 def main():
-    data_dir = Path( "/Users/hannesvdc/Open Numerics/ReactionStudio/data" )
     csv_path = "./Results/xtb_relaxation_sweep.csv"
     df = load_relaxation_table( csv_path )
 
@@ -73,8 +68,7 @@ def main():
                 "rmsd_displacement_A",
                 "mean_displacement_A",
                 "initial_max_force_ev_A",
-                "final_max_force_ev_A",
-    ]
+                "final_max_force_ev_A", ]
 
     print()
     print("Summary statistics:")
