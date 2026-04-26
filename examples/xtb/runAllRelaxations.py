@@ -66,7 +66,7 @@ def run_sweep( data_dir: str | Path,
     for molecule, reaction_records in molecule_map.items():
 
         for reaction_id in reaction_records:
-            filename = REACTION_FILE_TEMPLATE.format(split="train", reaction_id=reaction_id, molecule=molecule )
+            filename = REACTION_FILE_TEMPLATE.format(split=kind, reaction_id=reaction_id, molecule=molecule )
             with open( data_dir / filename, "r" ) as jsonfile:
                 trajectory = json.load( jsonfile )
                 print( "Reaction Loaded." )
@@ -94,7 +94,7 @@ def run_sweep( data_dir: str | Path,
 
 def main() -> None:
     data_dir = Path( "/Users/hannesvdc/Open Numerics/ReactionStudio/data" )
-    output_csv = data_dir / "xtb_relaxation_sweep.csv"
+    output_csv = "./Results/xtb_relaxation_sweep.csv"
 
     df_train = run_sweep( data_dir=data_dir, output_csv=output_csv, kind="train" )
     df_val = run_sweep( data_dir=data_dir, output_csv=output_csv, kind="val" )
