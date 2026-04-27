@@ -65,14 +65,15 @@ class TransitionPathE3NNLayer(nn.Module):
         self.n_rbf = n_rbf
         self.self_interaction_init_scale = self_interaction_init_scale
         self.feature_residual_scale = feature_residual_scale
+        self.eps = 0.02 # for inverse distance
 
         self.lmax = max(ir.l for _, ir in self.irreps_node)
         self.irreps_sh = o3.Irreps.spherical_harmonics(self.lmax)
 
         # Scalar edge features:
-        #   bondA, bondB, d, d^2, dA, dB, dA-dB, RBF(d), RBF(dA), RBF(dB)
+        #   bondA, bondB, d, d^2, 1/d, dA, 1/dA, dB, 1/dB, dA-dB, RBF(d), RBF(dA), RBF(dB)
         self.rbf = DistanceRBFEmbedding(0.0, d_cutoff, n_rbf=n_rbf)
-        self.n_edge_scalar = 7 + 3 * self.rbf.out_dim
+        self.n_edge_scalar = 10 + 3 * self.rbf.out_dim
 
         # Tensor product for edge messages:
         #   message_ij = TP( f_j, Y(r_ij); weights(edge_scalar) )
@@ -86,7 +87,7 @@ class TransitionPathE3NNLayer(nn.Module):
         assert self.irreps_0e.dim > 0, "TransitionPathE3NNLayer expects at least one 0e block."
         self.radial_context_dim = self.n_edge_scalar + 2 * self.irreps_0e.dim
         self.radial_network = MultiLayerPerceptron(
-            [self.radial_context_dim, 64, 64, self.tp.weight_numel], # type: ignore
+            [self.radial_context_dim, 128, 128, self.tp.weight_numel], # type: ignore
             nn.GELU, "e3nn_radial_network" )
         
         # Residual scalar gate on each raw edge message before aggregation.
@@ -210,21 +211,30 @@ class TransitionPathE3NNLayer(nn.Module):
         dist_raw = pt.sqrt((edge_vec * edge_vec).sum(dim=1, keepdim=True).clamp_min(1e-8))
         edge_dir = edge_vec / dist_raw
         dist = dist_raw / self.d_cutoff
+        inv_dist = self.eps / pt.sqrt(dist**2 + self.eps**2)
 
         # Endpoint edge geometry.
         edge_vec_A = xA.x[dst] - xA.x[src]
         dist_A_raw = pt.sqrt((edge_vec_A * edge_vec_A).sum(dim=1, keepdim=True).clamp_min(1e-8))
         dist_A = dist_A_raw / self.d_cutoff
+        inv_dist_A = self.eps / pt.sqrt(dist_A**2 + self.eps**2)
 
         edge_vec_B = xB.x[dst] - xB.x[src]
         dist_B_raw = pt.sqrt((edge_vec_B * edge_vec_B).sum(dim=1, keepdim=True).clamp_min(1e-8))
         dist_B = dist_B_raw / self.d_cutoff
+        inv_dist_B = self.eps / pt.sqrt(dist_B**2 + self.eps**2)
+        print( pt.min(dist), pt.min(dist_A), pt.min(dist_B) )
+        print( pt.max(inv_dist), pt.max(inv_dist_A), pt.max(inv_dist_B) )
 
         bondA = is_bond_A[:, None].to(x.dtype)
         bondB = is_bond_B[:, None].to(x.dtype)
 
-        edge_features = pt.cat( ( bondA, bondB, dist, dist ** 2, dist_A, dist_B,
-                dist_A - dist_B, self.rbf(dist_raw), self.rbf(dist_A_raw), self.rbf(dist_B_raw), ), dim=1, )
+        edge_features = pt.cat( ( bondA, bondB, 
+                                  dist, dist ** 2, inv_dist,
+                                  dist_A, inv_dist_A, dist_B, inv_dist_B,
+                                  dist_A - dist_B, 
+                                  self.rbf(dist_raw), self.rbf(dist_A_raw), self.rbf(dist_B_raw),
+                                ), dim=1, )
 
         return EdgeData( src, dst, edge_dir, edge_features )
     
