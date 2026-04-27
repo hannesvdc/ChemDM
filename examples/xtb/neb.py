@@ -295,7 +295,7 @@ def neb_least_squares( context: mm.Context,
     # Run the least-squares optimizer
     x0 = pack( path0[1:-1, :, :] )
     neb_force_residual( x0 );  callback( [] ) # Log the initial state
-    result = opt.least_squares( neb_force_residual, x0, ftol=force_tol, callback=callback, jac_sparsity=sparsity )
+    result = opt.least_squares( neb_force_residual, x0, ftol=1e-6, callback=callback, jac_sparsity=sparsity )
     success = bool( result.success ) or logger.converged
     print( 'Least-Squares Converged: ', success )
     
@@ -347,15 +347,19 @@ def run_neb_xtb( context: mm.Context,
     best_force:
         Best max NEB force encountered, eV / Angstrom.
     """
-    print( 'Arclenghts pre-Adam:', normalized_arclengths(path0_A) )
-    path_opt_A, E_best, info = neb_adam( context, path0_A, n_steps, lr, k, max_step_A, force_tol )
-    print( 'Arclenghts after Adam:', normalized_arclengths(path_opt_A) )
+    
+    # Measure how well we can do at all with fixed end points
+    _, F0 = evaluate_path(context, path0_A)
+    xA_rms = np.sqrt((F0[0] ** 2).mean())
+    xB_rms = np.sqrt((F0[-1] ** 2).mean())
+    print("xA force RMS:", xA_rms, "eV/A")
+    print("xB force RMS:", xB_rms, "eV/A")
 
-    # If Adam converged, great!
+    # Do Adam optimization first to get close to the MEP. If it converged: great!
+    path_opt_A, E_best, info = neb_adam( context, path0_A, n_steps, lr, k, max_step_A, force_tol )
     if info["status"] == "converged":
         return path_opt_A, E_best, info["best_force_rms"]
     
     # Else run a fine-tuning step using a quasi-Newton method
     path_opt, E_best, info = neb_least_squares( context, path_opt_A, k, force_tol )
-    print( 'Arclenghts after least-squares:', normalized_arclengths(path_opt) )
     return path_opt, E_best, info["best_force_rms"]
