@@ -36,8 +36,6 @@ class NewtonE3NN(nn.Module):
         d_cutoff: float = 5.0,
         n_freq: int = 8,
         n_rbf: int = 10,
-        coordinate_step_scale: float = 1.0,
-        feature_step_scale: float = 1.0,
         reinitialize_features_each_step: bool = False,
     ) -> None:
         super().__init__()
@@ -51,8 +49,6 @@ class NewtonE3NN(nn.Module):
         self.d_cutoff = d_cutoff
         self.n_freq = n_freq
 
-        self.coordinate_step_scale = coordinate_step_scale
-        self.feature_step_scale = feature_step_scale
         self.reinitialize_features_each_step = reinitialize_features_each_step
 
         # Atomic scalar information
@@ -123,12 +119,11 @@ class NewtonE3NN(nn.Module):
             n_rbf=n_rbf,
         )
 
-    def initialize_state(
-        self,
-        xA: Molecule,
-        xB: Molecule,
-        s: pt.Tensor,
-    ) -> E3State:
+    def initialize_state( self,
+                          xA: Molecule,
+                          xB: Molecule,
+                          s: pt.Tensor,
+                        ) -> E3State:
         """
         Initialize:
           - scalar node features from atom info + endpoint embeddings + arclength
@@ -182,25 +177,6 @@ class NewtonE3NN(nn.Module):
 
         return E3State(f=f, x=x)
 
-    def _damped_state_update( self, old_state: E3State,
-                                    proposed_state: E3State,
-                                    initial_state: E3State | None = None,
-                            ) -> E3State:
-        """
-        Apply damping to one refinement step.
-
-        The layer itself proposes a full update. The outer model decides how much
-        of that update to accept. This is useful when the same layer is applied
-        repeatedly.
-        """
-        x_new = old_state.x + self.coordinate_step_scale * ( proposed_state.x - old_state.x )
-        f_new = old_state.f + self.feature_step_scale * ( proposed_state.f - old_state.f )
-        if self.reinitialize_features_each_step:
-            assert initial_state is not None
-            f_new = initial_state.f
-
-        return E3State(f=f_new, x=x_new)
-
     def refine_state( self,
                       xA: Molecule,
                       xB: Molecule,
@@ -213,56 +189,23 @@ class NewtonE3NN(nn.Module):
         During training, keeping return_all_states=True is useful because it lets
         you put losses on intermediate refinements.
         """
-        initial_state = E3State( f=state.f, x=self.apply_path_constraints(xA, xB, s, state.x) )
+        initial_state = E3State( f=state.f, x=state.x )
         state = initial_state
         states: list[E3State] = [ state ]
 
         for _ in range(self.n_refinement_steps):
-            proposed_state = self.refinement_layer(xA, xB, s, state)
-            state = self._damped_state_update(
-                old_state=state,
-                proposed_state=proposed_state,
-                initial_state=initial_state,
-            )
-            state = E3State( f=state.f, x=self.apply_path_constraints(xA, xB, s, state.x) )
+            f_new, dx = self.refinement_layer(xA, xB, s, state)
+            x_new = state.x + 4.0 * s[:, None] * (1.0 - s[:, None]) * dx # Ensure end-point preservation. s(1-s) max. value is 0.25
+           
+            if self.reinitialize_features_each_step:
+                f_next = initial_state.f
+            else:
+                f_next = f_new
+
+            state = E3State( f=f_next, x=x_new )
             states.append(state)
 
         return state, states
-    
-    def apply_path_constraints( self,
-                                xA: Molecule,
-                                xB: Molecule,
-                                s: pt.Tensor,
-                                x: pt.Tensor,
-                              ) -> pt.Tensor:
-        """
-        Apply the path constraints after each refinement step:
-        1. endpoint-gated Dirichlet correction
-        2. zero-center-of-mass recentering
-        """
-        x = self.apply_dirichlet_correction(xA, xB, s, x)
-
-        x_molecule = xA.copyWithNewPositions(x)
-        x_molecule = recenterMolecule(x_molecule)
-
-        return x_molecule.x
-
-    def apply_dirichlet_correction( self,
-                                    xA: Molecule,
-                                    xB: Molecule,
-                                    s: pt.Tensor,
-                                    x: pt.Tensor,
-                                  ) -> pt.Tensor:
-        """
-        Enforce endpoint consistency.
-
-        The network evolves x, but the final correction is gated by s(1-s),
-        so the final prediction equals xA at s=0 and xB at s=1.
-        """
-        base = (1.0 - s[:, None]) * xA.x + s[:, None] * xB.x
-        correction = x - base
-        x_final = base + s[:, None] * (1.0 - s[:, None]) * correction
-        return x_final
 
     def forward( self,
                  xA: Molecule,

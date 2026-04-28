@@ -160,8 +160,9 @@ def main( exp_name : str ):
                         s : pt.Tensor,
                         x_ref : pt.Tensor ) -> tuple[pt.Tensor, pt.Tensor]:
         xs, states = tp_network( xA, xB, s )
-        loss = loss_fcn( states, x_target=x_ref )
-        final_state_loss = pt.norm( xs.x - x_ref )
+        loss = loss_fcn( states, xs, x_target=x_ref )
+        with pt.no_grad():
+            final_state_loss = loss_fcn._single_state_loss(xs.x, x_ref, xs.molecule_id)
         return loss, final_state_loss
 
     @pt.no_grad()
@@ -173,9 +174,9 @@ def main( exp_name : str ):
         for batch_idx, (xA, xB, s, x_ref) in enumerate( loader ):
             if batch_idx >= max_batches:
                 break
-            xA    = xA.to( device=device, dtype=dtype )
-            xB    = xB.to( device=device, dtype=dtype )
-            s     = s.to( device=device, dtype=dtype )
+            xA = xA.to( device=device, dtype=dtype )
+            xB = xB.to( device=device, dtype=dtype )
+            s = s.to( device=device, dtype=dtype )
             x_ref = x_ref.to( device=device, dtype=dtype )
 
             xs, states = tp_network( xA, xB, s )

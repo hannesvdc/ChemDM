@@ -2,6 +2,7 @@ import torch as pt
 import torch.nn as nn
 
 from chemdm.NewtonE3NNLayer import E3State
+from chemdm.MoleculeGraph import BatchedMoleculeGraph
 
 
 class NewtonLoss(nn.Module):
@@ -18,30 +19,35 @@ class NewtonLoss(nn.Module):
     The loss ignores states[0] by default.
     """
 
-    def __init__( self, gamma: float = 0.7, reduction: str = "mean" ) -> None:
+    def __init__( self, gamma: float = 0.7 ) -> None:
         super().__init__()
 
         assert 0.0 < gamma <= 1.0
-        assert reduction in ("mean", "sum")
-
         self.gamma = gamma
-        self.reduction = reduction
 
-    def _single_state_loss( self, x_pred: pt.Tensor,  x_target: pt.Tensor ) -> pt.Tensor:
+    def _single_state_loss( self, x_pred: pt.Tensor,  
+                                  x_target: pt.Tensor,
+                                  molecule_id : pt.Tensor ) -> pt.Tensor:
         """
         RMSD-like coordinate loss.
 
         x_pred, x_target: shape (N, 3)
         """
-        assert x_pred.shape == x_target.shape
+        assert x_pred.shape == x_target.shape, f"`x_pred` and `x_target` must have the same shape,  but got {x_pred.shape} and {x_target.shape}."
+        assert molecule_id.shape[0] == x_pred.shape[0],  "`molecule_id` must have one entry per atom."
 
         squared_dist = ((x_pred - x_target) ** 2).sum(dim=-1)  # (N,)
 
-        if self.reduction == "mean":
-            return squared_dist.mean()
-        return squared_dist.sum()
+        molecule_losses = []
+        for mol_id in pt.unique(molecule_id):
+            mask = (molecule_id == mol_id)
+            molecule_losses.append( squared_dist[mask].mean() )
 
-    def forward( self, states: list[E3State], x_target: pt.Tensor, ) -> pt.Tensor:
+        return pt.stack( molecule_losses ).mean()
+
+    def forward( self, states: list[E3State], 
+                       x_final : BatchedMoleculeGraph,
+                       x_target: pt.Tensor, ) -> pt.Tensor:
         loss_states = states[1:]
         assert len(loss_states) > 0, "No refinement states available for loss."
 
@@ -57,6 +63,6 @@ class NewtonLoss(nn.Module):
 
         loss = pt.zeros((), device=device, dtype=dtype)
         for weight, state in zip(weights, loss_states):
-            loss = loss + weight * self._single_state_loss(state.x, x_target)
+            loss = loss + weight * self._single_state_loss(state.x, x_target, x_final.molecule_id)
 
         return loss

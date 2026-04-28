@@ -159,7 +159,6 @@ class TransitionPathE3NN(nn.Module):
         correction = state.x - base
         x_final = base + s[:, None] * (1.0 - s[:, None]) * correction
 
-        # Ensure zero center of mass
+        # Put in the molecule framework
         x_molecule = xA.copyWithNewPositions(x_final)
-        x_molecule = recenterMolecule(x_molecule)
         return x_molecule

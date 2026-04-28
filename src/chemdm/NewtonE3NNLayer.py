@@ -309,17 +309,14 @@ class NewtonE3NNLayer(nn.Module):
         gate_xA = coord_gates[:, 2:3]
         gate_xB = coord_gates[:, 3:4]
 
-        x_new = (
-            x
-            + gate_delta_x * delta_x
-            + gate_neighbor * neighbor_update
-            + gate_xA * (1.0 - s[:, None]) * (xA.x - x)
-            + gate_xB * s[:, None] * (xB.x - x)
-        )
+        dx = gate_delta_x * delta_x \
+           + gate_neighbor * neighbor_update \
+           + gate_xA * (1.0 - s[:, None]) * (xA.x - x) \
+           + gate_xB * s[:, None] * (xB.x - x)
 
-        return x_new
+        return dx
 
-    def forward( self, xA: Molecule, xB: Molecule, s: pt.Tensor, state: E3State, ) -> E3State:
+    def forward( self, xA: Molecule, xB: Molecule, s: pt.Tensor, state: E3State, ) -> tuple[pt.Tensor, pt.Tensor]:
         s = self._check_inputs(xA, xB, s, state)
 
         f = state.f
@@ -328,6 +325,6 @@ class NewtonE3NNLayer(nn.Module):
         edges = self._build_edges(xA, xB, x)
         agg = self._aggregate_messages(f, edges)
         f_new = self._update_features(f, agg)
-        x_new = self._coordinate_update(xA, xB, s, x, f_new, edges)
+        dx = self._coordinate_update(xA, xB, s, x, f_new, edges)
 
-        return E3State(f=f_new, x=x_new)
+        return f_new, dx
