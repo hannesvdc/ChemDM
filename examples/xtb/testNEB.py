@@ -49,8 +49,7 @@ def build_molecule_reaction_map(data_dir: str | Path, kind : str) -> dict[str, l
     return { molecule: sorted(reaction_ids) for molecule, reaction_ids in sorted(molecule_to_reactions.items()) }
 
 def runNEB( context: mm.Context,
-            trajectory : dict,
-            verbose : bool = False ):
+            trajectory : dict ):
     path0_A = np.asarray( trajectory["x"] )
     print(path0_A.shape)
 
@@ -80,4 +79,4 @@ if __name__ == '__main__':
         print( "Reaction Loaded." )
     
     context = create_xtb_context( trajectory["Z"] )
-    runNEB( context, trajectory, verbose=True )
+    runNEB( context, trajectory )
