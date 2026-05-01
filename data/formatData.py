@@ -275,21 +275,9 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                                 "xA": trajectory.xA.tolist(),
                                 "xB": trajectory.xB.tolist(),
                                 "s": trajectory.s.tolist(),
-                                "x": trajectory.x.tolist(),}
-                    json.dump( json_dict, sf )
-                with open( os.path.join(app_store_directory, f"{evaltype}_reaction_{reaction_counter}_molecule_{molecule}_aligned.json"), "w") as sf:
-                    trajectory = reaction_trajectories[-1]
-
-                    # Kabsch alignment + CoM enforcement for data validation.
-                    trajectory = enforceCOM( trajectory )
-                    trajectory = alignToReactant( trajectory )
-
-                    # Store as JSON
-                    json_dict = { "Z" : trajectory.Z.tolist(), 
-                                "xA": trajectory.xA.tolist(),
-                                "xB": trajectory.xB.tolist(),
-                                "s": trajectory.s.tolist(),
-                                "x": trajectory.x.tolist(),}
+                                "x": trajectory.x.tolist(),
+                                "GA": trajectory.GA.tolist(),
+                                "GB": trajectory.GB.tolist()}
                     json.dump( json_dict, sf )
                 storage_counter += 1
         print( f"Number of {evaltype} reactions store: {storage_counter} / {reaction_counter}" )
