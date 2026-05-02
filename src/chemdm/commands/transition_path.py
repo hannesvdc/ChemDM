@@ -80,7 +80,7 @@ def _ml_initial_guess(Z, xA, xB, GA, GB):
 
     model_path = os.environ.get(
         "CHEMDM_TRANSITION_PATH_MODEL",
-        str(_REPO_ROOT / "examples" / "xtb" / "MLModel" / "best_gnn.pth"),
+        str(_REPO_ROOT / "models" / "newton_reaction_trajectory_model.pth"),
     )
     state_dict = pt.load(model_path, map_location=pt.device("cpu"), weights_only=True)
     tp_network.load_state_dict(state_dict)
