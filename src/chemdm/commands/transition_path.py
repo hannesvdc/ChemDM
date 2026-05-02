@@ -84,14 +84,15 @@ def _ml_initial_guess(Z, xA, xB, GA, GB):
     )
     state_dict = pt.load(model_path, map_location=pt.device("cpu"), weights_only=True)
     tp_network.load_state_dict(state_dict)
+    tp_network.to( dtype=pt.float32 )
 
     n_images = 10
     s_t = pt.linspace(0.0, 1.0, n_images)
     xa_batched, xb_batched, s_values = [], [], []
     for n in range(n_images):
-        xa_batched.append(MoleculeGraph(pt.tensor(Z, dtype=pt.int), pt.tensor(xA), pt.tensor(GA)))
-        xb_batched.append(MoleculeGraph(pt.tensor(Z, dtype=pt.int), pt.tensor(xB), pt.tensor(GB)))
-        s_values.append(s_t[n] * pt.ones(mol_size))
+        xa_batched.append(MoleculeGraph(pt.tensor(Z, dtype=pt.int), pt.tensor(xA, dtype=pt.float32), pt.tensor(GA)))
+        xb_batched.append(MoleculeGraph(pt.tensor(Z, dtype=pt.int), pt.tensor(xB, dtype=pt.float32), pt.tensor(GB)))
+        s_values.append(s_t[n] * pt.ones(mol_size, dtype=pt.float32))
     xa_mol = batchMolecules(xa_batched)
     xb_mol = batchMolecules(xb_batched)
     s_cat = pt.cat(s_values)

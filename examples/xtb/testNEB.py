@@ -119,10 +119,11 @@ def runNEB( context: mm.Context,
     path_opt_A, E_opt_eV, best_force = run_neb_xtb( context, path0_A, n_steps, lr, k, max_step_A, force_tol )
 
     print( best_force )
+    print(E_opt_eV)
 
 if __name__ == '__main__':
     data_dir  = Path( "/Users/hannesvdc/Open Numerics/ReactionStudio/data" )
-    split = "val"
+    split = "test"
     molecule_map = build_molecule_reaction_map( data_dir, split )
     print(f"Found {len(molecule_map)} molecules: ", molecule_map.keys() )
 
