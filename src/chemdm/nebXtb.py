@@ -5,8 +5,8 @@ import torch as pt
 import openmm as mm
 import openmm.unit as unit
 
-from diagnostics import has_plateaued, has_started_increasing
-from Logger import LSQLogger
+from chemdm.diagnostics import has_plateaued, has_started_increasing
+from chemdm.Logger import LSQLogger
 
 KJ_MOL_TO_EV = 0.01036427230133138 # eV / kJ
 KJ_MOL_NM_TO_EV_A = KJ_MOL_TO_EV / 10.0
