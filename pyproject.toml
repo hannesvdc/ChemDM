@@ -17,6 +17,9 @@ dependencies = [
     "matplotlib"
 ]
 
+[project.scripts]                                                                                                                                    
+chemdm = "chemdm.cli:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
