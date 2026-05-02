@@ -1,10 +1,9 @@
 import numpy as np
 import torch as pt
 import openmm as mm
-import openmm.unit as unit
 
-from xtbSetup import create_xtb_context
-from neb import run_neb_xtb
+from chemdm.xtbSetup import create_xtb_context
+from chemdm.nebXtb import run_neb_xtb
 from chemdm.NewtonE3NN import NewtonE3NN
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules

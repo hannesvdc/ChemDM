@@ -4,7 +4,7 @@ import openmm as mm
 import openmm.unit as unit
 from openmm import app
 
-from xtbSetup import create_xtb_system
+from chemdm.xtbSetup import create_xtb_system
 from safeOptimizer import minimize_with_adam
 
 from typing import Optional

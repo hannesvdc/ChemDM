@@ -2,8 +2,8 @@ import numpy as np
 import torch as pt
 import openmm as mm
 
-from xtbSetup import create_xtb_context
-from neb import run_neb_xtb, normalized_arclengths
+from chemdm.xtbSetup import create_xtb_context
+from chemdm.nebXtb import run_neb_xtb, normalized_arclengths
 
 from chemdm.NewtonE3NN import NewtonE3NN
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN

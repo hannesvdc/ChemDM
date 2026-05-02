@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from xtbSetup import create_xtb_context
+from chemdm.xtbSetup import create_xtb_context
 from testTransition1xPipeline import build_molecule_reaction_map, runRelaxation
 
 REACTION_FILE_PATTERN = re.compile( r"^(?P<split>.+?)_reaction_(?P<reaction_id>\d+)_molecule_(?P<molecule>.+)\.json$" )

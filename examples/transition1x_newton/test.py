@@ -55,15 +55,13 @@ def evaluateML( tp_network : NewtonE3NN,
     path_shape = (n_images, mol_size, 3)
 
     # Evaluate
-    xa_batched = []
-    xb_batched = []
-    s_values = []
-    for n in range( n_images ):
-        xa_batched.append( MoleculeGraph( Z, xA, Ga ) )
-        xb_batched.append( MoleculeGraph( Z, xB, Gb ) )
-        s_values.append( float(s[n]) * pt.ones(mol_size) )
+    xa_graph = MoleculeGraph(Z, xA, Ga)
+    xb_graph = MoleculeGraph(Z, xB, Gb)
+    xa_batched = [xa_graph] * n_images
+    xb_batched = [xb_graph] * n_images
     xa_mol = batchMolecules( xa_batched )
     xb_mol = batchMolecules( xb_batched )
+    s_values = [ s_i.expand(mol_size) for s_i in s ]
     s_values = pt.cat( s_values )
 
     molecule_path, intermediate_states = tp_network( xa_mol, xb_mol, s_values )
@@ -115,13 +113,15 @@ def main():
             errors = evaluateMoleculeErrors( layer_states, x_ref )
             molecule_errors[n,:] = errors
 
-        # Plot the per-layer errors of all molecues in log-scale. Is there a decay?
-        layers = np.arange( n_layers )
-        plt.semilogy( layers, molecule_errors )
-        plt.title( kind + ' errors')
-        plt.xlabel( 'Layer' )
-        plt.ylabel( 'Molecule Error' )
-        plt.show()
+        np.save( './experiments/' + kind + '_errors.npy', molecule_errors )
+
+        # # Plot the per-layer errors of all molecues in log-scale. Is there a decay?
+        # layers = np.arange( n_layers )
+        # plt.semilogy( layers, molecule_errors )
+        # plt.title( kind + ' errors')
+        # plt.xlabel( 'Layer' )
+        # plt.ylabel( 'Molecule Error' )
+        # plt.show()
 
 if __name__ == '__main__':
     main()

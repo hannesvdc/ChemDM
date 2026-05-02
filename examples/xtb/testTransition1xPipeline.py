@@ -3,7 +3,7 @@ import numpy as np
 import openmm as mm
 import openmm.unit as unit
 
-from xtbSetup import create_xtb_context
+from chemdm.xtbSetup import create_xtb_context
 from safeOptimizer import minimize_with_adam
 
 from pathlib import Path
