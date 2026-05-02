@@ -40,7 +40,7 @@ def make_experiment_dir(exp_name: str, root: str = "./experiments") -> Path:
     return exp_dir
 
 
-def main( exp_name : str ):
+def main( exp_name : str, resume : bool = False ):
     with open( './data_config.json', "r" ) as f:
         data_config = json.load( f )
     data_directory = data_config["data_folder"]
@@ -106,7 +106,7 @@ def main( exp_name : str ):
     # Build the optimizer and scheduler
     lr_min = 1e-6
     lr_max = 1e-3
-    n_epochs = 1500
+    n_epochs = 1000
     warmup_epochs = 25
     weight_decay = 1e-2
 
