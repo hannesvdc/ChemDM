@@ -122,7 +122,7 @@ def plot():
         molecule_errors = np.load( './experiments/' + kind + '_errors.npy' )
         n_layers = molecule_errors.shape[1]
 
-        # subsample
+        # subsample the training errors.
         if kind == 'train':
             n_paths = 100
             indices = random.sample(range(molecule_errors.shape[0]), n_paths)
