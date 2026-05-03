@@ -1,3 +1,4 @@
+import random
 import numpy as np
 import torch as pt
 import matplotlib.pyplot as plt
@@ -115,13 +116,37 @@ def main():
 
         np.save( './experiments/' + kind + '_errors.npy', molecule_errors )
 
-        # # Plot the per-layer errors of all molecues in log-scale. Is there a decay?
-        # layers = np.arange( n_layers )
-        # plt.semilogy( layers, molecule_errors )
-        # plt.title( kind + ' errors')
-        # plt.xlabel( 'Layer' )
-        # plt.ylabel( 'Molecule Error' )
-        # plt.show()
+def plot():
+    # Load train, val and test convergence
+    for kind in ['train', 'val', 'test']:
+        molecule_errors = np.load( './experiments/' + kind + '_errors.npy' )
+        n_layers = molecule_errors.shape[1]
+
+        # subsample
+        if kind == 'train':
+            n_paths = 100
+            indices = random.sample(range(molecule_errors.shape[0]), n_paths)
+            molecule_errors = molecule_errors[indices,:]
+        rel_errors = molecule_errors / molecule_errors[:,0:1]
+
+        # Plot the per-layer errors of all molecues in log-scale. Is there a decay?
+        layers = np.arange( n_layers )
+        plt.figure()
+        plt.semilogy( layers, rel_errors.T )
+        plt.title( f'{kind} Relative Errors' )
+        plt.xlabel( 'Layer' )
+        plt.ylabel( 'Molecule Error' )
+    plt.show()
+
+def parseArguments():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument( '--plot', action='store_true', dest='plot' )
+    return parser.parse_args()
 
 if __name__ == '__main__':
-    main()
+    args = parseArguments()
+    if hasattr( args, 'plot') and bool(args.plot):
+        plot()
+    else:
+        main()
