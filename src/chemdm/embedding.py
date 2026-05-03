@@ -7,18 +7,31 @@ class SinusoidalEmbedding(nn.Module):
     Standard sinusoidal embedding for scalar diffusion time t in [0,1].
     Output shape: (B, 2*n_freq)
     """
-    def __init__(self, n_freq: int = 16):
+    def __init__(self, n_freq: int = 16, 
+                 include_endpoints : bool = False):
         super().__init__()
         self.n_freq = n_freq
-        self.n_embeddings = 2 * self.n_freq
+        self.include_endpoints = include_endpoints
+        if self.include_endpoints:
+            self.n_embeddings = 2 * self.n_freq + 2
+        else:
+            self.n_embeddings = 2 * self.n_freq
 
     def forward(self, t: pt.Tensor) -> pt.Tensor:
         # t: (B,)
         # frequencies: (n_freq,)
         freqs = (2.0 * math.pi) * (2.0 ** pt.arange(self.n_freq, device=t.device, dtype=t.dtype))
-        t = t[:, None]  # (B,1)
-        emb = pt.cat([ pt.sin(freqs[None, :] * t), pt.cos(freqs[None, :] * t)], dim=1 )
-        return emb  # (, 2+2*n_freq)
+        t = pt.atleast_1d( t )
+        t = t[...,None]
+
+        angles = t * freqs
+        sin_emb, cos_emb = pt.sin( angles ), pt.cos( angles )
+        
+        if self.include_endpoints:
+            emb = pt.cat([ sin_emb, cos_emb, t, 1.0 - t], dim=1 )
+        else:
+            emb = pt.cat([ sin_emb, cos_emb], dim=1 )
+        return emb  # (, self.n_embeddings)
     
 class ArcLengthEmbedding(nn.Module):
     """

@@ -7,7 +7,7 @@ from chemdm.AtomicOnlyInformation import AtomicInformation
 from chemdm.MLP import MultiLayerPerceptron
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.embedding import ArcLengthEmbedding
-from chemdm.MoleculeGraph import Molecule, recenterMolecule
+from chemdm.MoleculeGraph import Molecule
 from chemdm.NewtonE3NNLayer import NewtonE3NNLayer, E3State
 
 
