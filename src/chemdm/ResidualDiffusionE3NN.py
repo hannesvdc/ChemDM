@@ -81,7 +81,7 @@ class ResidualDiffusionE3NN(nn.Module):
             self.atomic_information_outputs
             + self.xA_embedding_network.state_size
             + self.xB_embedding_network.state_size
-            + self.arclength_embedding.getNumberOfFeatures()
+            + self.arclength_embedding.n_embeddings
             + time_embedding_outputs
         )
 

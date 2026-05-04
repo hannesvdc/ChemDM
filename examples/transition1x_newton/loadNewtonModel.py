@@ -30,6 +30,6 @@ def loadNewtonModel( store_root : str, device : pt.device, dtype : pt.dtype) -> 
         n_rbf=n_rbf,
     )
     tp_network.load_state_dict( newton_weights )
-    tp_network.to( dtype=dtype )
+    tp_network.to( device=device, dtype=dtype )
 
     return tp_network

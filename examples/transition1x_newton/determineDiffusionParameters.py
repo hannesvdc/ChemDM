@@ -84,7 +84,8 @@ def main( ):
                          batch_size=1,
                          shuffle=False,
                          num_workers=8,
-                         collate_fn=collate_molecules, )
+                         collate_fn=collate_molecules, 
+                         prefetch_factor=2)
     
     # Create the network
     device = pt.device( 'cpu' )
@@ -105,8 +106,9 @@ def main( ):
     sqrt_one_minus_alpha_bar = pt.sqrt(1.0 - alpha_bar)
 
     print( sqrt_alpha_bar[-1] )
-    residual_scale = 1.0
-    noises = []
+#    noises = []
+    sum_sq = 0.0
+    count = 0
     for reaction_idx, (xA, xB, s, x_ref) in enumerate( loader ):
         print( f'Reaction {reaction_idx}' )
         xA.to( dtype=dtype )
@@ -116,7 +118,11 @@ def main( ):
         # Evaluate the forward network
         x_newton, _ = tp_network( xA, xB, s )
         x_newton = x_newton.x
-        c0 = (x_ref - x_newton) / residual_scale
+        c0 = x_ref - x_newton
+
+        # Compute a streaming residual scale
+        sum_sq += (c0 ** 2).sum()
+        count += c0.numel()
 
         # Step forward using 
         eps = pt.randn_like(c0)
@@ -135,17 +141,20 @@ def main( ):
         #    noise_per_size[mol_size] = cT
 
         # Plot per reaction
-        noises.append( pt.flatten( cT ) )
+#        noises.append( pt.flatten( cT ) )
 
-        if len(noises) == 10:
-            cT_plot = pt.cat( noises )
-            noises = []
-            n_bins = int( math.sqrt( len( cT_plot ) ) )
-            plt.figure()
-            plt.hist( cT_plot.numpy(), bins=n_bins, density=True )
-            plt.title( f"Reaction {reaction_idx}" )
-            plt.xlabel( f"Noise" )
-            plt.show()
+        # if len(noises) == 10:
+        #     cT_plot = pt.cat( noises )
+        #     noises = []
+        #     n_bins = int( math.sqrt( len( cT_plot ) ) )
+        #     plt.figure()
+        #     plt.hist( cT_plot.numpy(), bins=n_bins, density=True )
+        #     plt.title( f"Reaction {reaction_idx}" )
+        #     plt.xlabel( f"Noise" )
+        #     plt.show()
+
+    residual_scale = math.sqrt(sum_sq / count)
+    print( f"Dataset Residual Scale: {residual_scale}" )
 
 
 if __name__ == '__main__':

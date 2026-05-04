@@ -249,12 +249,14 @@ def main( exp_name : str ):
     train_counter = []
     train_losses = []
     train_grads = []
+    train_final_losses = []
     def train( epoch : int ) -> Tuple[float,float, float]:
         diffusion_network.train()
 
         # Generate random batching indices
         n_batches = len(train_loader)
         epoch_loss = 0.0
+        grad_norm = 0.0
         n_success = 0
         final_state_epoch_loss = 0.0
         for batch_idx, (xA, xB, s, x_ref) in enumerate( train_loader ):
@@ -268,7 +270,7 @@ def main( exp_name : str ):
 
             # Sample diffusion time
             with pt.no_grad():
-                n_molecules = len( pt.unique(xA.molecule_id) )
+                n_molecules = int( xA.molecule_id.max().item() ) + 1
                 t_mol = pt.randint( 0, T, (n_molecules,), device=x_ref.device )
                 t_atom = t_mol[ xA.molecule_id.long() ]
 
@@ -294,6 +296,7 @@ def main( exp_name : str ):
             train_counter.append(epoch_idx)
             train_losses.append(loss.item())
             train_grads.append(grad_norm)
+            train_final_losses.append(final_state_loss.item())
             if (batch_idx+1) % 1 == 0:
                 print('Train Epoch: {} [{}/{}] \tLoss: {:.6f} \t Gradient Norm {:.6f} \t Learning Rate {:.2E}'
                     .format( epoch, batch_idx+1, n_batches, loss.item(), grad_norm, optimizer.param_groups[-1]["lr"] ), flush=True)
@@ -385,8 +388,8 @@ def main( exp_name : str ):
             run.finish()
 
     # Store training convergence
-    np.save( exp_dir / "diffusion_train_convergence.npy", np.vstack( (np.array(train_counter), np.array(train_losses), np.array(train_grads)) ) )
-    np.save( exp_dir / "diffusion_valid_convergence.npy", np.vstack( (np.array(valid_counter), np.array(valid_losses) ) ) )
+    np.save( exp_dir / "diffusion_train_convergence.npy", np.vstack( (np.array(train_counter), np.array(train_losses), np.array(train_grads), np.array(train_final_losses)) ) )
+    np.save( exp_dir / "diffusion_valid_convergence.npy", np.vstack( (np.array(valid_counter), np.array(valid_losses), np.array(valid_final_losses) ) ) )
 
     # Plot the loss and grad norm
     plt.semilogy( train_counter, train_losses, label='Losses', alpha=0.5)
