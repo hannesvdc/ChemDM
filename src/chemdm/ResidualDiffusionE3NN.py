@@ -6,7 +6,7 @@ from e3nn import o3
 from chemdm.AtomicOnlyInformation import AtomicInformation
 from chemdm.MLP import MultiLayerPerceptron
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.MoleculeGraph import Molecule
+from chemdm.MoleculeGraph import Molecule, findAllDistanceNeighbors
 from chemdm.NewtonE3NNLayer import NewtonE3NNLayer, E3State
 from chemdm.embedding import SinusoidalEmbedding
 
@@ -134,6 +134,7 @@ class ResidualDiffusionE3NN(nn.Module):
             irreps_node_str=irreps_node_str,
             d_cutoff=d_cutoff,
             n_rbf=n_rbf,
+            recompute_neighbors=False,
         )
 
     def initialize_state( self, xA: Molecule,
@@ -243,11 +244,14 @@ class ResidualDiffusionE3NN(nn.Module):
         assert pt.all(xA.Z == xB.Z), "`xA` and `xB` must have the same atoms in the same ordering."
         s = s.flatten()
         N = len(xA.Z)
-
         assert s.numel() == N
+        t = t.flatten()
+        assert t.numel() == N
         assert c_t.shape == (N, 3)
 
+        # Set Newton as base and compute its distance neighbors
         x_base_tensor = x_base.x
+        all_edges = findAllDistanceNeighbors( x_base, self.d_cutoff )
 
         # Endpoint gate. Vanishes at s=0 and s=1; max value is 1 at s=0.5.
         gate = 4.0 * s[:, None] * (1.0 - s[:, None])
@@ -258,11 +262,11 @@ class ResidualDiffusionE3NN(nn.Module):
 
         eps_pred = pt.empty_like( state.x )
         for k in range(self.n_denoising_steps):
-            f_new, dx = self.denoising_layer(xA, xB, s, state)
+            f_new, dx = self.denoising_layer(xA, xB, s, state, all_edges=all_edges)
 
             eps_pred = dx
             x_next = state.x
             state = E3State(f=f_new, x=x_next)
 
-        # Put in the molecule framework and return. CoM is taken care of.
+        # Return predicted noise. Put in the molecule framework for consistency.
         return eps_pred

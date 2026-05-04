@@ -56,7 +56,8 @@ class NewtonE3NNLayer(nn.Module):
         d_cutoff: float = 5.0,
         n_rbf: int = 10,
         self_interaction_init_scale: float = 0.0,
-        feature_residual_scale : float = 0.2
+        feature_residual_scale : float = 0.2,
+        recompute_neighbors : bool = True,
     ) -> None:
         super().__init__()
 
@@ -66,6 +67,7 @@ class NewtonE3NNLayer(nn.Module):
         self.self_interaction_init_scale = self_interaction_init_scale
         self.feature_residual_scale = feature_residual_scale
         self.eps = 0.02 # for inverse distance
+        self.recompute_neighbors = recompute_neighbors
 
         self.lmax = max(ir.l for _, ir in self.irreps_node)
         self.irreps_sh = o3.Irreps.spherical_harmonics(self.lmax)
@@ -190,14 +192,13 @@ class NewtonE3NNLayer(nn.Module):
     def _computeBondKeys( self, edge_index : pt.Tensor, N : int ) -> pt.Tensor:
         return edge_index[:,0] * N + edge_index[:,1]
     
-    def _build_edges( self, xA: Molecule, xB: Molecule, x: pt.Tensor, ) -> EdgeData:
+    def _build_edge_features( self, xA: Molecule, xB: Molecule, x: pt.Tensor, all_edges : pt.Tensor ) -> EdgeData:
         """
         Neighbor search and scalar edge-feature construction.
         """
         N = len( xA.Z )
 
-        tempMolecule = xA.copyWithNewPositions( x )
-        all_edges = findAllDistanceNeighbors( tempMolecule, self.d_cutoff )
+
         distance_keys = self._computeBondKeys( all_edges, N )
         bond_A_keys = self._computeBondKeys( xA.edge_index, N )
         bond_B_keys = self._computeBondKeys( xB.edge_index, N )
@@ -316,13 +317,22 @@ class NewtonE3NNLayer(nn.Module):
 
         return dx
 
-    def forward( self, xA: Molecule, xB: Molecule, s: pt.Tensor, state: E3State, ) -> tuple[pt.Tensor, pt.Tensor]:
+    def forward( self, xA: Molecule, xB: Molecule, s: pt.Tensor, state: E3State, *, all_edges : pt.Tensor | None = None) -> tuple[pt.Tensor, pt.Tensor]:
         s = self._check_inputs(xA, xB, s, state)
 
         f = state.f
         x = state.x
 
-        edges = self._build_edges(xA, xB, x)
+        # Calculate the neighbors if needed
+        if self.recompute_neighbors:
+            tempMolecule = xA.copyWithNewPositions( x )
+            all_edges = findAllDistanceNeighbors( tempMolecule, self.d_cutoff )
+        else:
+            if all_edges is None:
+                raise ValueError("`all_edges` must be passed if `recompute_neighbors=False`.")
+            all_edges = all_edges.to(device=x.device)
+
+        edges = self._build_edge_features(xA, xB, x, all_edges)
         agg = self._aggregate_messages(f, edges)
         f_new = self._update_features(f, agg)
         dx = self._coordinate_update(xA, xB, s, x, f_new, edges)
