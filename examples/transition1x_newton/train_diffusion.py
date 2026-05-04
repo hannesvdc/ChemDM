@@ -97,7 +97,7 @@ def main( exp_name : str ):
     # E3NN transition-path network
     irreps_node_str = "48x0e + 16x1o + 16x1e + 8x2e"
     n_denoising_steps = 3
-    residual_scale = 1.0
+    residual_scale = 0.15
     diffusion_network = ResidualDiffusionE3NN( xA_embedding, 
                                                xB_embedding, 
                                                irreps_node_str, 

@@ -78,7 +78,7 @@ def main( ):
     root = data_config.get( "store_root" )
 
     # Load the full transition1x dataset
-    dataset = TransitionPathDataset( "train", data_directory )
+    dataset = TransitionPathDataset( "test", data_directory )
     loader = DataLoader( dataset,
                          batch_size=1,
                          shuffle=False,
@@ -87,7 +87,7 @@ def main( ):
                          prefetch_factor=2)
     
     pt.set_grad_enabled(False)
-    device = pt.device( 'mps' )
+    device = pt.device( 'cpu' )
     dtype = pt.float32
     tp_network = loadNewtonModel( root, device, dtype )
     pt.set_default_device( device )
