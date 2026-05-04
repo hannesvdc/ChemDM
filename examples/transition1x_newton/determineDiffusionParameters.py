@@ -71,7 +71,6 @@ def collate_molecules(trajectories : List
     return xA, xB, s, x_ref
 
 def main( ):
-    pt.set_grad_enabled(False)
 
     with open( './data_config.json', "r" ) as f:
         data_config = json.load( f )
@@ -87,15 +86,17 @@ def main( ):
                          collate_fn=collate_molecules, 
                          prefetch_factor=2)
     
-    # Create the network
-    device = pt.device( 'cpu' )
+    pt.set_grad_enabled(False)
+    device = pt.device( 'mps' )
     dtype = pt.float32
     tp_network = loadNewtonModel( root, device, dtype )
+    pt.set_default_device( device )
+    pt.set_default_dtype( dtype )
 
     # Diffusion model - Cosine schedule (Nichol & Dhariwal, 2021)
     T = 100
     cosine_s = 0.008
-    steps = pt.linspace(0, T, T + 1, dtype=pt.float64)
+    steps = pt.linspace(0, T, T + 1)
     alpha_bar_full = pt.cos( (steps / T + cosine_s) / (1.0 + cosine_s) * (math.pi / 2.0) ) ** 2
     alpha_bar_full = alpha_bar_full / alpha_bar_full[0]
 
@@ -111,9 +112,10 @@ def main( ):
     count = 0
     for reaction_idx, (xA, xB, s, x_ref) in enumerate( loader ):
         print( f'Reaction {reaction_idx}' )
-        xA.to( dtype=dtype )
-        xB.to( dtype=dtype )
-        s = s.to( dtype=dtype )
+        xA.to( device=device, dtype=dtype )
+        xB.to( device=device, dtype=dtype )
+        x_ref = x_ref.to( device=device, dtype=dtype )
+        s = s.to( device=device, dtype=dtype )
 
         # Evaluate the forward network
         x_newton, _ = tp_network( xA, xB, s )
