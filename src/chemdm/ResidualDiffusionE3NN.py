@@ -156,6 +156,7 @@ class ResidualDiffusionE3NN(nn.Module):
         assert x_base.shape == (N, 3)
         assert x_noisy.shape == (N, 3)
         assert c_t.shape == (N, 3)
+        assert pt.all((0.0 <= t) & (t <= 1.0)), "`t` should be normalized to [0,1]."
 
         device = x_noisy.device
         dtype = x_noisy.dtype
