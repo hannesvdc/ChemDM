@@ -24,33 +24,50 @@ from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
 from chemdm.xtbSetup import create_xtb_context
 from chemdm.nebXtb import run_neb_xtb, normalized_arclengths
+from chemdm.relaxMolecule import relaxMolecule
+from chemdm.geometry import kabsch_align_numpy
 
-def run(input_data: dict) -> dict:
+def run( input_data: dict ) -> dict:
     """Compute a NEB-refined transition path.
 
-    Input keys: Z, xA, xB, GA, GB. Optional: x, s (ignored — ML provides initial guess).
+    Input keys: 
+        Trajectory: Z, xA, xB, GA, GB. Optional: x, s (ignored — ML provides initial guess).
+        Algorithm: n_images, theory.
     Output keys: input keys plus x, s, E_opt_eV, best_force.
     """
+    n_images = int( input_data.get( "n_images", 10 ) )
+    theory = input_data.get( "theory", "xTB" )
+    relax_endpoints = bool( input_data.get( "relax_endpoints", False) )
+    
+    trajectory = input_data["trajectory"]
+    Z = np.asarray(trajectory["Z"])
+    xA = np.asarray(trajectory["xA"])
+    xB = np.asarray(trajectory["xB"])
+    GA = np.asarray(trajectory["GA"])
+    GB = np.asarray(trajectory["GB"])
 
-    Z = np.asarray(input_data["Z"])
-    xA = np.asarray(input_data["xA"])
-    xB = np.asarray(input_data["xB"])
-    GA = np.asarray(input_data["GA"])
-    GB = np.asarray(input_data["GB"])
+    # Construct the OpenMM force field
+    if theory.lower() == "xtb":
+        context = create_xtb_context(Z)
 
-    context = create_xtb_context(Z)
-    path0 = _ml_initial_guess(Z, xA, xB, GA, GB)
+    # Align the end points for stability. Relax endpoints if desired.
+    if relax_endpoints:
+        xA = relaxMolecule( context, xA, minimizer="Adam" )
+        xB = relaxMolecule( context, xB, minimizer="Adam" )
+    xB = kabsch_align_numpy( xB, xA )
+
+    # Evaluate the Newton model for a good initial guess.
+    path0 = _ml_initial_guess(Z, xA, xB, GA, GB, n_images)
 
     n_steps = 1000
     lr = 1e-3
     k = 1.0           # eV / A^2
     max_step_A = 0.02
     force_tol = 0.03  # eV / A
-    path_opt, E_opt_eV, best_force = run_neb_xtb(
-        context, path0, n_steps, lr, k, max_step_A, force_tol,
-    )
+    path_opt, E_opt_eV, best_force = run_neb_xtb( context, path0, n_steps, lr, k, max_step_A, force_tol )
     s = normalized_arclengths(path_opt)
 
+    # Send back to the server as a dict.
     output = copy.deepcopy(input_data)
     output["x"] = path_opt
     output["s"] = s
@@ -59,7 +76,13 @@ def run(input_data: dict) -> dict:
     return output
 
 
-def _ml_initial_guess(Z, xA, xB, GA, GB):
+def _ml_initial_guess( Z : np.ndarray, 
+                      xA : np.ndarray, 
+                      xB : np.ndarray, 
+                      GA : np.ndarray, 
+                      GB : np.ndarray,
+                      n_images : int ):
+    assert n_images >= 3, "The number of images along the transition path - including endpoints - must be larger than 3."
 
     mol_size = len(Z)
     d_cutoff = 5.0
@@ -86,7 +109,7 @@ def _ml_initial_guess(Z, xA, xB, GA, GB):
     tp_network.load_state_dict(state_dict)
     tp_network.to( dtype=pt.float32 )
 
-    n_images = 10
+    # Evaluate the network at equidistant points along the trajectory.
     s_t = pt.linspace(0.0, 1.0, n_images)
     xa_batched, xb_batched, s_values = [], [], []
     for n in range(n_images):
