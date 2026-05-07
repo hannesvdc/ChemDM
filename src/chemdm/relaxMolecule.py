@@ -37,7 +37,7 @@ def relaxMolecule( context : mm.Context,
                    verbose : bool = False ) -> np.ndarray:
     """ General entry point for all relaxation codes"""
     if minimizer.lower() == "adam":
-        x_opt, _ = minimize_with_adam( context, x0, verbose=verbose )
+        x_opt = minimize_with_adam( context, x0, verbose=verbose )
     else:
         raise ValueError( f"Minimizer of type {minimizer} is not supported." )
 
@@ -65,23 +65,12 @@ def minimize_with_adam( context : mm.Context,
     info : dict
         Dictionary with optimization run and convergence information.
     """
-    R0_A = np.copy( positions_A )
 
     R = pt.nn.Parameter( pt.tensor(positions_A, dtype=pt.float64) )
     optimizer = pt.optim.Adam([R], lr=lr)
-
     previous_R = R.detach().clone()
 
-    status = "max_steps"
-    error_type = None
-    error_message = None
-    initial_energy_eV = None
-    initial_max_force_ev_A = None
-    final_energy_eV = None
-    final_max_force_ev_A = None
-
     print("step, energy_kJ_mol, energy_eV, max_force_eV_A, step_A")
-
     for step in range(n_steps):
         optimizer.zero_grad(set_to_none=True)
 
@@ -91,17 +80,11 @@ def minimize_with_adam( context : mm.Context,
             energy_eV, forces_ev_A = evaluateEnergyAndForces( context, R_np )
         except Exception as exc:
             print(f"xTB/OpenMM failed at step {step}: {exc}")
-            error_type = type(exc).__name__
-            error_message = str(exc)
-            status = "failed"
             with pt.no_grad():
                 R.copy_(previous_R)
             break
 
         max_force_ev_A = float(np.linalg.norm(forces_ev_A, axis=1).max())
-        if step == 0:
-            initial_energy_eV = float(energy_eV)
-            initial_max_force_ev_A = max_force_ev_A
 
         # Torch minimizes using grad = dE/dR.
         # OpenMM gives force = -dE/dR.
@@ -122,13 +105,10 @@ def minimize_with_adam( context : mm.Context,
                 R.copy_(old_R + displacement)
                 max_disp = max_step_A
 
-        final_energy_eV = float(energy_eV)
-        final_max_force_ev_A = max_force_ev_A
         if step % 10 == 0 or step == n_steps - 1:
             print( f"{step:5d}, ", f"{energy_eV: .10f} [eV], ", f"{max_force_ev_A: .8f} [eV/A], ", f"{max_disp: .6f} [A]" )
         if max_force_ev_A < force_tolerance_ev_A:
             print("Converged.")
-            status = "converged"
             break
 
         previous_R = old_R
@@ -136,5 +116,4 @@ def minimize_with_adam( context : mm.Context,
     # Re-evaluate final geometry, because the last logged energy/force was
     # before the final Adam coordinate update.
     R_final_A = R.detach().cpu().numpy()    
-
     return R_final_A
