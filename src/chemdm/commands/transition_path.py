@@ -10,6 +10,7 @@ import copy
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _XTB_DIR = _REPO_ROOT / "examples" / "xtb"
@@ -26,15 +27,71 @@ from chemdm.xtbSetup import create_xtb_context
 from chemdm.nebXtb import run_neb_xtb, normalized_arclengths
 from chemdm.relaxMolecule import relaxMolecule
 from chemdm.geometry import kabsch_align_numpy
+from chemdm.progress import ProgressCallback
 
-def run( input_data: dict ) -> dict:
+def load_transition_path_model() -> NewtonE3NN:
+    d_cutoff = 5.0
+    n_rbf = 10
+
+    xA_embedding = MolecularEmbeddingGNN(64, 64, 5, d_cutoff)
+    xB_embedding = MolecularEmbeddingGNN(64, 64, 5, d_cutoff)
+
+    n_refinement_steps = 7
+    model = NewtonE3NN( xA_embedding_network=xA_embedding,
+                        xB_embedding_network=xB_embedding,
+                        irreps_node_str="48x0e + 16x1o + 16x1e + 8x2e",
+                        n_refinement_steps=n_refinement_steps,
+                        d_cutoff=d_cutoff,
+                        n_freq=8,
+                        n_rbf=n_rbf,
+                        )
+
+    model_path = os.environ.get( "CHEMDM_TRANSITION_PATH_MODEL", str(_REPO_ROOT / "models" / "newton_reaction_trajectory_model.pth"), )
+    state_dict = pt.load(model_path, map_location=pt.device("cpu"), weights_only=True)
+    model.load_state_dict(state_dict)
+    model.to(dtype=pt.float32)
+    model.eval()
+
+    return model
+
+def run( input_data: dict, 
+         on_progress : ProgressCallback, 
+         tp_network : Optional[NewtonE3NN] ) -> dict:
     """Compute a NEB-refined transition path.
 
-    Input keys: 
-        Trajectory: Z, xA, xB, GA, GB. Optional: x, s (ignored — ML provides initial guess).
-        Algorithm: n_images, theory.
-    Output keys: input keys plus x, s, E_opt_eV, best_force.
+    Arguments:
+    ---------
+    input_data: dict with keys
+        trajectory:
+            Z, xA, xB, GA, GB
+        n_images:
+            Number of images along the path, including endpoints.
+        theory:
+            Currently only "xTB".
+        relax_endpoints:
+            Whether to relax endpoints before path generation.
+    on_progress : ProgressCallback
+        Feed computational progress info back to the caller.
+    tp_network : chemdm.NewtonE3NN
+        The main Newton model used to generate initial guesses for the transitoin path.
+    
+    Returns:
+    --------
+    output_data: dict with keys:
+        x:
+            Optimized path, shape (n_images, n_atoms, 3)
+        s:
+            Normalized arclength coordinates.
+        E_opt_eV:
+            Energies along optimized path.
+        best_force:
+            Best/worst force metric returned by NEB optimizer.
+        diagnostics:
+            Algorithm settings used for this run.
     """
+    print(f"[runner] keys={list(input_data.keys())}", flush=True, file=sys.stderr) 
+    print(f"[runner] {input_data['n_images']}", flush=True, file=sys.stderr) 
+
     n_images = int( input_data.get( "n_images", 10 ) )
     theory = input_data.get( "theory", "xTB" )
     relax_endpoints = bool( input_data.get( "relax_endpoints", False) )
@@ -52,22 +109,30 @@ def run( input_data: dict ) -> dict:
 
     # Align the end points for stability. Relax endpoints if desired.
     if relax_endpoints:
+        on_progress("relax", "Relaxinging reactants and products", fraction=0.02)
         xA = relaxMolecule( context, xA, minimizer="Adam" )
         xB = relaxMolecule( context, xB, minimizer="Adam" )
+
+    on_progress("align", "Aligning endpoints", fraction=0.10)
     xB = kabsch_align_numpy( xB, xA )
 
     # Evaluate the Newton model for a good initial guess.
-    path0 = _ml_initial_guess(Z, xA, xB, GA, GB, n_images)
+    on_progress("generate_path", "Generating initial guess for the path", fraction=0.15)
+    if tp_network is None:
+        tp_network = load_transition_path_model( )
+    path0 = _ml_initial_guess( tp_network, Z, xA, xB, GA, GB, n_images )
 
     n_steps = 1000
     lr = 1e-3
     k = 1.0           # eV / A^2
     max_step_A = 0.02
     force_tol = 0.03  # eV / A
+    on_progress( "fine_tune_path", "Fine-tuning", fraction=0.50 )
     path_opt, E_opt_eV, best_force = run_neb_xtb( context, path0, n_steps, lr, k, max_step_A, force_tol )
     s = normalized_arclengths(path_opt)
 
     # Send back to the server as a dict.
+    on_progress( "path_done", "Calculations Finished", fraction=1.0 )
     output = copy.deepcopy(input_data)
     output["x"] = path_opt
     output["s"] = s
@@ -76,37 +141,19 @@ def run( input_data: dict ) -> dict:
     return output
 
 
-def _ml_initial_guess( Z : np.ndarray, 
+def _ml_initial_guess( tp_network : NewtonE3NN,
+                       Z : np.ndarray, 
                       xA : np.ndarray, 
                       xB : np.ndarray, 
                       GA : np.ndarray, 
                       GB : np.ndarray,
                       n_images : int ):
     assert n_images >= 3, "The number of images along the transition path - including endpoints - must be larger than 3."
-
     mol_size = len(Z)
-    d_cutoff = 5.0
-    n_rbf = 10
 
-    xA_embedding = MolecularEmbeddingGNN(64, 64, 5, d_cutoff)
-    xB_embedding = MolecularEmbeddingGNN(64, 64, 5, d_cutoff)
-
-    tp_network = NewtonE3NN(
-        xA_embedding_network=xA_embedding,
-        xB_embedding_network=xB_embedding,
-        irreps_node_str="48x0e + 16x1o + 16x1e + 8x2e",
-        n_refinement_steps=7,
-        d_cutoff=d_cutoff,
-        n_freq=8,
-        n_rbf=n_rbf,
-    )
-
-    model_path = os.environ.get(
-        "CHEMDM_TRANSITION_PATH_MODEL",
-        str(_REPO_ROOT / "models" / "newton_reaction_trajectory_model.pth"),
-    )
-    state_dict = pt.load(model_path, map_location=pt.device("cpu"), weights_only=True)
-    tp_network.load_state_dict(state_dict)
+    model_path = os.environ.get( "CHEMDM_TRANSITION_PATH_MODEL", str(_REPO_ROOT / "models" / "newton_reaction_trajectory_model.pth") )
+    state_dict = pt.load( model_path, map_location=pt.device("cpu"), weights_only=True )
+    tp_network.load_state_dict( state_dict )
     tp_network.to( dtype=pt.float32 )
 
     # Evaluate the network at equidistant points along the trajectory.
