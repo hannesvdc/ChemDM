@@ -56,25 +56,26 @@ def evaluateML( tp_network : pt.nn.Module,
                xA : np.ndarray, 
                xB : np.ndarray,
                Ga : np.ndarray,
-               Gb : np.ndarray) -> tuple[np.ndarray, Molecule, Molecule, pt.Tensor, Molecule]:
+               Gb : np.ndarray,
+               device : pt.device) -> tuple[np.ndarray, Molecule, Molecule, pt.Tensor, Molecule]:
     mol_size = len(Z)
 
     # Evaluate
     n_images = 10
-    s = pt.linspace(0.0, 1.0, n_images)
+    s = pt.linspace(0.0, 1.0, n_images, device=device)
     xa_batched = []
     xb_batched = []
     s_values = []
     for n in range(len(s)):
-        xa_batched.append( MoleculeGraph( pt.tensor(Z, dtype=pt.int), pt.tensor(xA), pt.tensor(Ga) ) )
-        xb_batched.append( MoleculeGraph( pt.tensor(Z, dtype=pt.int), pt.tensor(xB), pt.tensor(Gb) ) )
-        s_values.append( s[n] * pt.ones(mol_size) )
+        xa_batched.append( MoleculeGraph( pt.tensor(Z, dtype=pt.int, device=device), pt.tensor(xA, device=device), pt.tensor(Ga, device=device) ) )
+        xb_batched.append( MoleculeGraph( pt.tensor(Z, dtype=pt.int, device=device), pt.tensor(xB, device=device), pt.tensor(Gb, device=device) ) )
+        s_values.append( s[n] * pt.ones(mol_size, device=device) )
     xa_mol = batchMolecules( xa_batched )
     xb_mol = batchMolecules( xb_batched )
     s = pt.cat( s_values )
 
     molecule_path, _ = tp_network( xa_mol, xb_mol, s )
-    x = molecule_path.x.detach().numpy() # n_images * mol_size * 3
+    x = molecule_path.x.detach().cpu().numpy() # n_images * mol_size * 3
     x = x.reshape(n_images, mol_size, 3)
     return x, xa_mol, xb_mol, s, molecule_path
 
@@ -92,30 +93,33 @@ def evaluateMaxForce( context : mm.Context,
 def runNEB( tp_network : pt.nn.Module,
             diffusion_network : pt.nn.Module,
             context: mm.Context,
-            trajectory : dict ):
+            trajectory : dict,
+            device : pt.device ):
     k = 1.0 # eV / A^2
+
     
     # Initial Guess : the Newton model
-    path0_A, xa_mol, xb_mol, s, newton_path = evaluateML( tp_network, trajectory["Z"], trajectory["xA"], trajectory["xB"], trajectory["GA"], trajectory["GB"] )
+    path0_A, xa_mol, xb_mol, s, newton_path = evaluateML( tp_network, trajectory["Z"], trajectory["xA"], trajectory["xB"], trajectory["GA"], trajectory["GB"], device )
     maxF = evaluateMaxForce( context, path0_A, k )
     print( f'Max Newton NEB Force {maxF} [eV / A]')
 
     # Generate a few samples using the diffusion model
-    n_images = path0_A.shape[0]
-    mol_size = path0_A.shape[1]
     n_samples = 10
     residual_scale = 0.15
     T = 100
     best_initial = path0_A
     best_F = maxF
-    for count in range(n_samples):
-        x_sample = sample_path( diffusion_network, xa_mol, xb_mol, s, newton_path, residual_scale, T)
-        x_sample = np.reshape( x_sample.cpu().numpy(), (n_images, mol_size, 3))
-        maxF = evaluateMaxForce( context, x_sample, k )
-        if maxF < best_F:
-            best_F = maxF
-            best_initial = x_sample
-        print( f'Max. NEB Force for sample {count}: {maxF} [eV / A]')
+
+    # print( 'Generating Diffusion Samples')
+    # samples = sample_path( diffusion_network, xa_mol, xb_mol, s, newton_path, residual_scale, T, n_samples )
+    # print( 'Evaluating Forces ')
+    # for count in range(n_samples):
+    #     x_sample = samples[count, :,:,:].cpu().numpy()
+    #     maxF = evaluateMaxForce( context, x_sample, k )
+    #     if maxF < best_F:
+    #         best_F = maxF
+    #         best_initial = x_sample
+    #     print( f'Max. NEB Force for sample {count}: {maxF} [eV / A]')
 
     # Finally: run NEB
     n_steps = 1000
@@ -146,11 +150,11 @@ if __name__ == '__main__':
         print( "Reaction Loaded." )
 
     # Load the neural models
-    device = pt.device('cpu')
+    device = pt.device('mps')
     dtype = pt.float32
     tp_network = loadNewtonModel( './MLModel/', device, dtype )
     diffusion_network = loadDiffusionModel( './MLModel/', device, dtype )
     
     print(trajectory.keys())
     context = create_xtb_context( trajectory["Z"] )
-    runNEB( tp_network, diffusion_network, context, trajectory )
+    runNEB( tp_network, diffusion_network, context, trajectory, device )

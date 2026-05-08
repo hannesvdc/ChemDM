@@ -60,19 +60,62 @@ class MoleculeGraph( Molecule ):
 
 class BatchedMoleculeGraph( Molecule ):
 
-    def __init__(self, molecules: List[MoleculeGraph]) -> None:
-        # Concatenate atomic state and positions.
+    def __init__(self, molecules: List[Molecule]) -> None:
+        """
+        Batch a list of Molecules. If an input molecule is already batched, its internal molecule_id structure
+        is preserved, but shifted so that all molecule IDs remain globally unique.
+
+        This code has not been sufficiently vectorized and may therefore be slow for huge numbers of molecules.
+        """
+        assert len(molecules) > 0
+
+        # Concatenate atomic numbers and positions.
         self._Z = pt.cat([mol.Z for mol in molecules], dim=0)
         self._x = pt.cat([mol.x for mol in molecules], dim=0)
+        device = self._x.device
 
-        # Calculate the total offset per molecule.
-        n_atoms = pt.tensor([mol.Z.shape[0] for mol in molecules], dtype=pt.long)
-        self._molecule_id = pt.repeat_interleave( pt.arange(len(molecules), dtype=pt.long), n_atoms )
-        offsets = pt.cumsum( pt.cat([pt.tensor([0], dtype=pt.long), n_atoms[:-1]]), dim=0 )
+        molecule_ids = []
+        edge_list = []
+        atom_offset = 0
+        molecule_offset = 0
+        for mol in molecules:
+            n_atoms = mol.Z.shape[0]
 
-        # Merge the edge indices.
-        edge_list = [ mol.edge_index + offset for mol, offset in zip(molecules, offsets) ]
-        self._edge_index = pt.cat(edge_list, dim=0).to(device=self._x.device)   # shape: (total_edges, 2)
+            # Case 1: mol is already batched and has molecule_id.
+            if isinstance( mol, BatchedMoleculeGraph ):
+                local_molecule_id = mol.molecule_id.to(device=device).long()
+                shifted_molecule_id = local_molecule_id + molecule_offset
+                n_local_molecules = len( pt.unique(local_molecule_id) )
+
+            # Case 2: mol is a single MoleculeGraph.
+            else:
+                shifted_molecule_id = pt.full( (n_atoms,), molecule_offset, dtype=pt.long, device=device, )
+                n_local_molecules = 1
+            molecule_ids.append( shifted_molecule_id )
+
+            # Shift edge indices by atom offset.
+            edge_index = mol.edge_index.to( device=device ).long()
+            edge_list.append(edge_index + atom_offset)
+
+            atom_offset += n_atoms
+            molecule_offset += n_local_molecules
+
+        self._molecule_id = pt.cat( molecule_ids, dim=0 )
+        self._edge_index = pt.cat( edge_list, dim=0 )
+
+    # def __init__(self, molecules: List[MoleculeGraph]) -> None:
+    #     # Concatenate atomic state and positions.
+    #     self._Z = pt.cat([mol.Z for mol in molecules], dim=0)
+    #     self._x = pt.cat([mol.x for mol in molecules], dim=0)
+
+    #     # Calculate the total offset per molecule.
+    #     n_atoms = pt.tensor([mol.Z.shape[0] for mol in molecules], dtype=pt.long)
+    #     self._molecule_id = pt.repeat_interleave( pt.arange(len(molecules), dtype=pt.long), n_atoms )
+    #     offsets = pt.cumsum( pt.cat([pt.tensor([0], dtype=pt.long), n_atoms[:-1]]), dim=0 )
+
+    #     # Merge the edge indices.
+    #     edge_list = [ mol.edge_index + offset for mol, offset in zip(molecules, offsets) ]
+    #     self._edge_index = pt.cat(edge_list, dim=0).to(device=self._x.device)   # shape: (total_edges, 2)
 
     def to( self, device=pt.device("cpu"), dtype=pt.float64 ) -> Self:
         self._Z = self._Z.to( device=device )
@@ -106,16 +149,13 @@ class BatchedMoleculeGraph( Molecule ):
         return BatchedMoleculeGraph.fromRawTensors(self._Z, x, self._edge_index, self._molecule_id)
 
 @pt.no_grad()
-def batchMolecules(molecules: List[MoleculeGraph]) -> BatchedMoleculeGraph:
+def batchMolecules(molecules: List[Molecule]) -> BatchedMoleculeGraph:
     """
     Create a batched molecule from a list of single-molecule graphs. 
-    
-    TODO: Extend later to take a list of Molecules - some already batched - 
-    and deal with molecule indexing.
 
     Arguments
     ---------
-    molecules : List[MoleculeGraph]
+    molecules : List[Molecule]
         List of single-molecule graphs to merge.
 
     Returns
@@ -123,7 +163,7 @@ def batchMolecules(molecules: List[MoleculeGraph]) -> BatchedMoleculeGraph:
     batch_molecule : BatchedMoleculeGraph
         The large merged molecule.
     """
-    return BatchedMoleculeGraph(molecules)
+    return BatchedMoleculeGraph( molecules )
 
 @pt.no_grad()
 def findAllDistanceNeighbors( molecule: Molecule,

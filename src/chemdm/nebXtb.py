@@ -359,6 +359,7 @@ def run_neb_xtb( context: mm.Context,
     path_opt_A, E_best, info = neb_adam( context, path0_A, n_steps, lr, k, max_step_A, force_tol )
     if info["status"] == "converged":
         return path_opt_A, E_best, info["best_force_rms"]
+    #path_opt_A = path0_A
     
     # Else run a fine-tuning step using a quasi-Newton method
     path_opt, E_best, info = neb_least_squares( context, path_opt_A, k, force_tol )
