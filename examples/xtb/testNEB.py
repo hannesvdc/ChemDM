@@ -3,10 +3,11 @@ import torch as pt
 import openmm as mm
 
 from chemdm.xtbSetup import create_xtb_context
-from chemdm.nebXtb import run_neb_xtb
-from chemdm.NewtonE3NN import NewtonE3NN
-from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
+from chemdm.nebXtb import run_neb_xtb, evaluate_path, neb_force
+from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, Molecule
+
+from loadModels import loadNewtonModel, loadDiffusionModel
+from sample_path import sample_path
 
 from pathlib import Path
 from collections import defaultdict
@@ -50,40 +51,13 @@ def build_molecule_reaction_map(data_dir: str | Path, kind : str) -> dict[str, l
     # Sort reaction IDs for each molecule.
     return { molecule: sorted(reaction_ids) for molecule, reaction_ids in sorted(molecule_to_reactions.items()) }
 
-def evaluateML( Z : np.ndarray, 
+def evaluateML( tp_network : pt.nn.Module,
+                Z : np.ndarray, 
                xA : np.ndarray, 
                xB : np.ndarray,
                Ga : np.ndarray,
-               Gb : np.ndarray) -> np.ndarray:
+               Gb : np.ndarray) -> tuple[np.ndarray, Molecule, Molecule, pt.Tensor, Molecule]:
     mol_size = len(Z)
-
-    # Global molecular information
-    d_cutoff = 5.0
-    n_rbf = 10
-
-    # Endpoint embedding networks
-    embedding_state_size = 64
-    embedding_message_size = 64
-    n_embedding_layers = 5
-    xA_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
-    xB_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
-
-    # E3NN transition-path network
-    irreps_node_str = "48x0e + 16x1o + 16x1e + 8x2e"
-    n_refinement_steps = 7
-    tp_network = NewtonE3NN(
-        xA_embedding_network=xA_embedding,
-        xB_embedding_network=xB_embedding,
-        irreps_node_str=irreps_node_str,
-        n_refinement_steps=n_refinement_steps,
-        d_cutoff=d_cutoff,
-        n_freq=8,
-        n_rbf=n_rbf,
-    )
-
-    # Load the parameters from file
-    state_dict = pt.load( './MLModel/best_gnn.pth', map_location=pt.device("cpu"), weights_only=True )
-    tp_network.load_state_dict( state_dict )
 
     # Evaluate
     n_images = 10
@@ -102,30 +76,63 @@ def evaluateML( Z : np.ndarray,
     molecule_path, _ = tp_network( xa_mol, xb_mol, s )
     x = molecule_path.x.detach().numpy() # n_images * mol_size * 3
     x = x.reshape(n_images, mol_size, 3)
-    return x
+    return x, xa_mol, xb_mol, s, molecule_path
 
-def runNEB( context: mm.Context,
+def evaluateMaxForce( context : mm.Context,
+                      path : np.ndarray,
+                      k : float, ) -> float:
+    E_np, F_np = evaluate_path( context, path )
+    F_neb = neb_force( path, E_np, F_np, k )
+
+    F_rms_i = np.sqrt( np.mean(F_neb**2, axis=(-2,-1)) )
+    maxF = float( np.max(F_rms_i) )
+
+    return maxF
+
+def runNEB( tp_network : pt.nn.Module,
+            diffusion_network : pt.nn.Module,
+            context: mm.Context,
             trajectory : dict ):
-    path0_A = evaluateML( trajectory["Z"], trajectory["xA"], trajectory["xB"], trajectory["GA"], trajectory["GB"])
+    k = 1.0 # eV / A^2
+    
+    # Initial Guess : the Newton model
+    path0_A, xa_mol, xb_mol, s, newton_path = evaluateML( tp_network, trajectory["Z"], trajectory["xA"], trajectory["xB"], trajectory["GA"], trajectory["GB"] )
+    maxF = evaluateMaxForce( context, path0_A, k )
+    print( f'Max Newton NEB Force {maxF} [eV / A]')
 
-    # path0_A = np.asarray( trajectory["x"] )
-    print(path0_A.shape)
+    # Generate a few samples using the diffusion model
+    n_images = path0_A.shape[0]
+    mol_size = path0_A.shape[1]
+    n_samples = 10
+    residual_scale = 0.15
+    T = 100
+    best_initial = path0_A
+    best_F = maxF
+    for count in range(n_samples):
+        x_sample = sample_path( diffusion_network, xa_mol, xb_mol, s, newton_path, residual_scale, T)
+        x_sample = np.reshape( x_sample.cpu().numpy(), (n_images, mol_size, 3))
+        maxF = evaluateMaxForce( context, x_sample, k )
+        if maxF < best_F:
+            best_F = maxF
+            best_initial = x_sample
+        print( f'Max. NEB Force for sample {count}: {maxF} [eV / A]')
 
+    # Finally: run NEB
     n_steps = 1000
     lr = 1e-3
-    k = 1.0 # eV / A^2
     max_step_A = 0.02
     force_tol = 0.03  # eV / A
-    path_opt_A, E_opt_eV, best_force = run_neb_xtb( context, path0_A, n_steps, lr, k, max_step_A, force_tol )
+    path_opt_A, E_opt_eV, best_force = run_neb_xtb( context, best_initial, n_steps, lr, k, max_step_A, force_tol )
 
-    print( best_force )
-    print(E_opt_eV)
+    maxF = evaluateMaxForce( context, path_opt_A, k )
+    print( f'Max NEB Force after optimization: {maxF} [eV / A]' )
+    print( E_opt_eV )
 
 if __name__ == '__main__':
     data_dir  = Path( "/Users/hannesvdc/Open Numerics/ReactionStudio/data" )
     split = "test"
     molecule_map = build_molecule_reaction_map( data_dir, split )
-    print(f"Found {len(molecule_map)} molecules: ", molecule_map.keys() )
+    print( f"Found {len(molecule_map)} molecules: ", molecule_map.keys() )
 
     molecule_name = input( "Enter a molecule: " )
     reaction_ids = molecule_map[molecule_name]
@@ -137,7 +144,13 @@ if __name__ == '__main__':
     with open( data_dir / filename, "r" ) as jsonfile:
         trajectory = json.load( jsonfile )
         print( "Reaction Loaded." )
+
+    # Load the neural models
+    device = pt.device('cpu')
+    dtype = pt.float32
+    tp_network = loadNewtonModel( './MLModel/', device, dtype )
+    diffusion_network = loadDiffusionModel( './MLModel/', device, dtype )
     
     print(trajectory.keys())
     context = create_xtb_context( trajectory["Z"] )
-    runNEB( context, trajectory )
+    runNEB( tp_network, diffusion_network, context, trajectory )
