@@ -97,7 +97,7 @@ def run( input_data: dict,
     relax_endpoints = bool( input_data.get( "relax_endpoints", False) )
     
     trajectory = input_data["trajectory"]
-    Z = np.asarray(trajectory["Z"])
+    Z = np.asarray(trajectory["Z"], dtype=np.long)
     xA = np.asarray(trajectory["xA"])
     xB = np.asarray(trajectory["xB"])
     GA = np.asarray(trajectory["GA"])
@@ -114,7 +114,7 @@ def run( input_data: dict,
         xB = relaxMolecule( context, xB, minimizer="Adam" )
 
     on_progress("align", "Aligning endpoints", fraction=0.10)
-    xB = kabsch_align_numpy( xB, xA )
+    xB = kabsch_align_numpy( xB, xA, Z )
 
     # Evaluate the Newton model for a good initial guess.
     on_progress("generate_path", "Generating initial guess for the path", fraction=0.15)
@@ -127,8 +127,13 @@ def run( input_data: dict,
     k = 1.0           # eV / A^2
     max_step_A = 0.02
     force_tol = 0.03  # eV / A
+    maxiter = 15
     on_progress( "fine_tune_path", "Fine-tuning", fraction=0.50 )
-    path_opt, E_opt_eV, best_force = run_neb_xtb( context, path0, n_steps, lr, k, max_step_A, force_tol )
+    progress_so_far = on_progress.getTotalProgress()
+    def callback( iter : int, maxF : float ) -> None:
+        on_progress( "fine_tune_path", f"Step {iter} / {maxiter}: {maxF:.2f} [eV / A]", 
+                     fraction = progress_so_far + (1.0 - progress_so_far) * iter / maxiter )
+    path_opt, E_opt_eV, best_force = run_neb_xtb( context, path0, n_steps, lr, k, max_step_A, force_tol, lbfgs_maxiter=maxiter, callback=callback)
     s = normalized_arclengths(path_opt)
 
     # Send back to the server as a dict.

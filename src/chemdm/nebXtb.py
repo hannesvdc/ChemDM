@@ -8,6 +8,8 @@ import openmm.unit as unit
 from chemdm.diagnostics import has_plateaued, has_started_increasing
 from chemdm.Logger import LSQLogger
 
+from typing import Callable, Optional
+
 KJ_MOL_TO_EV = 0.01036427230133138 # eV / kJ
 KJ_MOL_NM_TO_EV_A = KJ_MOL_TO_EV / 10.0
 
@@ -261,6 +263,8 @@ def neb_least_squares( context: mm.Context,
                        path0 : np.ndarray,
                        k: float = 1.0,           # eV / A^2
                        force_tol: float = 0.03,  # eV / A
+                       maxiter : int = 15,
+                       callback : Optional[Callable] = None,
                     ):
     M, n_atoms, _ = path0.shape
     n_inner = M - 2
@@ -286,16 +290,22 @@ def neb_least_squares( context: mm.Context,
 
         logger.observe( E_np, F_neb )
         return pack( F_neb )
-    def callback( _ ):
+    iterations = 0
+    def internal_callback( _ ):
         logger.commit()
-        if logger.history[-1]["max_force_rms"] < force_tol:
+
+        nonlocal iterations
+        if callback is not None:
+            callback( iterations, logger.history[-1]["max_force_rms"] )
+        iterations += 1
+        if logger.history[-1]["max_force_rms"] < force_tol or iterations > maxiter:
             logger.converged = True
             raise StopIteration
 
     # Run the least-squares optimizer
     x0 = pack( path0[1:-1, :, :] )
-    neb_force_residual( x0 );  callback( [] ) # Log the initial state
-    result = opt.least_squares( neb_force_residual, x0, ftol=1e-6, callback=callback, jac_sparsity=sparsity )
+    neb_force_residual( x0 );  internal_callback( [] ) # Log the initial state
+    result = opt.least_squares( neb_force_residual, x0, ftol=1e-6, callback=internal_callback, jac_sparsity=sparsity )
     success = bool( result.success ) or logger.converged
     print( 'Least-Squares Converged: ', success )
     
@@ -332,6 +342,8 @@ def run_neb_xtb( context: mm.Context,
                  k: float = 1.0,           # eV / A^2
                  max_step_A: float = 0.02,
                  force_tol: float = 0.03,  # eV / A
+                 lbfgs_maxiter : int = 15,
+                 callback : Optional[Callable] = None,
                 ):
     """
     Nudged-Elastic Band implementation OpenMM-xTB forces and Torch/Adam.
@@ -362,5 +374,5 @@ def run_neb_xtb( context: mm.Context,
     #path_opt_A = path0_A
     
     # Else run a fine-tuning step using a quasi-Newton method
-    path_opt, E_best, info = neb_least_squares( context, path_opt_A, k, force_tol )
+    path_opt, E_best, info = neb_least_squares( context, path_opt_A, k, force_tol, lbfgs_maxiter, callback )
     return path_opt, E_best, info["best_force_rms"]

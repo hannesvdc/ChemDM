@@ -4,6 +4,9 @@ from typing import Any, Protocol
 
 
 class ProgressCallback(Protocol):
+    def getTotalProgress( self ) -> float:
+        ...
+        
     def __call__( self, stage: str,
                         message: str,
                         fraction: float | None = None,

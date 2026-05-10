@@ -148,28 +148,35 @@ def handle_job(job: dict[str, Any], state: WorkerState) -> None:
             "experiment": experiment,
         } )
 
-    def on_progress( stage: str,
+    class ProgressObject:
+        def __init__(self):
+            self.total_progress = 0.0
+        def __call__( self, 
+                    stage: str,
                      message: str,
                      fraction: float | None = None,
                      **extra: Any, ) -> None:
-        event: dict[str, Any] = {
-            "kind": "progress",
-            "job_id": job_id,
-            "stage": stage,
-            "message": message,
-        }
+            event: dict[str, Any] = {
+                "kind": "progress",
+                "job_id": job_id,
+                "stage": stage,
+                "message": message,
+            }
 
-        if fraction is not None:
-            event["fraction"] = fraction
+            if fraction is not None:
+                event["fraction"] = fraction
+                self.total_progress = self.total_progress + fraction
 
-        event.update(extra)
-        emit(event)
+            event.update(extra)
+            emit(event)
+        def getTotalProgress(self) -> float:
+            return self.total_progress
 
     try:
         if experiment == "transition-path":
             result = run_transition_path(
                 body,
-                on_progress=on_progress,
+                on_progress=ProgressObject(),
                 tp_network=state.transition_path_model, ) # type: ignore
         else:
             raise ValueError(f"Unknown experiment: {experiment!r}")
