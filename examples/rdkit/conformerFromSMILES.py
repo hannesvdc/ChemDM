@@ -1,7 +1,11 @@
 import math
 import numpy as np
+
+import py3Dmol
+from conformerViewer import make_page, launch_html_viewer
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdchem
+from rdkit.Geometry import Point3D
 import matplotlib.pyplot as plt
 
 from chemdm.xtbSetup import create_xtb_context
@@ -28,6 +32,35 @@ def numpy_positions_to_rdkit(mol: Chem.Mol, conf_id: int, positions: np.ndarray)
     conf = mol.GetConformer(conf_id)
     for i, (x, y, z) in enumerate(positions):
         conf.SetAtomPosition(i, (float(x), float(y), float(z)))
+
+def mol_with_new_positions(template_mol: Chem.Mol, x: np.ndarray) -> Chem.Mol:
+    """
+    Create a new RDKit Mol with the same atoms/bonds as template_mol,
+    but with one conformer whose coordinates are x.
+
+    Arguments:
+    ----------
+    template_mol: RDKit Mol containing the desired atom/bond topology.
+    x: NumPy array of shape (N_atoms, 3), in Angstrom.
+
+    Returns:
+    --------
+    new_mol: New RDKit Mol with same topology and new 3D coordinates.
+    """
+    x = np.asarray(x, dtype=float)
+    if x.shape != (template_mol.GetNumAtoms(), 3):
+        raise ValueError( f"x must have shape ({template_mol.GetNumAtoms()}, 3), got {x.shape}" )
+
+    mol = Chem.Mol(template_mol)   # copy topology/properties
+    mol.RemoveAllConformers()
+
+    conf = rdchem.Conformer( mol.GetNumAtoms() )
+    conf.Set3D(True)
+    for i in range(mol.GetNumAtoms()):
+        conf.SetAtomPosition( i, Point3D(float(x[i, 0]), float(x[i, 1]), float(x[i, 2])), )
+    mol.AddConformer(conf, assignId=True)
+
+    return mol
 
 def cluster( heavy_atoms : np.ndarray, 
              conformers : list[np.ndarray], 
@@ -186,7 +219,7 @@ def alanine():
     for conf_id in conf_ids:
         print( f'\nStabilizing Conformer {conf_id}.' )
         conf_positions = rdkit_positions_to_numpy( mol_with_h, conf_id )
-        conf_opt, E_opt, F_opt, _ = stabilizeConformer( xtb_context, conf_positions, force_tol=1e0 )
+        conf_opt, E_opt, F_opt, _ = stabilizeConformer( xtb_context, conf_positions, force_tol=1e-2 )
         print( f'Conformer {conf_id} stabilized to E = {E_opt} and |F| = { np.linalg.norm(F_opt)}.' )
         print( f"Torsion angles: ({compute_torsion_from_xyz(conf_opt,phi_atoms)}, {compute_torsion_from_xyz(conf_opt,psi_atoms)})")
 
@@ -194,6 +227,17 @@ def alanine():
 
     # Cluster to determine unique conformers
     optimal_conformers = cluster( heavy_atom_indices, optimal_conformers, rmsd_tol=0.5 )
+
+    # Create RDKit Conformer objects
+    conformers_mol_objects = [ mol_with_new_positions(mol_with_h, optimal_conformers[ii]) for ii in range(len(optimal_conformers)) ]
+    def mol_to_py3dmol_html(mol) -> str:
+        mol_block = Chem.MolToMolBlock(mol)
+        viewer = py3Dmol.view(width=500, height=400)
+        viewer.addModel(mol_block, "mol")
+        viewer.setStyle({"stick": {}, "sphere": {"scale": 0.25}})
+        viewer.zoomTo()
+        return viewer._make_html()
+    molecule_html_blocks = [ mol_to_py3dmol_html(mol) for mol in conformers_mol_objects ]
     phi_values = []
     psi_values = []
     for conf in optimal_conformers:
@@ -221,8 +265,10 @@ def alanine():
     plt.ylabel(r"$\psi$ [deg]")
     plt.tight_layout()
 
+    plt.show( block=False )
 
-    plt.show()
+    html = make_page(molecule_html_blocks, phi_values, psi_values)
+    launch_html_viewer( html, title="Alanine Dipeptide Conformers", width=1500, height=900, use_temp_file=True )
 
 
     # Optimize all conformers using MMFF94
