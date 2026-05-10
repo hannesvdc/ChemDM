@@ -52,11 +52,11 @@ def launch_html_viewer( html: str,
 
     webview.start(debug=debug)
 
-def make_page(molecule_html_blocks: list[str], phi : list, psi : list) -> str:
+def make_page( molecule_html_blocks: list[str], phi : list, psi : list, energies : list ) -> str:
     molecule_cards = "\n".join(
         f"""
         <div class="card">
-          <h2>Conformer {i} (phi {phi[i]:.1f}, psi {psi[i]:.1f})</h2>
+          <h2>Conformer {i} (phi,psi) = ({phi[i]:.1f}, {psi[i]:.1f}), E = {energies[i]:.2f} eV</h2>
           {block}
         </div>
         """

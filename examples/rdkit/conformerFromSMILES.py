@@ -64,13 +64,16 @@ def mol_with_new_positions(template_mol: Chem.Mol, x: np.ndarray) -> Chem.Mol:
 
 def cluster( heavy_atoms : np.ndarray, 
              conformers : list[np.ndarray], 
+             energies : list[float],
              rmsd_tol : float = 0.5
-            ) -> list[np.ndarray]:
+            ) -> tuple[list[np.ndarray], list[float]]:
+    assert len(conformers) == len(energies), f"`confomers` and `energies` must contain the same number of elements."
     if len(conformers) == 0:
-        return conformers
+        return conformers, energies
     
     initial_conformer = conformers[0] - np.mean( conformers[0], axis=0, keepdims=True )
     optimal_conformers = [ initial_conformer ]
+    optimal_energies = [ energies[0] ]
     for n in range(1, len(conformers)):
         print( 'Conformer', n )
         x_conf = conformers[n] - np.mean( conformers[n], axis=0, keepdims=True )
@@ -94,8 +97,9 @@ def cluster( heavy_atoms : np.ndarray,
         if is_new:
             print( "New Conformer Found!" )
             optimal_conformers.append( x_conf )
+            optimal_energies.append( energies[n] )
 
-    return optimal_conformers
+    return optimal_conformers, energies
 
 def wrap_to_pi( angle ):
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
@@ -185,7 +189,6 @@ def alanine():
 
     TODO: 
     1. Parallelize xTB conformer search
-    2. Plot conformers / rotamers on the free-energy landscape.
     """
 
     smiles = "CC(=O)N[C@@H](C)C(=O)NC"
@@ -216,6 +219,7 @@ def alanine():
     atomic_numbers = np.array( [ int(atom.GetAtomicNum()) for atom in mol_with_h.GetAtoms() ], dtype=np.long )
     xtb_context = create_xtb_context( atomic_numbers )
     optimal_conformers = []
+    energies = []
     for conf_id in conf_ids:
         print( f'\nStabilizing Conformer {conf_id}.' )
         conf_positions = rdkit_positions_to_numpy( mol_with_h, conf_id )
@@ -224,9 +228,10 @@ def alanine():
         print( f"Torsion angles: ({compute_torsion_from_xyz(conf_opt,phi_atoms)}, {compute_torsion_from_xyz(conf_opt,psi_atoms)})")
 
         optimal_conformers.append( conf_opt )
+        energies.append( E_opt )
 
     # Cluster to determine unique conformers
-    optimal_conformers = cluster( heavy_atom_indices, optimal_conformers, rmsd_tol=0.5 )
+    optimal_conformers, energies = cluster( heavy_atom_indices, optimal_conformers, energies, rmsd_tol=0.5 )
 
     # Create RDKit Conformer objects
     conformers_mol_objects = [ mol_with_new_positions(mol_with_h, optimal_conformers[ii]) for ii in range(len(optimal_conformers)) ]
@@ -240,6 +245,7 @@ def alanine():
     molecule_html_blocks = [ mol_to_py3dmol_html(mol) for mol in conformers_mol_objects ]
     phi_values = []
     psi_values = []
+    energy_values = []
     for conf in optimal_conformers:
         phi = compute_torsion_from_xyz( conf, phi_atoms )
         psi = compute_torsion_from_xyz( conf, psi_atoms )
@@ -267,35 +273,15 @@ def alanine():
 
     plt.show( block=False )
 
-    html = make_page(molecule_html_blocks, phi_values, psi_values)
+    html = make_page(molecule_html_blocks, phi_values, psi_values, energies)
     launch_html_viewer( html, title="Alanine Dipeptide Conformers", width=1500, height=900, use_temp_file=True )
 
-
-    # Optimize all conformers using MMFF94
-    # results = AllChem.MMFFOptimizeMoleculeConfs( mol_with_h, numThreads=0, maxIters=500, mmffVariant="MMFF94", )
-    # records = []
-    # for conf_id, (not_converged, energy) in zip(conf_ids, results):
-    #     angle = rdMolTransforms.GetDihedralDeg( mol_with_h.GetConformer(conf_id), 0, 1, 2, 3, )
-    #     print( angle )
-        
-    #     # Normalize to [-180, 180]
-    #     if angle > 180:
-    #         angle -= 360
-    #     if abs(abs(angle) - 180) < 45:
-    #         rotamer = "anti"
-    #     elif abs(abs(angle) - 60) < 45:
-    #         rotamer = "gauche"
-    #     else:
-    #         rotamer = "other"
-    #     records.append( {
-    #             "conf_id": int(conf_id),
-    #             "energy": float(energy),
-    #             "not_converged": int(not_converged),
-    #             "dihedral_deg": float(angle),
-    #             "rotamer": rotamer,
-    #         } )
-
-    # records = sorted(records, key=lambda r: r["energy"])
+    def write_conformers_mol_files(conformer_mols, prefix: str = "conformer"):
+        for i, mol in enumerate(conformer_mols):
+            filename = f"./conformers_ad/{prefix}_{i}.mol"
+            Chem.MolToMolFile(mol, filename)
+            print(f"Wrote {filename}")
+    write_conformers_mol_files( conformers_mol_objects )
 
 if __name__ == '__main__':
     alanine()
