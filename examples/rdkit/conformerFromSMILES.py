@@ -62,7 +62,7 @@ def mol_with_new_positions(template_mol: Chem.Mol, x: np.ndarray) -> Chem.Mol:
 
     return mol
 
-def cluster( heavy_atoms : np.ndarray, 
+def cluster( Z : np.ndarray, 
              conformers : list[np.ndarray], 
              energies : list[float],
              rmsd_tol : float = 0.5
@@ -80,14 +80,14 @@ def cluster( heavy_atoms : np.ndarray,
 
         is_new = True
         for k in range( len(optimal_conformers) ):
-            conformer_heavy = optimal_conformers[k][heavy_atoms,:]
+            reference_conformer = optimal_conformers[k]
 
             # Center and Kabsch align
-            x_conf_aligned = x_conf[heavy_atoms,:]
-            x_conf_aligned = kabsch_align_numpy( x_conf_aligned, conformer_heavy )
+            x_conf_aligned = kabsch_align_numpy( x_conf, reference_conformer, Z )
 
-            # Compute the per-atom RMSD
-            rmsd = np.sqrt(np.mean(np.sum( (x_conf_aligned - conformer_heavy)**2, axis=1 ) ))
+            # Compute the per-atom RMSD. Ignore hydrogens
+            idx = (Z != 1)
+            rmsd = np.sqrt(np.mean(np.sum( (x_conf_aligned[idx,:] - reference_conformer[idx,:])**2, axis=1 ) ))
             print(rmsd)
             
             if rmsd <= rmsd_tol:
@@ -199,8 +199,8 @@ def alanine():
 
     # Add hydrogens
     mol_with_h = Chem.AddHs( mol )
-    heavy_atom_indices = np.array( [ atom.GetIdx() for atom in mol_with_h.GetAtoms() if atom.GetAtomicNum() != 1 ], dtype=np.long )
-    print( '\nHeavy Atom Indices:', heavy_atom_indices )
+    Z = np.array(  [atom.GetAtomicNum() for atom in mol_with_h.GetAtoms() ], dtype=np.int64 )
+    print( '\nHeavy Atom Indices:', Z )
     print_heavy_atom_table( mol_with_h )
     phi_atoms = (1, 3, 4, 6)  # C_prev - N - Cα - C
     psi_atoms = (3, 4, 6, 8)  # N - Cα - C - N_next
@@ -231,7 +231,7 @@ def alanine():
         energies.append( E_opt )
 
     # Cluster to determine unique conformers
-    optimal_conformers, energies = cluster( heavy_atom_indices, optimal_conformers, energies, rmsd_tol=0.5 )
+    optimal_conformers, energies = cluster( Z, optimal_conformers, energies, rmsd_tol=0.5 )
 
     # Create RDKit Conformer objects
     conformers_mol_objects = [ mol_with_new_positions(mol_with_h, optimal_conformers[ii]) for ii in range(len(optimal_conformers)) ]
