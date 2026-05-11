@@ -2,12 +2,11 @@ import numpy as np
 import torch as pt
 import openmm as mm
 
-from chemdm.xtbSetup import create_xtb_context
-from chemdm.nebXtb import run_neb_xtb, evaluate_path, neb_force
+from chemdm.xtbSetup import XTBPotential
+from chemdm.nebXtbDirect import run_neb_xtb, evaluate_path, neb_force
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, Molecule
 
 from loadModels import loadNewtonModel, loadDiffusionModel
-from sample_path import sample_path
 
 from pathlib import Path
 from collections import defaultdict
@@ -79,10 +78,10 @@ def evaluateML( tp_network : pt.nn.Module,
     x = x.reshape(n_images, mol_size, 3)
     return x, xa_mol, xb_mol, s, molecule_path
 
-def evaluateMaxForce( context : mm.Context,
+def evaluateMaxForce( xtb : XTBPotential,#context : mm.Context,
                       path : np.ndarray,
                       k : float, ) -> float:
-    E_np, F_np = evaluate_path( context, path )
+    E_np, F_np = evaluate_path( xtb, path )
     F_neb = neb_force( path, E_np, F_np, k )
 
     F_rms_i = np.sqrt( np.mean(F_neb**2, axis=(-2,-1)) )
@@ -92,16 +91,17 @@ def evaluateMaxForce( context : mm.Context,
 
 def runNEB( tp_network : pt.nn.Module,
             diffusion_network : pt.nn.Module,
-            context: mm.Context,
+            xtb : XTBPotential, #context: mm.Context,
             trajectory : dict,
             device : pt.device ):
-    k = 1.0 # eV / A^2
+    KJ_MOL_PER_EV = 96.48533212331002
+    k = 1.0 * KJ_MOL_PER_EV          # kJ/mol/Å², equivalent to 1 eV/Å²
+    force_tol = 0.03 * KJ_MOL_PER_EV # k
 
-    
     # Initial Guess : the Newton model
     path0_A, xa_mol, xb_mol, s, newton_path = evaluateML( tp_network, trajectory["Z"], trajectory["xA"], trajectory["xB"], trajectory["GA"], trajectory["GB"], device )
-    maxF = evaluateMaxForce( context, path0_A, k )
-    print( f'Max Newton NEB Force {maxF} [eV / A]')
+    maxF = evaluateMaxForce( xtb, path0_A, k )
+    print( f'Max Newton NEB Force {maxF} [kJ/(mol A)]')
 
     # Generate a few samples using the diffusion model
     n_samples = 10
@@ -125,12 +125,11 @@ def runNEB( tp_network : pt.nn.Module,
     n_steps = 1000
     lr = 1e-3
     max_step_A = 0.02
-    force_tol = 0.03  # eV / A
-    path_opt_A, E_opt_eV, best_force = run_neb_xtb( context, best_initial, n_steps, lr, k, max_step_A, force_tol )
+    path_opt_A, E_opt_kJ, best_force = run_neb_xtb( trajectory["Z"], best_initial, n_steps, lr, k, max_step_A, force_tol, max_workers=8 )
 
-    maxF = evaluateMaxForce( context, path_opt_A, k )
-    print( f'Max NEB Force after optimization: {maxF} [eV / A]' )
-    print( E_opt_eV )
+    maxF = evaluateMaxForce( xtb, path_opt_A, k )
+    print( f'Max NEB Force after optimization: {maxF} [kJ/(mol A)]' )
+    print( E_opt_kJ )
 
 if __name__ == '__main__':
     data_dir  = Path( "/Users/hannesvdc/Open Numerics/ReactionStudio/data" )
@@ -156,5 +155,6 @@ if __name__ == '__main__':
     diffusion_network = loadDiffusionModel( './MLModel/', device, dtype )
     
     print(trajectory.keys())
-    context = create_xtb_context( trajectory["Z"] )
-    runNEB( tp_network, diffusion_network, context, trajectory, device )
+    # context = create_xtb_context( trajectory["Z"] )
+    xtb = XTBPotential( trajectory["Z"] )
+    runNEB( tp_network, diffusion_network, xtb, trajectory, device )

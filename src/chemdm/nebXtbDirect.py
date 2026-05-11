@@ -3,8 +3,7 @@ import scipy.optimize as opt
 import scipy.sparse as sp
 import torch as pt
 
-import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 from chemdm.xtbSetup import XTBPotential
 from chemdm.diagnostics import has_plateaued, has_started_increasing
@@ -13,6 +12,16 @@ from chemdm.Logger import LSQLogger
 from typing import Callable, Optional
 
 KJ_MOL_TO_EV = 0.01036427230133138 # eV / kJ
+
+_WORKER_XTB: XTBPotential | None = None
+def init_xtb_worker( Z: np.ndarray, ):
+    """
+    Called once inside each worker process.
+
+    Creates one persistent XTBPotential per process.
+    """
+    global _WORKER_XTB
+    _WORKER_XTB = XTBPotential( Z=np.asarray(Z, dtype=int) )
 
 def evaluate_xtb( XTB: XTBPotential, R_A: np.ndarray) -> tuple[float,np.ndarray]:
     """
@@ -29,6 +38,58 @@ def evaluate_xtb( XTB: XTBPotential, R_A: np.ndarray) -> tuple[float,np.ndarray]
     F_kj_mol_A = F_eV_A / KJ_MOL_TO_EV
 
     return float(E_kj_mol), F_kj_mol_A
+
+def evaluate_xtb_worker(R_A: np.ndarray) -> tuple[float, np.ndarray]:
+    """
+    Called inside worker process.
+
+    R_A: (n_atoms, 3), Angstrom
+
+    returns:
+        energy: kJ/mol
+        forces: kJ/mol/Angstrom
+    """
+    global _WORKER_XTB
+    if _WORKER_XTB is None:
+        raise RuntimeError("xTB worker was not initialized.")
+
+    return evaluate_xtb(_WORKER_XTB, R_A)
+
+
+def evaluate_path_process_parallel( path_A: np.ndarray,
+                                    pool: ProcessPoolExecutor,
+                                   ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    path_A: (M, n_atoms, 3), Angstrom
+
+    returns:
+        energies: (M,), kJ/mol
+        forces: (M, n_atoms, 3), kJ/mol/Angstrom
+    """
+    path_A = np.asarray(path_A, dtype=float)
+
+    results = list(pool.map(evaluate_xtb_worker, path_A))
+    energies, forces = zip(*results)
+
+    return np.asarray(energies), np.asarray(forces)
+
+def evaluate_path( xtb : XTBPotential, path_A: np.ndarray ):
+    """
+    path_A: (n_images, n_atoms, 3), Angstrom
+
+    returns:
+        energies_kJ_mol: (n_images,)
+        forces_kJ_mol_A: (n_images, n_atoms, 3)
+    """
+    energies = []
+    forces = []
+
+    for R_A in path_A:
+        E, F = evaluate_xtb(xtb, R_A)
+        energies.append(E)
+        forces.append(F)
+
+    return np.asarray(energies), np.asarray(forces)
 
 
 def image_dot(a: np.ndarray, b: np.ndarray):
@@ -55,7 +116,7 @@ def image_norm(a: np.ndarray, eps: float = 1e-12):
     return np.sqrt( image_dot(a, a) + eps)
 
 
-def normalize_image_vector(a: np.ndarray, eps: float = 1e-12):
+def normalize_image_vector(a: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     return a / image_norm(a, eps=eps)
 
 
@@ -311,11 +372,11 @@ def normalized_arclengths( path : np.ndarray ) -> np.ndarray:
     normalized_arclengths = arclenghts / arclenghts[-1]
     return normalized_arclengths
 
-def run_neb_xtb( xtb : XTBPotential,
+def run_neb_xtb( Z : np.ndarray,
                  path0_A: np.ndarray,      # (M, n_atoms, 3), includes endpoints
                  n_steps: int = 1000,
                  lr: float = 1e-3,
-                 k: float = 96.48533212331002,  # kJ/mol/A^2
+                 k: float = 1.0/KJ_MOL_TO_EV,  # kJ/mol/A^2
                  max_step_A: float = 0.02,
                  force_tol: float = 2.8945599636993004, # kJ/mol/A
                  lbfgs_maxiter : int = 15,
@@ -345,48 +406,12 @@ def run_neb_xtb( xtb : XTBPotential,
         Best max NEB force encountered, kJ / mol / Angstrom.
     """
 
-    _thread_local = threading.local()
-    def get_thread_xtb(template: XTBPotential) -> XTBPotential:
-        """
-        Return one XTBPotential per worker thread.
-
-        Assumes one molecule / one xTB setup per persistent thread pool.
-        """
-        if not hasattr(_thread_local, "xtb"):
-            _thread_local.xtb = XTBPotential(
-                Z=template.Z,
-                charge=template.charge,
-                uhf=template.uhf,
-                method=template.method,
-                accuracy=template.accuracy,
-                electronic_temperature=template.electronic_temperature,
-                max_iterations=template.max_iterations,
-                solvent=template.solvent, )
-
-        return _thread_local.xtb
     
-    def evaluate_one_image( R_A: np.ndarray ) -> tuple[float, np.ndarray]:
-        xtb_local = get_thread_xtb(xtb)
-        return evaluate_xtb( xtb_local, R_A )
-    
-    def evaluate_path_parallel( path_A: np.ndarray, pool : ThreadPoolExecutor ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        path_A: (M, n_atoms, 3), Angstrom
-
-        Returns:
-        --------
-            energies: (M,), kJ/mol
-            forces: (M, n_atoms, 3), kJ/mol/Angstrom
-        """
-        results = list( pool.map(evaluate_one_image, path_A) )
-        energies, forces = zip(*results)
-        return np.asarray(energies), np.asarray(forces)
-    
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        neb_energy_and_force = lambda x: evaluate_path_parallel(x, pool)
+    def run_with_evaluator( neb_energy_and_force: Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]],
+                            pool : ProcessPoolExecutor ):
     
         # Measure how well we can do at all with fixed end points
-        _, F0 = evaluate_path_parallel( path0_A, pool )
+        _, F0 = evaluate_path_process_parallel( path0_A, pool )
         xA_rms = np.sqrt((F0[0] ** 2).mean())
         xB_rms = np.sqrt((F0[-1] ** 2).mean())
         print("xA force RMS:", xA_rms, "kJ/mol/A")
@@ -401,3 +426,10 @@ def run_neb_xtb( xtb : XTBPotential,
         # Else run a fine-tuning step using a quasi-Newton method
         path_opt, E_best, info = neb_least_squares( neb_energy_and_force, path_opt_A, k, force_tol, lbfgs_maxiter, callback )
         return path_opt, E_best, info["best_force_rms"]
+    
+    # Process-parallel mode.
+    with ProcessPoolExecutor( max_workers=max_workers, 
+                              initializer=init_xtb_worker,
+                              initargs=( Z, ),  ) as pool:
+        neb_energy_and_force = lambda path_A: evaluate_path_process_parallel(path_A, pool)
+        return run_with_evaluator(neb_energy_and_force, pool)
