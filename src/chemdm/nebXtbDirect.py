@@ -2,56 +2,33 @@ import numpy as np
 import scipy.optimize as opt
 import scipy.sparse as sp
 import torch as pt
-import openmm as mm
-import openmm.unit as unit
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+from chemdm.xtbSetup import XTBPotential
 from chemdm.diagnostics import has_plateaued, has_started_increasing
 from chemdm.Logger import LSQLogger
 
 from typing import Callable, Optional
 
 KJ_MOL_TO_EV = 0.01036427230133138 # eV / kJ
-KJ_MOL_NM_TO_EV_A = KJ_MOL_TO_EV / 10.0
 
-
-def evaluate_openmm_xtb(context: mm.Context, R_A: np.ndarray):
+def evaluate_xtb( XTB: XTBPotential, R_A: np.ndarray) -> tuple[float,np.ndarray]:
     """
+    XTB : XTBPotential
     R_A: (n_atoms, 3), Angstrom
 
     returns:
-        energy_eV: float
-        forces_eV_A: (n_atoms, 3), eV / Angstrom
+        energy_kJ: float
+        forces_kJ_A: (n_atoms, 3), kJ / mol / Angstrom
     """
-    context.setPositions(R_A * unit.angstrom)
+    E_eV, F_eV_A = XTB.energy_forces( R_A )
+    
+    E_kj_mol = E_eV / KJ_MOL_TO_EV
+    F_kj_mol_A = F_eV_A / KJ_MOL_TO_EV
 
-    state = context.getState(getEnergy=True, getForces=True)
-
-    E_kj_mol = state.getPotentialEnergy().value_in_unit( unit.kilojoule_per_mole )
-
-    F_kj_mol_nm = state.getForces(asNumpy=True).value_in_unit(  unit.kilojoule_per_mole / unit.nanometer ) # type: ignore
-
-    E_eV = E_kj_mol * KJ_MOL_TO_EV
-    F_eV_A = np.asarray(F_kj_mol_nm) * KJ_MOL_NM_TO_EV_A
-
-    return float(E_eV), F_eV_A
-
-def evaluate_path(context: mm.Context, path_A: np.ndarray):
-    """
-    path_A: (n_images, n_atoms, 3), Angstrom
-
-    returns:
-        energies_eV: (n_images,)
-        forces_eV_A: (n_images, n_atoms, 3)
-    """
-    energies = []
-    forces = []
-
-    for R_A in path_A:
-        E, F = evaluate_openmm_xtb(context, R_A)
-        energies.append(E)
-        forces.append(F)
-
-    return np.asarray(energies), np.asarray(forces)
+    return float(E_kj_mol), F_kj_mol_A
 
 
 def image_dot(a: np.ndarray, b: np.ndarray):
@@ -161,13 +138,13 @@ def neb_jac_sparsity(n_inner: int, n_atoms: int):
 
     return sp.coo_matrix(  (data, (rows, cols)), shape=(n, n) ).tocsr()
 
-def neb_adam( context: mm.Context,
+def neb_adam( neb_energy_and_force: Callable,
               path0_A: np.ndarray,      # (M, n_atoms, 3), includes endpoints
-              n_steps: int = 1000,
-              lr: float = 1e-3,
-              k: float = 1.0,           # eV / A^2
-              max_step_A: float = 0.02,
-              force_tol: float = 0.03,  # eV / A
+              n_steps: int,
+              lr: float,
+              k: float, 
+              max_step_A: float,
+              force_tol: float,
             ):
     assert path0_A.ndim == 3
     M, n_atoms, _ = path0_A.shape
@@ -189,7 +166,7 @@ def neb_adam( context: mm.Context,
         opt.zero_grad(set_to_none=True)
 
         path_A = np.concatenate( [ xA[None, :, :], x_inner.detach().cpu().numpy(), xB[None, :, :] ], axis=0 )        
-        E_np, F_np = evaluate_path(context, path_A)
+        E_np, F_np = neb_energy_and_force( path_A )
         F_neb = neb_force( path_A, E_np, F_np, k)
 
         # Per-image RMS NEB force, shape (M-2,)
@@ -225,12 +202,12 @@ def neb_adam( context: mm.Context,
             "step": step,
             "max_force_rms": maxF,
             "mean_force_rms": meanF,
-            "barrier_eV": barrier,
+            "barrier_kJ_mol": barrier,
             "max_step_A": max_disp,
             "best_force_rms": best_force,
         }
         history.append(row)
-        print( f"Iter {step:5d}: maxF {maxF:.6e},  meanF {meanF:.6e},  barrier {barrier:.6f} eV,  step {max_disp:.4e} A" )
+        print( f"Iter {step:5d}: maxF {maxF:.6e},  meanF {meanF:.6e},  barrier {barrier:.6f} kJ/mol,  step {max_disp:.4e} A" )
 
         if maxF < force_tol:
             status = "converged"
@@ -249,7 +226,7 @@ def neb_adam( context: mm.Context,
 
     if best_x is None:
         best_x = np.concatenate( [ xA[None, :, :], x_inner.detach().cpu().numpy(), xB[None, :, :] ], axis=0 ) 
-    E_best, _ = evaluate_path(context, best_x)
+    E_best, _ = neb_energy_and_force( best_x )
 
     info = { "status": status,
              "best_force_rms": best_force,
@@ -258,10 +235,10 @@ def neb_adam( context: mm.Context,
     return best_x, E_best, info
 
 
-def neb_least_squares( context: mm.Context,
+def neb_least_squares( neb_energy_and_force: Callable,
                        path0 : np.ndarray,
-                       k: float = 1.0,           # eV / A^2
-                       force_tol: float = 0.03,  # eV / A
+                       k: float,    # kJ / mol / A^2
+                       force_tol: float,  # kJ / mol / A
                        maxiter : int = 15,
                        callback : Optional[Callable] = None,
                     ):
@@ -284,7 +261,7 @@ def neb_least_squares( context: mm.Context,
     logger = LSQLogger( )
     def neb_force_residual( x_inner : np.ndarray ) -> np.ndarray:
         path_A = build_path(x_inner)
-        E_np, F_np = evaluate_path(context, path_A)
+        E_np, F_np = neb_energy_and_force( path_A )
         F_neb = neb_force(path_A, E_np, F_np, k)
 
         logger.observe( E_np, F_neb )
@@ -310,7 +287,7 @@ def neb_least_squares( context: mm.Context,
     
     # Compute relevant return metrics
     path_opt = build_path( result.x )
-    E_opt, F_opt = evaluate_path(context, path_opt)
+    E_opt, F_opt = neb_energy_and_force( path_opt )
     F_neb_opt = neb_force(path_opt, E_opt, F_opt, k)
     F_rms_i = np.sqrt((F_neb_opt**2).mean(axis=(1, 2)))
     final_max_force_rms = float(F_rms_i.max())
@@ -334,44 +311,93 @@ def normalized_arclengths( path : np.ndarray ) -> np.ndarray:
     normalized_arclengths = arclenghts / arclenghts[-1]
     return normalized_arclengths
 
-def run_neb_xtb( context: mm.Context,
+def run_neb_xtb( xtb : XTBPotential,
                  path0_A: np.ndarray,      # (M, n_atoms, 3), includes endpoints
                  n_steps: int = 1000,
                  lr: float = 1e-3,
-                 k: float = 1.0,           # eV / A^2
+                 k: float = 96.48533212331002,  # kJ/mol/A^2
                  max_step_A: float = 0.02,
-                 force_tol: float = 0.03,  # eV / A
+                 force_tol: float = 2.8945599636993004, # kJ/mol/A
                  lbfgs_maxiter : int = 15,
+                 max_workers: int = 4,
                  callback : Optional[Callable] = None,
                 ):
     """
-    Nudged-Elastic Band implementation OpenMM-xTB forces and Torch/Adam.
+
+    Nudged-Elastic Band implementation using direct xTB forces.
+
+    Unit convention:
+        positions: Angstrom
+        energies: kJ/mol
+        forces: kJ/mol/Angstrom
+        k: kJ/mol/Angstrom^2
+        force_tol: kJ/mol/Angstrom
 
     Returns
     -------
     path_opt_A:
         Optimized path, shape (M, n_atoms, 3), Angstrom.
 
-    E_opt_eV:
-        Energies of optimized path, shape (M,), eV.
+    E_opt_kJ_mol:
+        Energies of optimized path, shape (M,), kJ/mol.
 
     best_force:
-        Best max NEB force encountered, eV / Angstrom.
+        Best max NEB force encountered, kJ / mol / Angstrom.
     """
-    
-    # Measure how well we can do at all with fixed end points
-    _, F0 = evaluate_path(context, path0_A)
-    xA_rms = np.sqrt((F0[0] ** 2).mean())
-    xB_rms = np.sqrt((F0[-1] ** 2).mean())
-    print("xA force RMS:", xA_rms, "eV/A")
-    print("xB force RMS:", xB_rms, "eV/A")
 
-    # Do Adam optimization first to get close to the MEP. If it converged: great!
-    path_opt_A, E_best, info = neb_adam( context, path0_A, n_steps, lr, k, max_step_A, force_tol )
-    if info["status"] == "converged":
-        return path_opt_A, E_best, info["best_force_rms"]
-    #path_opt_A = path0_A
+    _thread_local = threading.local()
+    def get_thread_xtb(template: XTBPotential) -> XTBPotential:
+        """
+        Return one XTBPotential per worker thread.
+
+        Assumes one molecule / one xTB setup per persistent thread pool.
+        """
+        if not hasattr(_thread_local, "xtb"):
+            _thread_local.xtb = XTBPotential(
+                Z=template.Z,
+                charge=template.charge,
+                uhf=template.uhf,
+                method=template.method,
+                accuracy=template.accuracy,
+                electronic_temperature=template.electronic_temperature,
+                max_iterations=template.max_iterations,
+                solvent=template.solvent, )
+
+        return _thread_local.xtb
     
-    # Else run a fine-tuning step using a quasi-Newton method
-    path_opt, E_best, info = neb_least_squares( context, path_opt_A, k, force_tol, lbfgs_maxiter, callback )
-    return path_opt, E_best, info["best_force_rms"]
+    def evaluate_one_image( R_A: np.ndarray ) -> tuple[float, np.ndarray]:
+        xtb_local = get_thread_xtb(xtb)
+        return evaluate_xtb( xtb_local, R_A )
+    
+    def evaluate_path_parallel( path_A: np.ndarray, pool : ThreadPoolExecutor ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        path_A: (M, n_atoms, 3), Angstrom
+
+        Returns:
+        --------
+            energies: (M,), kJ/mol
+            forces: (M, n_atoms, 3), kJ/mol/Angstrom
+        """
+        results = list( pool.map(evaluate_one_image, path_A) )
+        energies, forces = zip(*results)
+        return np.asarray(energies), np.asarray(forces)
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        neb_energy_and_force = lambda x: evaluate_path_parallel(x, pool)
+    
+        # Measure how well we can do at all with fixed end points
+        _, F0 = evaluate_path_parallel( path0_A, pool )
+        xA_rms = np.sqrt((F0[0] ** 2).mean())
+        xB_rms = np.sqrt((F0[-1] ** 2).mean())
+        print("xA force RMS:", xA_rms, "kJ/mol/A")
+        print("xB force RMS:", xB_rms, "kJ/mol/A")
+
+        # Do Adam optimization first to get close to the MEP. If it converged: great!
+        path_opt_A, E_best, info = neb_adam( neb_energy_and_force, path0_A, n_steps, lr, k, max_step_A, force_tol )
+        if info["status"] == "converged":
+            return path_opt_A, E_best, info["best_force_rms"]
+        #path_opt_A = path0_A
+        
+        # Else run a fine-tuning step using a quasi-Newton method
+        path_opt, E_best, info = neb_least_squares( neb_energy_and_force, path_opt_A, k, force_tol, lbfgs_maxiter, callback )
+        return path_opt, E_best, info["best_force_rms"]

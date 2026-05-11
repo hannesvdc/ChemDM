@@ -47,7 +47,7 @@ class XTBPotential:
     
 
 def compareOpenMMXTB():
-    mol_with_h = Chem.MolFromMolFile('./../rdkit/conformers_ad/conformer_0.mol')
+    mol_with_h = Chem.MolFromMolFile( './../rdkit/conformers_ad/conformer_0.mol' )
     Z = np.array(  [atom.GetAtomicNum() for atom in mol_with_h.GetAtoms() ], dtype=np.int64 )
     
     # OpenMM context
