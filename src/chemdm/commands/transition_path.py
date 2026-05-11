@@ -23,8 +23,8 @@ import torch as pt
 from chemdm.NewtonE3NN import NewtonE3NN
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
-from chemdm.xtbSetup import create_xtb_context
-from chemdm.nebXtb import run_neb_xtb, normalized_arclengths
+from chemdm.xtbSetup import XTBPotential
+from chemdm.nebXtbDirect import run_neb_xtb, normalized_arclengths
 from chemdm.relaxMolecule import relaxMolecule
 from chemdm.geometry import kabsch_align_numpy
 from chemdm.progress import ProgressCallback
@@ -90,7 +90,8 @@ def run( input_data: dict,
             Algorithm settings used for this run.
     """
     print(f"[runner] keys={list(input_data.keys())}", flush=True, file=sys.stderr) 
-    print(f"[runner] {input_data['n_images']}", flush=True, file=sys.stderr) 
+    print(f"[runner] {input_data['n_images']}", flush=True, file=sys.stderr)
+    KJ_MOL_PER_EV = 96.48533212331002
 
     n_images = int( input_data.get( "n_images", 10 ) )
     theory = input_data.get( "theory", "xTB" )
@@ -105,13 +106,13 @@ def run( input_data: dict,
 
     # Construct the OpenMM force field
     if theory.lower() == "xtb":
-        context = create_xtb_context(Z)
+        xtb = XTBPotential(Z)
 
     # Align the end points for stability. Relax endpoints if desired.
     if relax_endpoints:
         on_progress("relax", "Relaxinging reactants and products", fraction=0.02)
-        xA = relaxMolecule( context, xA, minimizer="Adam" )
-        xB = relaxMolecule( context, xB, minimizer="Adam" )
+        xA = relaxMolecule( xtb, xA, minimizer="Adam" )
+        xB = relaxMolecule( xtb, xB, minimizer="Adam" )
 
     on_progress("align", "Aligning endpoints", fraction=0.10)
     xB = kabsch_align_numpy( xB, xA, Z )
@@ -124,16 +125,16 @@ def run( input_data: dict,
 
     n_steps = 1000
     lr = 1e-3
-    k = 1.0           # eV / A^2
     max_step_A = 0.02
-    force_tol = 0.03  # eV / A
+    k = 1.0 * KJ_MOL_PER_EV          # kJ/mol/Å², equivalent to 1 eV/Å²
+    force_tol = 0.03 * KJ_MOL_PER_EV # k
     maxiter = 15
     on_progress( "fine_tune_path", "Fine-tuning", fraction=0.50 )
     progress_so_far = on_progress.getTotalProgress()
     def callback( iter : int, maxF : float ) -> None:
-        on_progress( "fine_tune_path", f"Step {iter} / {maxiter}: {maxF:.2f} [eV / A]", 
+        on_progress( "fine_tune_path", f"Step {iter} / {maxiter}: {maxF:.2f} [kJ / (mol A)]", 
                      fraction = progress_so_far + (1.0 - progress_so_far) * iter / maxiter )
-    path_opt, E_opt_eV, best_force = run_neb_xtb( context, path0, n_steps, lr, k, max_step_A, force_tol, lbfgs_maxiter=maxiter, callback=callback)
+    path_opt, E_opt_eV, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, lbfgs_maxiter=maxiter, callback=callback)
     s = normalized_arclengths(path_opt)
 
     # Send back to the server as a dict.
