@@ -186,9 +186,6 @@ def free_energy_from_hist(phi, psi, temperature=300.0, bins=72, eps=1e-12):
 def alanine():
     """
     Main driver script for the Alanine-Dipeptide testcase.
-
-    TODO: 
-    1. Parallelize xTB conformer search
     """
 
     smiles = "CC(=O)N[C@@H](C)C(=O)NC"

@@ -129,13 +129,15 @@ def run( input_data: dict,
     k = 1.0 * KJ_MOL_PER_EV          # kJ/mol/Å², equivalent to 1 eV/Å²
     force_tol = 0.03 * KJ_MOL_PER_EV # k
     maxiter = 15
+    max_workers = n_images
     on_progress( "fine_tune_path", "Fine-tuning", fraction=0.50 )
     progress_so_far = on_progress.getTotalProgress()
     def callback( iter : int, maxF : float ) -> None:
         on_progress( "fine_tune_path", f"Step {iter} / {maxiter}: {maxF:.2f} [kJ / (mol A)]", 
                      fraction = progress_so_far + (1.0 - progress_so_far) * iter / maxiter )
-    path_opt, E_opt_eV, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, lbfgs_maxiter=maxiter, callback=callback)
+    path_opt, E_opt_eV, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, lbfgs_maxiter=maxiter, callback=callback, max_workers=max_workers)
     s = normalized_arclengths(path_opt)
+    E_opt_eV -= E_opt_eV[0]
 
     # Send back to the server as a dict.
     on_progress( "path_done", "Calculations Finished", fraction=1.0 )
