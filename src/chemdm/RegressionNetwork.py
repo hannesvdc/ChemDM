@@ -1,8 +1,6 @@
-import math
 import torch as pt
 import torch.nn as nn
 
-from collections import OrderedDict
 from typing import List
 
 from chemdm.embedding import ArcLengthEmbedding
