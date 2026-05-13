@@ -1,3 +1,4 @@
+import sys
 import numpy as np
 import scipy.optimize as opt
 import scipy.sparse as sp
@@ -5,13 +6,13 @@ import torch as pt
 
 from concurrent.futures import ProcessPoolExecutor
 
+from chemdm.Constants import *
 from chemdm.xtbSetup import XTBPotential
 from chemdm.diagnostics import has_plateaued, has_started_increasing
 from chemdm.Logger import LSQLogger
 
 from typing import Callable, Optional
 
-KJ_MOL_TO_EV = 0.01036427230133138 # eV / kJ
 
 _WORKER_XTB: XTBPotential | None = None
 def init_xtb_worker( Z: np.ndarray, ):
@@ -123,7 +124,7 @@ def normalize_image_vector(a: np.ndarray, eps: float = 1e-12) -> np.ndarray:
 def neb_force( x: np.ndarray,       # (M, n_atoms, 3)
                E: np.ndarray,       # (M,)
                F_true: np.ndarray,  # (M, n_atoms, 3), physical force = -grad E
-               k: float, ):
+               k: float, ) -> tuple[np.ndarray, np.ndarray]:
     """
     Returns NEB force on interior images only.
 
@@ -169,7 +170,7 @@ def neb_force( x: np.ndarray,       # (M, n_atoms, 3)
 
     F_spring = k * (dist_f - dist_b)[:, None, None] * tau
 
-    return F_perp + F_spring
+    return F_perp + F_spring, F_perp
 
 def neb_jac_sparsity(n_inner: int, n_atoms: int):
     block_size = n_atoms * 3
@@ -199,6 +200,31 @@ def neb_jac_sparsity(n_inner: int, n_atoms: int):
 
     return sp.coo_matrix(  (data, (rows, cols)), shape=(n, n) ).tocsr()
 
+def neb_force_metrics(path_A: np.ndarray,
+                      E_np: np.ndarray,
+                      F_np: np.ndarray,
+                      k: float) -> dict:
+    """
+    Compute standard NEB diagnostics for a full path.
+    """
+    F_neb, F_perp = neb_force(path_A, E_np, F_np, k)
+
+    # Per-interior-image RMS force, shape (M-2,)
+    F_neb_rms_i = np.sqrt(np.mean(F_neb**2, axis=(-2, -1)))
+    F_perp_rms_i = np.sqrt(np.mean(F_perp**2, axis=(-2, -1)))
+    rel_E = E_np - E_np[0]
+
+    return {
+        "F_neb": F_neb,
+        "F_neb_rms_i": F_neb_rms_i,
+        "F_perp_rms_i": F_perp_rms_i,
+        "max_force_rms": float(F_perp_rms_i.max()),
+        "mean_force_rms": float(F_perp_rms_i.mean()),
+        "barrier_kJ_mol": float(rel_E.max()),
+        "final_kJ_mol": float(rel_E[-1]),
+        "worst_image": int(np.argmax(F_perp_rms_i) + 1),  # +1 because endpoints excluded
+    }
+
 def neb_adam( neb_energy_and_force: Callable,
               path0_A: np.ndarray,      # (M, n_atoms, 3), includes endpoints
               n_steps: int,
@@ -206,6 +232,7 @@ def neb_adam( neb_energy_and_force: Callable,
               k: float, 
               max_step_A: float,
               force_tol: float,
+              callback : Optional[Callable] = None,
             ):
     assert path0_A.ndim == 3
     M, n_atoms, _ = path0_A.shape
@@ -217,21 +244,21 @@ def neb_adam( neb_energy_and_force: Callable,
 
     x_inner = pt.nn.Parameter( x0[1:-1].clone() )
     opt = pt.optim.Adam([x_inner], lr=lr)
+    lr_min = 1e-7
+    step_count = 0
 
     best_x = None
     best_force = float("inf")
     history = []
-    status = "max_steps"
-
-    for step in range(n_steps):
-        opt.zero_grad(set_to_none=True)
+    while lr > lr_min:
+        opt.zero_grad( set_to_none=True )
 
         path_A = np.concatenate( [ xA[None, :, :], x_inner.detach().cpu().numpy(), xB[None, :, :] ], axis=0 )        
         E_np, F_np = neb_energy_and_force( path_A )
-        F_neb = neb_force( path_A, E_np, F_np, k)
+        F_neb, F_perp = neb_force( path_A, E_np, F_np, k)
 
         # Per-image RMS NEB force, shape (M-2,)
-        F_rms_i = np.sqrt( np.mean(F_neb**2, axis=(-2,-1)) )
+        F_rms_i = np.sqrt( np.mean(F_perp**2, axis=(-2,-1)) )
         maxF = float(F_rms_i.max().item())
         meanF = float(F_rms_i.mean().item())
 
@@ -259,35 +286,43 @@ def neb_adam( neb_energy_and_force: Callable,
                 x_inner.copy_(old + disp)
                 max_disp = max_step_A
 
-        row = {
-            "step": step,
-            "max_force_rms": maxF,
-            "mean_force_rms": meanF,
-            "barrier_kJ_mol": barrier,
-            "max_step_A": max_disp,
-            "best_force_rms": best_force,
+        row = { "step": step_count,
+                "max_force_rms": maxF,
+                "mean_force_rms": meanF,
+                "barrier_kJ_mol": barrier,
+                "max_step_A": max_disp,
+                "best_force_rms": best_force,
         }
         history.append(row)
-        print( f"Iter {step:5d}: maxF {maxF:.6e},  meanF {meanF:.6e},  barrier {barrier:.6f} kJ/mol,  step {max_disp:.4e} A" )
+        print( f"Iter {step_count:5d}: maxF {maxF:.6e},  meanF {meanF:.6e},  barrier {barrier:.6f} kJ/mol,  step {max_disp:.4e} A", file=sys.stderr )
 
+        if step_count % 50 == 0 and callback is not None:
+            callback( step_count, row["best_force_rms"])
         if maxF < force_tol:
             status = "converged"
-            print('Adam Comverged')
+            print('Adam Comverged', file=sys.stderr )
             break
 
-        if has_started_increasing( history, window=50, rel_increase=0.02, ):
+        if has_started_increasing( history, window=6, rel_increase=0.02, ):
             status = "increasing"
-            print( 'Adam started to increase')
-            break
-
-        if has_plateaued( history, window=50, rel_tol=0.02 ):
+            print( 'Adam started to increase. Reducing lr. ', file=sys.stderr )
+            lr = 0.5*lr
+        elif has_plateaued( history, window=6, rel_tol=0.02 ):
             status = "plateau"
-            print( 'Adam Plateau Reached')
+            print( 'Adam Plateau Reached. Reducing lr. ', file=sys.stderr )
+            lr = 0.5*lr
+
+        step_count += 1
+        if step_count > n_steps:
+            status = "max_steps"
+            print( 'Adam Has Reached the Maximum Number of Steps. ', file=sys.stderr )
             break
 
     if best_x is None:
         best_x = np.concatenate( [ xA[None, :, :], x_inner.detach().cpu().numpy(), xB[None, :, :] ], axis=0 ) 
-    E_best, _ = neb_energy_and_force( best_x )
+    E_best, F_best = neb_energy_and_force( best_x )
+    if callback is not None:
+        callback( step_count, neb_force_metrics( best_x, E_best, F_best, k)["max_force_rms"] )
 
     info = { "status": status,
              "best_force_rms": best_force,
@@ -323,9 +358,9 @@ def neb_least_squares( neb_energy_and_force: Callable,
     def neb_force_residual( x_inner : np.ndarray ) -> np.ndarray:
         path_A = build_path(x_inner)
         E_np, F_np = neb_energy_and_force( path_A )
-        F_neb = neb_force(path_A, E_np, F_np, k)
+        F_neb, F_perp = neb_force(path_A, E_np, F_np, k)
 
-        logger.observe( E_np, F_neb )
+        logger.observe( E_np, F_perp )
         return pack( F_neb )
     iterations = 0
     def internal_callback( _ ):
@@ -334,6 +369,7 @@ def neb_least_squares( neb_energy_and_force: Callable,
         nonlocal iterations
         if callback is not None:
             callback( iterations, logger.history[-1]["max_force_rms"] )
+        print( "NEB MaxF", logger.history[-1]["max_force_rms"], file=sys.stderr )
         iterations += 1
         if logger.history[-1]["max_force_rms"] < force_tol or iterations > maxiter:
             logger.converged = True
@@ -344,13 +380,13 @@ def neb_least_squares( neb_energy_and_force: Callable,
     neb_force_residual( x0 );  internal_callback( [] ) # Log the initial state
     result = opt.least_squares( neb_force_residual, x0, ftol=1e-6, callback=internal_callback, jac_sparsity=sparsity )
     success = bool( result.success ) or logger.converged
-    print( 'Least-Squares Converged: ', success )
+    print( 'Least-Squares Converged: ', success, file=sys.stderr )
     
     # Compute relevant return metrics
     path_opt = build_path( result.x )
     E_opt, F_opt = neb_energy_and_force( path_opt )
-    F_neb_opt = neb_force(path_opt, E_opt, F_opt, k)
-    F_rms_i = np.sqrt((F_neb_opt**2).mean(axis=(1, 2)))
+    F_neb_opt, F_perp_opt = neb_force(path_opt, E_opt, F_opt, k)
+    F_rms_i = np.sqrt((F_perp_opt**2).mean(axis=(1, 2)))
     final_max_force_rms = float(F_rms_i.max())
 
     print(F_rms_i)
@@ -374,7 +410,7 @@ def normalized_arclengths( path : np.ndarray ) -> np.ndarray:
 
 def run_neb_xtb( Z : np.ndarray,
                  path0_A: np.ndarray,      # (M, n_atoms, 3), includes endpoints
-                 n_steps: int = 1000,
+                 n_steps: int = 250,
                  lr: float = 1e-3,
                  k: float = 1.0/KJ_MOL_TO_EV,  # kJ/mol/A^2
                  max_step_A: float = 0.02,
@@ -411,16 +447,21 @@ def run_neb_xtb( Z : np.ndarray,
                             pool : ProcessPoolExecutor ):
     
         # Measure how well we can do at all with fixed end points
-        _, F0 = evaluate_path_process_parallel( path0_A, pool )
+        E0, F0 = neb_energy_and_force(path0_A)
         xA_rms = np.sqrt((F0[0] ** 2).mean())
         xB_rms = np.sqrt((F0[-1] ** 2).mean())
         print("xA force RMS:", xA_rms, "kJ/mol/A")
         print("xB force RMS:", xB_rms, "kJ/mol/A")
+        initial_metrics = neb_force_metrics( path0_A, E0, F0, k )
+        if callback is not None:
+            callback(0, initial_metrics["max_force_rms"])
 
         # Do Adam optimization first to get close to the MEP. If it converged: great!
-        path_opt_A, E_best, info = neb_adam( neb_energy_and_force, path0_A, n_steps, lr, k, max_step_A, force_tol )
+        path_opt_A, E_best, info = neb_adam( neb_energy_and_force, path0_A, n_steps, lr, k, max_step_A, force_tol, callback )
         if info["status"] == "converged":
+            print('Adam converged')
             return path_opt_A, E_best, info["best_force_rms"]
+        return path_opt_A, E_best, info["best_force_rms"]
         #path_opt_A = path0_A
         
         # Else run a fine-tuning step using a quasi-Newton method

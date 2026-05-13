@@ -126,3 +126,82 @@ def kabsch_rotation_torch(P: pt.Tensor,
     )
 
     return U @ D @ Vh
+
+def normalize(v: np.ndarray, axis: int = -1, eps: float = 1e-12) -> np.ndarray:
+    n = np.linalg.norm(v, axis=axis, keepdims=True)
+    return v / np.maximum(n, eps)
+
+def perpendicular_basis(axis: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    axis: (..., 3)
+    Returns u, v with shape (..., 3), perpendicular to axis.
+    """
+    axis = normalize(axis, axis=-1)
+
+    tmp = np.zeros_like(axis)
+    use_x = np.abs(axis[..., 0]) < 0.9
+    tmp[use_x] = np.array([1.0, 0.0, 0.0])
+    tmp[~use_x] = np.array([0.0, 1.0, 0.0])
+
+    u = tmp - np.sum(tmp * axis, axis=-1, keepdims=True) * axis
+    u = normalize(u, axis=-1)
+    v = np.cross(axis, u)
+    v = normalize(v, axis=-1)
+
+    return u, v
+
+def perpendicular_basis_continuous( axis: np.ndarray ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Build a continuous perpendicular basis along a path.
+
+    axis: (M, 3)
+
+    Returns
+    -------
+    u, v: both (M, 3)
+
+    This avoids abrupt frame flips from choosing a global x/y reference
+    independently at each image.
+    """
+    axis = normalize(axis, axis=-1)
+    M = axis.shape[0]
+
+    u = np.zeros_like(axis)
+    v = np.zeros_like(axis)
+
+    # Initialize u[0] using a safe global reference.
+    if abs(axis[0, 0]) < 0.9:
+        tmp = np.array([1.0, 0.0, 0.0])
+    else:
+        tmp = np.array([0.0, 1.0, 0.0])
+
+    u0 = tmp - np.dot(tmp, axis[0]) * axis[0]
+    u0 = u0 / np.linalg.norm(u0)
+
+    u[0] = u0
+    v[0] = np.cross(axis[0], u[0])
+    v[0] = v[0] / np.linalg.norm(v[0])
+
+    for m in range(1, M):
+        # Project previous u onto the plane perpendicular to current axis.
+        um = u[m - 1] - np.dot(u[m - 1], axis[m]) * axis[m]
+
+        # Rare fallback if previous u becomes nearly parallel to current axis.
+        if np.linalg.norm(um) < 1e-8:
+            if abs(axis[m, 0]) < 0.9:
+                tmp = np.array([1.0, 0.0, 0.0])
+            else:
+                tmp = np.array([0.0, 1.0, 0.0])
+            um = tmp - np.dot(tmp, axis[m]) * axis[m]
+
+        um = um / np.linalg.norm(um)
+
+        # Optional sign correction: prevent u from flipping by 180 degrees.
+        if np.dot(um, u[m - 1]) < 0.0:
+            um = -um
+
+        u[m] = um
+        v[m] = np.cross(axis[m], u[m])
+        v[m] = v[m] / np.linalg.norm(v[m])
+
+    return u, v
