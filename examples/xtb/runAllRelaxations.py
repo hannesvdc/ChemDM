@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from chemdm.xtbSetup import create_xtb_context
+from chemdm.xtbSetup import XTBPotential
 from testTransition1xPipeline import build_molecule_reaction_map, runRelaxation
 
 REACTION_FILE_PATTERN = re.compile( r"^(?P<split>.+?)_reaction_(?P<reaction_id>\d+)_molecule_(?P<molecule>.+)\.json$" )
@@ -70,7 +70,7 @@ def run_sweep( data_dir: str | Path,
             with open( data_dir / filename, "r" ) as jsonfile:
                 trajectory = json.load( jsonfile )
                 print( "Reaction Loaded." )
-            context = create_xtb_context( trajectory["Z"] )
+            context = XTBPotential( trajectory["Z"] )
 
             base_row = { "split": kind, "molecule": molecule, "reaction_id": reaction_id, }
 

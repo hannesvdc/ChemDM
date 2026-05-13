@@ -1,12 +1,10 @@
 import numpy as np
 import torch as pt
-import openmm as mm
-import openmm.unit as unit
 
-KJ_MOL_NM_TO_EV_A = 0.001036427230133138
-KJ_MOL_TO_EV = 0.01036427230133138
+from chemdm.Constants import *
+from chemdm.xtbSetup import XTBPotential
 
-def evaluate_openmm_xtb(context, positions_A: np.ndarray):
+def evaluate_xtb( xtb : XTBPotential , positions_A: np.ndarray):
     """
     positions_A: (N, 3), Angstrom
 
@@ -15,11 +13,10 @@ def evaluate_openmm_xtb(context, positions_A: np.ndarray):
         energy_kj_mol: float
         forces_kj_mol_nm: (N, 3), kJ/(mol nm)
     """
-    context.setPositions(positions_A * unit.angstrom)
+    energy_eV, forces_eV_A = xtb.energy_forces( positions_A )
 
-    state = context.getState(getEnergy=True, getForces=True)
-    energy_kj_mol = state.getPotentialEnergy().value_in_unit( unit.kilojoule_per_mole )
-    forces_kj_mol_nm = state.getForces(asNumpy=True).value_in_unit( unit.kilojoule_per_mole / unit.nanometer ) # type: ignore
+    energy_kj_mol = energy_eV / KJ_MOL_TO_EV
+    forces_kj_mol_nm = forces_eV_A / KJ_MOL_TO_EV
 
     return float(energy_kj_mol), np.asarray(forces_kj_mol_nm, dtype=np.float64)
 
@@ -31,7 +28,7 @@ def displacement_stats(R0_A: np.ndarray, R1_A: np.ndarray) -> dict:
         "max_displacement_A": float( np.max(displacement) ),
     }
 
-def minimize_with_adam( context : mm.Context,
+def minimize_with_adam( xtb : XTBPotential,
                         positions_A: np.ndarray,
                         n_steps: int = 10_000,
                         lr: float = 1e-3,  # Angstrom-scale learning rate
@@ -41,7 +38,7 @@ def minimize_with_adam( context : mm.Context,
                         ) -> tuple[np.ndarray, dict]:
 
     """
-    Adam minimizer using xTB/OpenMM forces.
+    Adam minimizer using xTB forces.
 
     Internal Torch coordinate units:
         positions: Angstrom
@@ -78,9 +75,9 @@ def minimize_with_adam( context : mm.Context,
         R_np = R.detach().cpu().numpy()
         
         try:
-            energy_kj_mol, forces_kj_mol_nm = evaluate_openmm_xtb( context, R_np )
+            energy_kj_mol, forces_kj_mol_nm = evaluate_xtb( xtb, R_np )
         except Exception as exc:
-            print(f"xTB/OpenMM failed at step {step}: {exc}")
+            print(f"xTB failed at step {step}: {exc}")
             error_type = type(exc).__name__
             error_message = str(exc)
             status = "failed"
@@ -97,7 +94,7 @@ def minimize_with_adam( context : mm.Context,
             initial_max_force_ev_A = max_force_ev_A
 
         # Torch minimizes using grad = dE/dR.
-        # OpenMM gives force = -dE/dR.
+        # xTB gives force = -dE/dR.
         grad_ev_A = -forces_ev_A
         R.grad = pt.tensor(grad_ev_A, dtype=R.dtype)
 
@@ -130,7 +127,7 @@ def minimize_with_adam( context : mm.Context,
     # before the final Adam coordinate update.
     R_final_A = R.detach().cpu().numpy()
     try:
-        final_energy_kj_mol, final_forces_kj_mol_nm = evaluate_openmm_xtb( context, R_final_A, )
+        final_energy_kj_mol, final_forces_kj_mol_nm = evaluate_xtb( xtb, R_final_A, )
         final_forces_ev_A = final_forces_kj_mol_nm * KJ_MOL_NM_TO_EV_A
         final_max_force_ev_A = float(np.linalg.norm(final_forces_ev_A, axis=1).max())
     except Exception as exc:

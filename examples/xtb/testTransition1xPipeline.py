@@ -1,9 +1,6 @@
 import numpy as np
 
-import openmm as mm
-import openmm.unit as unit
-
-from chemdm.xtbSetup import create_xtb_context
+from chemdm.xtbSetup import XTBPotential
 from safeOptimizer import minimize_with_adam
 
 from pathlib import Path
@@ -50,7 +47,7 @@ def build_molecule_reaction_map(data_dir: str | Path, kind : str) -> dict[str, l
         molecule: sorted(reaction_ids) for molecule, reaction_ids in sorted(molecule_to_reactions.items())
     }
 
-def runRelaxation( context: mm.Context,
+def runRelaxation( xtb: XTBPotential,
                    trajectory : dict,
                    verbose : bool = False ) -> tuple[np.ndarray, dict]:
 
@@ -61,7 +58,7 @@ def runRelaxation( context: mm.Context,
     # Run our Adam equilibration code
     print_every = 10 if verbose else 100
     minimized_positions_A, info = minimize_with_adam(
-        context=context,
+        xtb,
         positions_A=positions_A,
         n_steps=10_000,
         lr=1e-3,
@@ -93,5 +90,5 @@ if __name__ == '__main__':
         trajectory = json.load( jsonfile )
         print( "Reaction Loaded." )
     
-    context = create_xtb_context( trajectory["Z"] )
-    runRelaxation( context, trajectory, verbose=True )
+    xtb = XTBPotential( trajectory["Z"] )
+    runRelaxation( xtb, trajectory, verbose=True )

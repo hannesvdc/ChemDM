@@ -33,7 +33,6 @@ def build_molecule_reaction_map(data_dir: str | Path, kind : str) -> dict[str, l
             "C4H8O2": [0, 7],
         }
     """
-
     data_dir = Path(data_dir)
     molecule_to_reactions = defaultdict(list)
 
