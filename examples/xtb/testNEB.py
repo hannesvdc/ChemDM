@@ -1,7 +1,7 @@
 import numpy as np
 import torch as pt
-import openmm as mm
 
+from chemdm.Constants import *
 from chemdm.xtbSetup import XTBPotential
 from chemdm.nebXtbDirect import run_neb_xtb, evaluate_path, neb_force
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, Molecule
@@ -78,23 +78,22 @@ def evaluateML( tp_network : pt.nn.Module,
     x = x.reshape(n_images, mol_size, 3)
     return x, xa_mol, xb_mol, s, molecule_path
 
-def evaluateMaxForce( xtb : XTBPotential,#context : mm.Context,
+def evaluateMaxForce( xtb : XTBPotential,
                       path : np.ndarray,
                       k : float, ) -> float:
     E_np, F_np = evaluate_path( xtb, path )
-    F_neb = neb_force( path, E_np, F_np, k )
+    F_neb, F_perp = neb_force( path, E_np, F_np, k )
 
-    F_rms_i = np.sqrt( np.mean(F_neb**2, axis=(-2,-1)) )
+    F_rms_i = np.sqrt( np.mean(F_perp**2, axis=(-2,-1)) )
     maxF = float( np.max(F_rms_i) )
 
     return maxF
 
 def runNEB( tp_network : pt.nn.Module,
             diffusion_network : pt.nn.Module,
-            xtb : XTBPotential, #context: mm.Context,
+            xtb : XTBPotential,
             trajectory : dict,
             device : pt.device ):
-    KJ_MOL_PER_EV = 96.48533212331002
     k = 1.0 * KJ_MOL_PER_EV          # kJ/mol/Å², equivalent to 1 eV/Å²
     force_tol = 0.03 * KJ_MOL_PER_EV # k
 
@@ -155,6 +154,5 @@ if __name__ == '__main__':
     diffusion_network = loadDiffusionModel( './MLModel/', device, dtype )
     
     print(trajectory.keys())
-    # context = create_xtb_context( trajectory["Z"] )
     xtb = XTBPotential( trajectory["Z"] )
     runNEB( tp_network, diffusion_network, xtb, trajectory, device )
