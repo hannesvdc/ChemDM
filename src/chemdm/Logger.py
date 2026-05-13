@@ -11,14 +11,14 @@ class LSQLogger:
     converged: bool = False
 
     def observe(self, E_np: np.ndarray, 
-                      F_neb: np.ndarray) -> None:
+                      F_perp: np.ndarray) -> None:
         """Called inside residual evaluation. Stores only the latest evaluation."""
-        F_rms_i = np.sqrt((F_neb**2).mean(axis=(1, 2)))
+        F_rms_i = np.sqrt((F_perp**2).mean(axis=(1, 2)))
 
         rel_E = E_np - E_np[0]
 
         self.pending = { "eval": self.eval_count,
-                         "cost": 0.5 * float(np.sum(F_neb.reshape(-1) ** 2)),
+                         "cost": 0.5 * float(np.sum(F_perp.reshape(-1) ** 2)),
                          "max_force_rms": float(F_rms_i.max()),
                          "mean_force_rms": float(F_rms_i.mean()),
                          "barrier_eV": float(rel_E.max()),

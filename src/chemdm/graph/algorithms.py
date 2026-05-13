@@ -4,6 +4,17 @@ from scipy.spatial import KDTree
 
 from typing import Tuple
 
+def neighbors_from_graph(G: np.ndarray, atom: int) -> np.ndarray:
+    """
+    Return all atoms bonded to `atom`.
+
+    Assumes G is an edge list of shape (n_edges, 2). Works if the graph is bidirectional.
+    """
+    G = np.asarray(G, dtype=int)
+    nbrs = G[G[:, 0] == atom, 1]
+
+    return nbrs
+
 @pt.no_grad()
 def findAllDistanceNeighbors( x: pt.Tensor,
                               cutoff: float

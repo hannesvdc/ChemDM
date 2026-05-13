@@ -5,13 +5,11 @@ import torch as pt
 import openmm as mm
 import openmm.unit as unit
 
+from chemdm.Constants import *
 from chemdm.diagnostics import has_plateaued, has_started_increasing
 from chemdm.Logger import LSQLogger
 
 from typing import Callable, Optional
-
-KJ_MOL_TO_EV = 0.01036427230133138 # eV / kJ
-KJ_MOL_NM_TO_EV_A = KJ_MOL_TO_EV / 10.0
 
 
 def evaluate_openmm_xtb(context: mm.Context, R_A: np.ndarray):
