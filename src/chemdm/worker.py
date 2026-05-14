@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import sys
 import traceback
-from typing import Any, Callable
+from typing import Any
 
 from chemdm.commands.transition_path import run as run_transition_path
 from chemdm.commands.transition_path import load_transition_path_model
+from chemdm.commands.stable_conformer import run as run_stabilize_conformer
+from chemdm.commands.generate_conformers import run as run_generate_conformers
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -178,6 +180,10 @@ def handle_job(job: dict[str, Any], state: WorkerState) -> None:
                 body,
                 on_progress=ProgressObject(),
                 tp_network=state.transition_path_model, ) # type: ignore
+        elif experiment == "stabilize-conformer":
+            result = run_stabilize_conformer( body )
+        elif experiment == "generate-conformers":
+            result = run_generate_conformers( body )
         else:
             raise ValueError(f"Unknown experiment: {experiment!r}")
 

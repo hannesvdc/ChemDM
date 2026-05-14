@@ -1,5 +1,5 @@
 """
-Minimize the energy of a 3D Molecule: Forcefield refinement.
+Discover Stable Conformer from 2D Molecular Graph: RDKIT initial guess + xTB-optim refinement.
 """
 from __future__ import annotations
 
