@@ -244,12 +244,17 @@ def neb_adam( neb_energy_and_force: Callable,
 
     x_inner = pt.nn.Parameter( x0[1:-1].clone() )
     opt = pt.optim.Adam([x_inner], lr=lr)
+    def set_optimizer_lr( lr: float):
+        for group in opt.param_groups:
+            group["lr"] = lr
+
     lr_min = 1e-7
     step_count = 0
 
     best_x = None
     best_force = float("inf")
     history = []
+    lr_history = []
     while lr > lr_min:
         opt.zero_grad( set_to_none=True )
 
@@ -294,6 +299,7 @@ def neb_adam( neb_energy_and_force: Callable,
                 "best_force_rms": best_force,
         }
         history.append(row)
+        lr_history.append(row)
         print( f"Iter {step_count:5d}: maxF {maxF:.6e},  meanF {meanF:.6e},  barrier {barrier:.6f} kJ/mol,  step {max_disp:.4e} A", file=sys.stderr )
 
         if step_count % 50 == 0 and callback is not None:
@@ -303,14 +309,18 @@ def neb_adam( neb_energy_and_force: Callable,
             print('Adam Comverged', file=sys.stderr )
             break
 
-        if has_started_increasing( history, window=6, rel_increase=0.02, ):
+        if has_started_increasing( lr_history, window=6, rel_increase=0.02, ):
             status = "increasing"
             print( 'Adam started to increase. Reducing lr. ', file=sys.stderr )
             lr = 0.5*lr
-        elif has_plateaued( history, window=6, rel_tol=0.02 ):
+            set_optimizer_lr( lr )
+            lr_history.clear()
+        elif has_plateaued( lr_history, window=6, rel_tol=0.02 ):
             status = "plateau"
             print( 'Adam Plateau Reached. Reducing lr. ', file=sys.stderr )
             lr = 0.5*lr
+            set_optimizer_lr( lr )
+            lr_history.clear()
 
         step_count += 1
         if step_count > n_steps:

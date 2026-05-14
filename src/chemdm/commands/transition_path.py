@@ -168,11 +168,6 @@ def _ml_initial_guess( tp_network : NewtonE3NN,
     assert n_images >= 3, "The number of images along the transition path - including endpoints - must be larger than 3."
     mol_size = len(Z)
 
-    model_path = os.environ.get( "CHEMDM_TRANSITION_PATH_MODEL", str(_REPO_ROOT / "models" / "newton_reaction_trajectory_model.pth") )
-    state_dict = pt.load( model_path, map_location=pt.device("cpu"), weights_only=True )
-    tp_network.load_state_dict( state_dict )
-    tp_network.to( dtype=pt.float32 )
-
     # Evaluate the network at equidistant points along the trajectory.
     s_t = pt.linspace(0.0, 1.0, n_images)
     xa_batched, xb_batched, s_values = [], [], []
