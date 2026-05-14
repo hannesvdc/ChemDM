@@ -112,7 +112,7 @@ def minimize_with_adam( xtb : XTBPotential,
             displacement = R - old_R
             disp_norms = pt.linalg.norm(displacement, dim=1)
             max_disp = pt.max(disp_norms).item()
-            rmsd = np.sqrt( float( np.mean( (R.cpu().numpy() - positions_A)**2, axis=1 ) ) )
+            rmsd = np.sqrt( float( np.mean( np.sum( (R.cpu().numpy() - positions_A)**2, axis=1 ) ) ) )
 
             if max_disp > max_step_A:
                 displacement *= max_step_A / max_disp
