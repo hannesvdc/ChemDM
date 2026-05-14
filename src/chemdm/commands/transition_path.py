@@ -118,17 +118,17 @@ def run( input_data: dict,
     # Align the end points for stability. Relax endpoints if desired.
     if relax_endpoints:
         on_progress("relax", "Relaxinging reactants and products", fraction=0.02)
-        xA = relaxMolecule( xtb, xA, minimizer="Adam" )
-        xB = relaxMolecule( xtb, xB, minimizer="Adam" )
+        xA = relaxMolecule( xtb, xA, minimizer="Adam", returnOptimizationHistory=False )
+        xB = relaxMolecule( xtb, xB, minimizer="Adam", returnOptimizationHistory=False )
 
     on_progress("align", "Aligning endpoints", fraction=0.10)
-    xB = kabsch_align_numpy( xB, xA, Z )
+    xB = kabsch_align_numpy( xB, xA, Z ) # type: ignore
 
     # Evaluate the Newton model for a good initial guess.
     on_progress("generate_path", "Generating initial guess for the path", fraction=0.15)
     if tp_network is None:
         tp_network = load_transition_path_model( )
-    path0, s0 = _ml_initial_guess( tp_network, Z, xA, xB, GA, GB, n_images )
+    path0, s0 = _ml_initial_guess( tp_network, Z, xA, xB, GA, GB, n_images ) # type: ignore
 
     # Make the path chemically feasible. Only do it if the moleulce is large enough.
     # For example, butane is fully relient on methyl rotation.
