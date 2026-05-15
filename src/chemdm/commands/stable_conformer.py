@@ -15,8 +15,10 @@ import numpy as np
 
 from chemdm.xtbSetup import XTBPotential
 from chemdm.relaxMolecule import minimize_with_adam
+from chemdm.progress import ProgressCallback
 
-def run(input_data: dict) -> dict:
+def run(input_data: dict, 
+        on_progress : ProgressCallback) -> dict:
     """
     Empty implementation for now.
     """

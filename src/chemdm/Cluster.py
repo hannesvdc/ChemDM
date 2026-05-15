@@ -41,8 +41,8 @@ def rmsd_clustering( Z : np.ndarray,
 
 def post_relaxation_rmsd_clustering( Z: np.ndarray,
                                      conformers: list[np.ndarray],
-                                     energies: np.ndarray,
-                                     forces: np.ndarray,
+                                     energies: list[float],
+                                     forces: list[float],
                                      cluster_sizes: list[int],
                                      rmsd_tol: float = 0.5,
     ) -> tuple[list[np.ndarray], np.ndarray, np.ndarray, list[int], list[int]]:

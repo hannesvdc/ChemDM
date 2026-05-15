@@ -181,9 +181,9 @@ def handle_job(job: dict[str, Any], state: WorkerState) -> None:
                 on_progress=ProgressObject(),
                 tp_network=state.transition_path_model, ) # type: ignore
         elif experiment == "stabilize-conformation":
-            result = run_stabilize_conformer( body )
+            result = run_stabilize_conformer( body, on_progress=ProgressObject(), )
         elif experiment == "generate-conformers":
-            result = run_generate_conformers( body )
+            result = run_generate_conformers( body, on_progress=ProgressObject(), )
         else:
             raise ValueError(f"Unknown experiment: {experiment!r}")
 
