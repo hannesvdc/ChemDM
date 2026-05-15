@@ -180,7 +180,7 @@ def handle_job(job: dict[str, Any], state: WorkerState) -> None:
                 body,
                 on_progress=ProgressObject(),
                 tp_network=state.transition_path_model, ) # type: ignore
-        elif experiment == "stabilize-conformer":
+        elif experiment == "stabilize-conformation":
             result = run_stabilize_conformer( body )
         elif experiment == "generate-conformers":
             result = run_generate_conformers( body )

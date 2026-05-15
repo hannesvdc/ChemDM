@@ -14,7 +14,7 @@ if str(_XTB_DIR) not in sys.path:
 import numpy as np
 
 from chemdm.xtbSetup import XTBPotential
-from chemdm.relaxMolecule import relaxMolecule
+from chemdm.relaxMolecule import minimize_with_adam
 
 def run(input_data: dict) -> dict:
     """
@@ -28,12 +28,23 @@ def run(input_data: dict) -> dict:
     # Fetch the molecule.
     Z = np.asarray( molecule["Z"], dtype=np.long )
     x0 = np.asarray( molecule["x"] )
-    bonds = np.asarray( molecule["bonds"] )
 
     # Construct the XTB force field
     if theory.lower() == "xtb":
         xtb = XTBPotential(Z)
 
     # Do Adam minimization first, then fine-tune
-    relaxMolecule( xtb, x0, minimizer="Adam", verbose=True, returnOptimizationHistory=True )
-    return input_data
+    lr0 = 1e-3
+    x_min, history = minimize_with_adam( xtb, x0, lr0=lr0, force_tolerance_kJ_mol_A=force_tol, max_steps=max_optimizer_steps, verbose=True )
+    energies = np.array([ row["energy_kJ_mol"] for row in history])
+    rmsds = np.array([ row["rmsd"] for row in history])
+    converged = (history[-1]["max_force_rms"] < force_tol)
+
+    # Build the output dictionary
+    output_data = { "Z" : Z, 
+                    "x" : x_min, 
+                    "energies" : energies, 
+                    "rmsds" : rmsds, 
+                    "final_force_max" : history[-1]["max_force_rms"],
+                    "converged" : converged}
+    return output_data

@@ -7,7 +7,6 @@ from chemdm.Constants import *
 from chemdm.xtbSetup import XTBPotential
 from chemdm.diagnostics import *
 
-from typing import Optional 
 
 def evaluateEnergyAndForces( xtb: XTBPotential, 
                              x: np.ndarray):
@@ -49,7 +48,7 @@ def relaxMolecule( xtb : XTBPotential,
 def minimize_with_adam( xtb : XTBPotential,
                         positions_A: np.ndarray,
                         force_tolerance_kJ_mol_A: float,
-                        n_steps: int = 10_000,
+                        max_steps: int = 10_000,
                         lr0: float = 1e-2,  # Angstrom-scale learning rate
                         max_step_A: float = 0.02,   # cap largest atom displacement per step
                         lr_min : float = 1e-7,
@@ -82,7 +81,6 @@ def minimize_with_adam( xtb : XTBPotential,
     history = []
     lr_history = []
     print("step, energy_kJ_mol, energy_eV, max_force_eV_A, step_A")
-    #for step in range(n_steps):
     while lr >= lr_min:
         optimizer.zero_grad(set_to_none=True)
 
@@ -91,7 +89,7 @@ def minimize_with_adam( xtb : XTBPotential,
         try:
             energy_kJ_mol, forces_kJ_mol_A = evaluateEnergyAndForces( xtb, R_np )
         except Exception as exc:
-            print(f"xTB/OpenMM failed at step {step_count}: {exc}")
+            print(f"xTB failed at step {step_count}: {exc}")
             with pt.no_grad():
                 R.copy_(previous_R)
             break
@@ -100,7 +98,7 @@ def minimize_with_adam( xtb : XTBPotential,
         mean_force_kJ_mol_A = float( np.linalg.norm(forces_kJ_mol_A, axis=1).mean() )
 
         # Torch minimizes using grad = dE/dR.
-        # OpenMM gives force = -dE/dR.
+        # xTB gives force = -dE/dR.
         grad_kJ_mol_A = -forces_kJ_mol_A
         R.grad = pt.tensor( grad_kJ_mol_A, dtype=R.dtype )
 
@@ -129,7 +127,7 @@ def minimize_with_adam( xtb : XTBPotential,
         history.append( row )
         lr_history.append( row )
 
-        if verbose and (step_count % 10 == 0 or step_count == n_steps - 1):
+        if verbose:
             print( f"{step_count:5d}, ", f"{energy_kJ_mol: .10f} [kJ/mol], ", f"{max_force_kJ_mol_A: .8f} [kJ/(mol A)], ", f"{max_disp: .6f} [A]", file=sys.stderr )
         if max_force_kJ_mol_A < force_tolerance_kJ_mol_A:
             print("Converged.")
@@ -148,6 +146,9 @@ def minimize_with_adam( xtb : XTBPotential,
 
         previous_R = old_R
         step_count += 1
+        if step_count > max_steps:
+            print( 'Adam Reached the maximum number of iterations. Returning ', file=sys.stderr )
+            break
 
     # Re-evaluate final geometry, because the last logged energy/force was
     # before the final Adam coordinate update.
