@@ -83,10 +83,6 @@ def post_relaxation_rmsd_clustering( Z: np.ndarray,
     n_confs = len(conformers)
     if n_confs == 0:
         return [], np.array([]), np.array([]), [], []
-
-    energies = np.asarray(energies, dtype=float)
-    forces = np.asarray(forces, dtype=float)
-    cluster_sizes = list(cluster_sizes)
     assert len(energies) == n_confs
     assert len(forces) == n_confs
     assert len(cluster_sizes) == n_confs
