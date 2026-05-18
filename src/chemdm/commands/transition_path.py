@@ -98,18 +98,20 @@ def run( input_data: dict,
     print(f"[runner] keys={list(input_data.keys())}", flush=True, file=sys.stderr) 
     print(f"[runner] {input_data['n_images']}", flush=True, file=sys.stderr)
 
-    n_images = int( input_data.get( "n_images", 10 ) )
-    theory = input_data.get( "theory", "xTB" )
-    relax_endpoints = bool( input_data.get( "relax_endpoints", False) )
-    force_tol = float( input_data.get( "force_tolerance", 0.1 )) # kJ / mol / A
-    n_steps = int( input_data.get( "max_optimizer_steps", 2500) )
-    
-    trajectory = input_data["trajectory"]
-    Z = np.asarray(trajectory["Z"], dtype=np.long)
-    xA = np.asarray(trajectory["xA"])
-    xB = np.asarray(trajectory["xB"])
-    GA = np.asarray(trajectory["GA"])
-    GB = np.asarray(trajectory["GB"])
+    n_images = int( input_data.get("n_images", 10) )
+    theory = input_data.get( "force_field", "xtb" ) 
+    relax_endpoints = bool( input_data.get("endpoint_relaxation", False) )
+    force_tol = float( input_data.get("accuracy", 0.1) )                                                                                          
+    n_steps = int( input_data.get("max_iterations", 2500) )    
+                                                                                                                                                     
+    reactant = input_data["reactant_molecule_json"]
+    product = input_data["product_molecule_json"]                                                                                                      
+    Z = np.asarray( reactant["Z"], dtype=np.long )
+    assert np.all( Z == np.asarray( product["Z"] ) ), f"Reactant and Product must have the same atoms and order in `Z`."
+    xA = np.asarray( reactant["x"] )                                                                                                                     
+    xB = np.asarray( product["x"] ) 
+    GA = np.asarray( reactant["G"] )                                                                                                                     
+    GB = np.asarray( product["G"] ) 
 
     # Construct the XTB force field
     if theory.lower() == "xtb":
@@ -144,18 +146,22 @@ def run( input_data: dict,
                      fraction = progress_so_far + (1.0 - progress_so_far) * iter / n_steps )
     on_progress( "fine_tune_path", "Fine-tuning", fraction=0.50 )
     progress_so_far = on_progress.getTotalProgress()
-    path_opt, E_opt_eV, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, lbfgs_maxiter=n_steps, callback=callback, max_workers=max_workers)
+    path_opt, E_opt_kjm, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, lbfgs_maxiter=n_steps, callback=callback, max_workers=max_workers)
     s = normalized_arclengths(path_opt)
-    E_opt_eV -= E_opt_eV[0]
+    E_opt_kjm -= E_opt_kjm[0]
 
     # Send back to the server as a dict.
     on_progress( "path_done", "Calculations Finished", fraction=1.0 )
-    output = copy.deepcopy(input_data)
-    output["x"] = path_opt
-    output["s"] = s
-    output["E_opt_eV"] = E_opt_eV
-    output["best_force"] = best_force
-    return output
+    output_data = {
+        "Z": Z.tolist(),
+        "xA": xA.tolist(),                                                                                                                             
+        "xB": xB.tolist(),
+        "x": path_opt.tolist(),                                                                                                                        
+        "s": s.tolist(),
+        "E_opt_eV": E_opt_kjm.tolist(),
+        "best_force": float(best_force),                                                                                                               
+    }
+    return output_data
 
 
 def _ml_initial_guess( tp_network : NewtonE3NN,

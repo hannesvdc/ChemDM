@@ -22,10 +22,10 @@ def run(input_data: dict,
     """
     Empty implementation for now.
     """
-    molecule = input_data["molecule"]
-    theory = input_data.get( "theory", "xtb" )
-    force_tol = input_data.get( "force_tolerance", 5.0 ) #kJ/mol/A
-    max_optimizer_steps = input_data.get( "max_optimizer_steps", 2500 )
+    molecule = input_data["input_molecule_json"]
+    theory = input_data.get( "force_field", "xtb" )
+    force_tol = input_data.get( "accuracy", 5.0 ) #kJ/mol/A
+    max_optimizer_steps = input_data.get( "max_iterations", 2500 )
 
     # Fetch the molecule.
     Z = np.asarray( molecule["Z"], dtype=np.long )
@@ -43,10 +43,10 @@ def run(input_data: dict,
     converged = (history[-1]["max_force_rms"] < force_tol)
 
     # Build the output dictionary
-    output_data = { "Z" : Z, 
-                    "x" : x_min, 
-                    "energies" : energies, 
-                    "rmsds" : rmsds, 
-                    "final_force_max" : history[-1]["max_force_rms"],
-                    "converged" : converged}
+    output_data = { "Z" : Z.tolist(), 
+                    "x" : x_min.tolist(), 
+                    "energies" : energies.tolist(), 
+                    "rmsds" : rmsds.tolist(), 
+                    "final_force_max" : float(history[-1]["max_force_rms"]),
+                    "converged" : bool(converged)}
     return output_data

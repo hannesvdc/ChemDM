@@ -14,7 +14,11 @@ authors = [
 requires-python = ">=3.10"
 dependencies = [
     "torch",
-    "matplotlib"
+    "matplotlib",
+    "e3nn",
+    "openmm",
+    "ase",
+    "xtb"
 ]
 
 [project.scripts]                                                                                                                                    

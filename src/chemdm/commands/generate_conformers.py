@@ -58,7 +58,8 @@ def run( input_data: dict,
     conf_ids = AllChem.EmbedMultipleConfs( mol_with_h, numConfs=n_conformers, params=params )
     raw_conformers = [ np.asarray( mol_with_h.GetConformer(conf_id).GetPositions(), dtype=float, ) for conf_id in conf_ids ]
     pre_conformers, _, cluster_sizes = rmsd_clustering( Z, raw_conformers, rmsd_tol )
-    on_progress( "Generation", f"Generated {len(conf_ids)} possibly distinct conformers ", fraction=0.1 )
+    on_progress( "Generation", f"Generated {len(pre_conformers)} possibly distinct conformers ", fraction=0.1 )
+    print( f"Generated {len(pre_conformers)} possibly distinct conformers ", file=sys.stderr )
 
     # Stabilize all generated conformers.
     lr0 = 1e-3
