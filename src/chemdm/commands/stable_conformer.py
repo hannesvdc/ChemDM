@@ -30,6 +30,7 @@ def run(input_data: dict,
     # Fetch the molecule.
     Z = np.asarray( molecule["Z"], dtype=np.long )
     x0 = np.asarray( molecule["x"] )
+    bonds = molecule["G"] # not directly used for the experiments, but passed back.
 
     # Construct the XTB force field
     if theory.lower() == "xtb":
@@ -44,7 +45,8 @@ def run(input_data: dict,
 
     # Build the output dictionary
     output_data = { "Z" : Z.tolist(), 
-                    "x" : x_min.tolist(), 
+                    "x" : x_min.tolist(),
+                    "G" : bonds,
                     "energies" : energies.tolist(), 
                     "rmsds" : rmsds.tolist(), 
                     "final_force_max" : float(history[-1]["max_force_rms"]),
