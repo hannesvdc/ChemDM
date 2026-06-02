@@ -1,8 +1,7 @@
 import torch as pt
-import numpy as np
-import copy
 
 import chemdm.graph.algorithms as alg
+import chemdm.graph.rings as rings
 
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Self
@@ -58,6 +57,8 @@ class MoleculeGraph( Molecule ):
     def copyWithNewPositions(self, x: pt.Tensor) -> Self:
         return type(self)( self._Z, x, self._edge_index )
 
+
+
 class BatchedMoleculeGraph( Molecule ):
 
     def __init__(self, molecules: List[Molecule]) -> None:
@@ -103,20 +104,6 @@ class BatchedMoleculeGraph( Molecule ):
         self._molecule_id = pt.cat( molecule_ids, dim=0 )
         self._edge_index = pt.cat( edge_list, dim=0 )
 
-    # def __init__(self, molecules: List[MoleculeGraph]) -> None:
-    #     # Concatenate atomic state and positions.
-    #     self._Z = pt.cat([mol.Z for mol in molecules], dim=0)
-    #     self._x = pt.cat([mol.x for mol in molecules], dim=0)
-
-    #     # Calculate the total offset per molecule.
-    #     n_atoms = pt.tensor([mol.Z.shape[0] for mol in molecules], dtype=pt.long)
-    #     self._molecule_id = pt.repeat_interleave( pt.arange(len(molecules), dtype=pt.long), n_atoms )
-    #     offsets = pt.cumsum( pt.cat([pt.tensor([0], dtype=pt.long), n_atoms[:-1]]), dim=0 )
-
-    #     # Merge the edge indices.
-    #     edge_list = [ mol.edge_index + offset for mol, offset in zip(molecules, offsets) ]
-    #     self._edge_index = pt.cat(edge_list, dim=0).to(device=self._x.device)   # shape: (total_edges, 2)
-
     def to( self, device=pt.device("cpu"), dtype=pt.float64 ) -> Self:
         self._Z = self._Z.to( device=device )
         self._x = self._x.to( device=device, dtype=dtype )
@@ -148,6 +135,7 @@ class BatchedMoleculeGraph( Molecule ):
     def copyWithNewPositions(self, x: pt.Tensor):
         return BatchedMoleculeGraph.fromRawTensors(self._Z, x, self._edge_index, self._molecule_id)
 
+
 @pt.no_grad()
 def batchMolecules(molecules: List[Molecule]) -> BatchedMoleculeGraph:
     """
@@ -164,6 +152,50 @@ def batchMolecules(molecules: List[Molecule]) -> BatchedMoleculeGraph:
         The large merged molecule.
     """
     return BatchedMoleculeGraph( molecules )
+
+@pt.no_grad()
+def unbatchBatchedMolecule( batched_molecule : BatchedMoleculeGraph ) -> List[MoleculeGraph]:
+    """
+    Unwrap a batched molecule into its constituent molecules. 
+    """
+    # Return the molecule graph itself if the passed molecule is not of batched type.
+    if not isinstance(batched_molecule, BatchedMoleculeGraph):
+        return [ batched_molecule ]
+    
+    device = batched_molecule.x.device
+    
+    molecules = []
+    molecule_id = batched_molecule.molecule_id
+    src_global = batched_molecule.edge_index[:, 0].long()
+    dst_global = batched_molecule.edge_index[:, 1].long()
+    for mol_id_tensor in pt.unique( molecule_id, sorted=True ):
+        mol_id = int( mol_id_tensor.item() )
+
+        atoms_in_molecule = pt.nonzero( molecule_id == mol_id, as_tuple=False ).flatten()
+        n_atoms = int( atoms_in_molecule.numel() )
+        if n_atoms == 0:
+            continue
+
+        # Extract atomic information and positions
+        local_Z = batched_molecule.Z[atoms_in_molecule]
+        local_x = batched_molecule.x[atoms_in_molecule,:]
+
+        # Extract edges
+        edge_in_this_mol = ( (molecule_id[src_global] == mol_id) & (molecule_id[dst_global] == mol_id) )
+        local_edges_global = batched_molecule.edge_index[edge_in_this_mol] # includes an offset
+
+        global_to_local = pt.full( (batched_molecule.Z.shape[0],), -1, dtype=pt.long, device=device )
+        global_to_local[atoms_in_molecule] = pt.arange( n_atoms, device=device )
+        local_edges = pt.stack( [ global_to_local[local_edges_global[:, 0]], global_to_local[local_edges_global[:, 1]] ], dim=1 )
+        if local_edges.numel() == 0:
+            local_edges = pt.empty((0, 2), dtype=pt.long, device=device)
+
+        # Put everything in one MoleculeGraph
+        local_molecule = MoleculeGraph( local_Z, local_x, local_edges )
+        molecules.append( local_molecule )
+
+    return molecules
+
 
 @pt.no_grad()
 def findAllDistanceNeighbors( molecule: Molecule,
@@ -203,6 +235,7 @@ def findAllDistanceNeighbors( molecule: Molecule,
     neighbor_edge_index = alg.findAllDistanceNeighbors( x, cutoff )
 
     return neighbor_edge_index
+
 
 @pt.no_grad()
 def findAllNeighbors( molecule : Molecule,
@@ -300,6 +333,7 @@ def findAllNeighborsReactantProduct( moleculeA : Molecule,
 
     return all_neighbors, is_bond_A, is_bond_B
 
+
 def recenterMolecule( molecule : Molecule ) -> Molecule:
     """
     Center the molecule to have zero unweighted center of mass. If the input 
@@ -327,3 +361,82 @@ def recenterMolecule( molecule : Molecule ) -> Molecule:
         raise TypeError(f"Unsupported molecule type: {type(molecule)}")
 
     return molecule.copyWithNewPositions( x_centered )
+
+@pt.no_grad()
+def detectRing(molecule: Molecule) -> rings.RingInfo:
+    """
+    Detect graph rings in a Molecule.
+
+    This treats molecule.edge_index as a directed representation of an
+    undirected molecular bond graph.
+
+    Returns
+    -------
+    RingInfo
+        Per-atom ring membership, ring counts, ring sizes, and ring atom sets.
+    """
+    return rings.detect_ring_info( molecule )
+
+
+@pt.no_grad()
+def detectRingBatched(molecule: BatchedMoleculeGraph) -> rings.RingInfo:
+    """
+    Detect graph rings in a BatchedMoleculeGraph.
+
+    Ring detection is run separately per molecule_id and mapped back to the
+    global batch atom indices. This avoids artificial quadratic scaling in the
+    number of molecules in the batch.
+    """
+    # Fall back in case the input molecule is not of batched type
+    if not isinstance( molecule, BatchedMoleculeGraph ):
+        return detectRing( molecule )
+    
+    device = molecule.Z.device
+    molecule_id = molecule.molecule_id.long()
+    n_atoms_total = int(molecule.Z.shape[0])
+
+    local_molecules = unbatchBatchedMolecule(molecule)
+
+    atom_in_ring = pt.zeros(n_atoms_total, dtype=pt.bool, device=device)
+    atom_ring_count = pt.zeros(n_atoms_total, dtype=pt.long, device=device)
+    atom_ring_sizes: list[set[int]] = [set() for _ in range(n_atoms_total)]
+    global_rings: list[tuple[int, ...]] = []
+
+    unique_molecule_ids = pt.unique(molecule_id, sorted=True)
+
+    assert len(local_molecules) == len(unique_molecule_ids), (
+        "unbatchBatchedMolecule returned a different number of molecules than "
+        "there are unique molecule IDs."
+    )
+
+    for local_molecule, mol_id_tensor in zip(local_molecules, unique_molecule_ids):
+        mol_id = int(mol_id_tensor.item())
+
+        global_atoms = pt.nonzero( molecule_id == mol_id, as_tuple=False ).flatten()
+
+        local_info = rings.detect_ring_info(local_molecule)
+
+        assert local_info.atom_in_ring.shape[0] == global_atoms.numel()
+
+        # Atom-level outputs.
+        atom_in_ring[global_atoms] = local_info.atom_in_ring.to( device=device )
+        atom_ring_count[global_atoms] = local_info.atom_ring_count.to( device=device )
+        for local_idx, global_idx_tensor in enumerate(global_atoms):
+            global_idx = int(global_idx_tensor.item())
+            atom_ring_sizes[global_idx] = set(local_info.atom_ring_sizes[local_idx])
+
+        # Ring atom indices: local -> global.
+        for local_ring in local_info.rings:
+            global_ring = tuple(
+                sorted( int(global_atoms[local_idx].item()) for local_idx in local_ring )
+            )
+            global_rings.append(global_ring)
+
+    global_rings = sorted(global_rings, key=lambda r: (len(r), r))
+
+    return rings.RingInfo(
+        atom_in_ring=atom_in_ring,
+        atom_ring_count=atom_ring_count,
+        atom_ring_sizes=atom_ring_sizes,
+        rings=global_rings,
+    )
