@@ -98,6 +98,21 @@ def test_one_hot_duplicate_allowed_entries_set_multiple_columns() -> None:
     assert out.tolist() == [[0.0, 1.0, 1.0, 0.0]]
 
 
+def test_one_hot_default_dtype_is_float32() -> None:
+    # The dtype kwarg defaults to pt.float32 — pin so downstream concatenation
+    # against float32 features doesn't break if the default is changed.
+    out = one_hot_atomic_numbers(pt.tensor([6, 8], dtype=pt.long), [1, 6, 8])
+    assert out.dtype == pt.float32
+
+
+def test_one_hot_empty_Z_returns_correctly_shaped_zero_rows() -> None:
+    out = one_hot_atomic_numbers(
+        pt.empty((0,), dtype=pt.long),
+        allowed_atomic_numbers=DEFAULT_ATOMIC_NUMBERS,
+    )
+    assert out.shape == (0, len(DEFAULT_ATOMIC_NUMBERS))
+
+
 # ============================================================
 # compute_degree — counts src occurrences, not edges
 # ============================================================
@@ -275,6 +290,43 @@ def test_computeAtomInformation_Z_above_table_raises_index_error() -> None:
         computeAtomInformation(mol, ring_info=None)
 
 
+def test_computeAtomInformation_respects_allowed_atomic_numbers_kwarg() -> None:
+    # Verify the kwarg actually flows through and is not silently replaced
+    # by DEFAULT_ATOMIC_NUMBERS. Use a tight list that excludes H so the row
+    # for H atom is observably zero.
+    mol = MoleculeGraph(
+        Z=pt.tensor([1, 6], dtype=pt.long),
+        x=pt.zeros((2, 3), dtype=pt.float64),
+        bonds=directed_edges([(0, 1)]),
+    )
+    info = computeAtomInformation(mol, ring_info=None, allowed_atomic_numbers=[6, 8])
+
+    # Width follows the supplied list, not the default of length 10.
+    assert info.atom_type_one_hot.shape == (2, 2)
+    # H is excluded -> all zeros. C -> column 0.
+    assert pt.allclose(
+        info.atom_type_one_hot,
+        pt.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=pt.float64),
+    )
+
+
+def test_computeAtomInformation_respects_allowed_ring_sizes_kwarg() -> None:
+    # Verify the ring-size kwarg actually flows through and that excluding
+    # the relevant ring size results in zero size-flags while leaving
+    # atom_in_ring and atom_ring_count untouched.
+    mol = make_molecule(3, [(0, 1), (1, 2), (2, 0)])
+    ring_info = detectRing(mol)
+
+    info = computeAtomInformation(
+        mol, ring_info=ring_info, allowed_ring_sizes=[5, 6, 7],
+    )
+    assert info.atom_ring_size_flags.shape == (3, 3)
+    assert info.atom_ring_size_flags.sum() == 0.0
+    # The boolean and count fields are independent of allowed_ring_sizes.
+    assert info.atom_in_ring.all()
+    assert pt.all(info.atom_ring_count == 1)
+
+
 def test_computeAtomInformation_n_atoms_zero_produces_empty_tensors() -> None:
     mol = MoleculeGraph(
         Z=pt.empty((0,), dtype=pt.long),
@@ -422,6 +474,42 @@ def test_computeEdgeInformation_same_molecule_detects_cross_batch_edges() -> Non
     assert edges.same_molecule.tolist() == [True, True, False]
 
 
+def test_computeEdgeInformation_ring_features_propagate_when_ring_info_given() -> None:
+    # Direct test of computeEdgeInformation's ring path (previously only
+    # exercised transitively through computeMoleculeInformation).
+    mol = make_molecule(3, [(0, 1), (1, 2), (2, 0)])
+    edges = computeEdgeInformation(mol, ring_info=detectRing(mol))
+
+    col3 = DEFAULT_RING_SIZES.index(3)
+    assert edges.edge_in_ring.all()
+    assert pt.all(edges.edge_ring_count == 1)
+    assert pt.all(edges.edge_ring_size_flags[:, col3] == 1)
+    # All other size columns stay zero.
+    mask = pt.ones(len(DEFAULT_RING_SIZES), dtype=pt.bool)
+    mask[col3] = False
+    assert edges.edge_ring_size_flags[:, mask].sum() == 0
+
+
+def test_computeEdgeInformation_edge_ring_size_flags_dtype_disagrees_across_branches() -> None:
+    # KNOWN INCONSISTENCY worth flagging.
+    #
+    # edge_ring_features allocates edge_ring_size_flags as pt.long and never
+    # casts, so the with-ring branch of computeEdgeInformation returns long.
+    # The without-ring branch allocates with dtype=molecule.x.dtype (float).
+    # The atom-level analogue (atom_ring_size_flags) is consistently float
+    # because ring_size_flags accepts and applies a dtype kwarg.
+    #
+    # This asymmetry is most likely unintentional. If you decide to fix it,
+    # this test will need to be updated to assert the unified dtype.
+    mol = make_molecule(3, [(0, 1), (1, 2), (2, 0)])
+
+    edges_with_rings = computeEdgeInformation(mol, ring_info=detectRing(mol))
+    edges_without_rings = computeEdgeInformation(mol, ring_info=None)
+
+    assert edges_with_rings.edge_ring_size_flags.dtype == pt.long
+    assert edges_without_rings.edge_ring_size_flags.dtype == mol.x.dtype
+
+
 def test_computeEdgeInformation_empty_edge_index_returns_correctly_shaped_empties() -> None:
     mol = MoleculeGraph(
         Z=pt.tensor([6, 6], dtype=pt.long),
@@ -481,10 +569,13 @@ def test_computeMoleculeInformation_molecule_id_present_only_for_batched() -> No
 
 
 def test_computeMoleculeInformation_n_atoms_and_n_edges_match_inputs() -> None:
+    # Hardcode the expected counts rather than deriving them from the same
+    # expression the implementation uses (4 undirected bonds -> 8 directed).
     mol = make_molecule(5, [(0, 1), (1, 2), (2, 3), (3, 4)])
     info = computeMoleculeInformation(mol)
     assert info.n_atoms == 5
-    assert info.n_edges == int(mol.edge_index.shape[0])
+    assert info.n_edges == 8
+    # The fields are plain Python ints, not 0-d tensors -- pin that contract.
     assert isinstance(info.n_atoms, int) and isinstance(info.n_edges, int)
 
 
@@ -509,9 +600,21 @@ def test_computeMoleculeInformation_batched_atom_fields_equal_per_molecule_conca
         assert pt.equal(actual, expected), f"Mismatch on field {field!r}"
 
 
-def test_computeMoleculeInformation_dataclass_is_frozen() -> None:
-    # The dataclass is declared frozen=True. Pin that so accidental mutation
-    # of a cached MoleculeInformation by downstream code raises loudly.
-    info = computeMoleculeInformation(make_molecule(2, [(0, 1)]))
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda mol: computeAtomInformation(mol, ring_info=None),
+        lambda mol: computeEdgeInformation(mol, ring_info=None),
+        lambda mol: computeMoleculeInformation(mol),
+    ],
+    ids=["AtomInformation", "EdgeInformation", "MoleculeInformation"],
+)
+def test_info_dataclasses_are_frozen(factory) -> None:
+    # All three info dataclasses are declared frozen=True. A single
+    # parametrized test catches the case where a future refactor drops
+    # frozen=True on any one of them.
+    mol = make_molecule(2, [(0, 1)])
+    instance = factory(mol)
+    field_name = next(iter(instance.__dataclass_fields__))
     with pytest.raises(Exception):
-        info.n_atoms = 99  # type: ignore[misc]
+        setattr(instance, field_name, None)

@@ -155,6 +155,7 @@ class MoleculeInformation:
 # Small helpers
 # ============================================================
 
+@pt.no_grad()
 def one_hot_atomic_numbers( Z: pt.Tensor, allowed_atomic_numbers: list[int], *, dtype : pt.dtype = pt.float32 ) -> pt.Tensor:
     """
     One-hot encode atomic numbers in a vectorized way.
@@ -170,6 +171,7 @@ def one_hot_atomic_numbers( Z: pt.Tensor, allowed_atomic_numbers: list[int], *, 
     return out.to( dtype=dtype )
 
 
+@pt.no_grad()
 def compute_degree( n_atoms: int, edge_index: pt.Tensor, *, dtype: pt.dtype = pt.float32) -> pt.Tensor:
     """
     Compute directed graph degree from edge_index.
@@ -189,6 +191,7 @@ def compute_degree( n_atoms: int, edge_index: pt.Tensor, *, dtype: pt.dtype = pt
     return degree
 
 
+@pt.no_grad()
 def ring_size_flags( atom_ring_sizes: list[set[int]], allowed_ring_sizes: list[int], *, device: pt.device, dtype : pt.dtype ) -> pt.Tensor:
     """
     Convert per-atom ring-size sets into multi-hot flags.
@@ -291,6 +294,7 @@ def computeAtomInformation( molecule: Molecule,
 # Edge information
 # ============================================================
 
+@pt.no_grad()
 def edge_ring_features( edge_index: pt.Tensor,
                         rings: list[tuple[int, ...]],
                         allowed_ring_sizes: list[int],
