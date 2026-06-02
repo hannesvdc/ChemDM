@@ -1,4 +1,5 @@
 import torch as pt
+import pytest
 
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, findAllNeighbors
 
@@ -14,21 +15,6 @@ def assert_edge_flags(
 ) -> None:
     actual = {tuple(e): float(f) for e, f in zip(edges.tolist(), is_bond.tolist())}
     assert actual == expected, f"\nActual:\n{actual}\nExpected:\n{expected}"
-
-
-def run_test(name: str, test_fn) -> bool:
-    try:
-        test_fn()
-        print(f"[PASS] {name}")
-        return True
-    except AssertionError as e:
-        print(f"[FAIL] {name}")
-        print(e)
-        return False
-    except Exception as e:
-        print(f"[ERROR] {name}")
-        print(e)
-        return False
 
 
 def test_findAllNeighbors_single_bond_and_distance() -> None:
@@ -218,17 +204,3 @@ def test_findAllNeighbors_properties() -> None:
 
     # Flags should match edge count
     assert is_bond.shape[0] == all_neighbors.shape[0]
-
-
-if __name__ == "__main__":
-    tests = [
-        ("single_bond_and_distance", test_findAllNeighbors_single_bond_and_distance),
-        ("overlap_marks_bond", test_findAllNeighbors_overlap_marks_bond),
-        ("single_no_neighbors", test_findAllNeighbors_single_no_neighbors),
-        ("batched", test_findAllNeighbors_batched),
-        ("batched_no_cross_talk", test_findAllNeighbors_batched_no_cross_talk),
-        ("properties", test_findAllNeighbors_properties),
-    ]
-
-    results = [run_test(name, fn) for name, fn in tests]
-    print(f"\nPassed {sum(results)}/{len(results)} tests.")

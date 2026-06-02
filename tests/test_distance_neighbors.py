@@ -1,4 +1,5 @@
 import torch as pt
+import pytest
 
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, findAllDistanceNeighbors
 
@@ -133,33 +134,3 @@ def test_findAllDistanceNeighbors_properties() -> None:
         assert (j, i) in edge_set, f"Missing reverse edge for {(i, j)}"
 
     print("test_findAllDistanceNeighbors_properties passed")
-
-def run_test(name: str, test_fn) -> bool:
-    try:
-        test_fn()
-        print(f"[PASS] {name}\n")
-        return True
-    except AssertionError as e:
-        print(f"[FAIL] {name}\n")
-        print(e)
-        return False
-    except Exception as e:
-        print(f"[ERROR] {name}\n")
-        print(e)
-        return False
-
-if __name__ == "__main__":
-    tests = [
-        ("single", test_findAllDistanceNeighbors_single),
-        ("single_none", test_findAllDistanceNeighbors_single_none),
-        ("batched", test_findAllDistanceNeighbors_batched),
-        ("batched_no_cross_talk", test_findAllDistanceNeighbors_batched_no_cross_talk),
-        ("properties", test_findAllDistanceNeighbors_properties),
-    ]
-
-    results = [run_test(name, fn) for name, fn in tests]
-    n_passed = sum(results)
-    n_total = len(results)
-
-    print("---")
-    print(f"Passed {n_passed}/{n_total} tests.")

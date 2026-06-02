@@ -1,4 +1,5 @@
 import torch as pt
+import pytest
 
 from chemdm.MoleculeGraph import MoleculeGraph, BatchedMoleculeGraph, batchMolecules, unbatchBatchedMolecule
 
@@ -16,20 +17,6 @@ def assert_same_tensor(actual: pt.Tensor, expected: pt.Tensor) -> None:
     )
     assert pt.allclose(actual, expected), f"\nActual:\n{actual}\nExpected:\n{expected}"
 
-
-def run_test(name: str, test_fn) -> bool:
-    try:
-        test_fn()
-        print(f"[PASS] {name}")
-        return True
-    except AssertionError as e:
-        print(f"[FAIL] {name}")
-        print(e)
-        return False
-    except Exception as e:
-        print(f"[ERROR] {name}")
-        print(e)
-        return False
 
 
 def test_unbatch_single_molecule_returns_one() -> None:
@@ -336,19 +323,3 @@ def test_unbatch_cross_molecule_edges_raise() -> None:
         did_raise = True
 
     assert did_raise, "Expected unbatchBatchedMolecule to raise on cross-molecule edge."
-
-
-if __name__ == "__main__":
-    tests = [
-        ("single_molecule_returns_one", test_unbatch_single_molecule_returns_one),
-        ("two_molecules_shapes_and_values", test_unbatch_two_molecules_shapes_and_values),
-        ("local_edge_indices_are_reset", test_unbatch_local_edge_indices_are_reset),
-        ("molecule_ids_preserve_order", test_unbatch_molecule_ids_preserve_order),
-        ("nested_batched_molecule", test_unbatch_nested_batched_molecule),
-        ("empty_edges", test_unbatch_empty_edges),
-        ("from_raw_tensors_noncontiguous_atoms", test_unbatch_from_raw_tensors_noncontiguous_atoms),
-        ("cross_molecule_edges_raise", test_unbatch_cross_molecule_edges_raise),
-    ]
-
-    results = [run_test(name, fn) for name, fn in tests]
-    print(f"\nPassed {sum(results)}/{len(results)} tests.")

@@ -1,9 +1,10 @@
 import torch as pt
+import pytest
 import random
 
 from chemdm.MoleculeGraph import MoleculeGraph, BatchedMoleculeGraph
 
-def testSimpleBatching():
+def test_simple_batching():
     mol1 = MoleculeGraph(
         Z=pt.tensor([6, 1]),                 # 2 atoms
         x=pt.tensor([[0., 0., 0.],
@@ -77,7 +78,7 @@ def testSimpleBatching():
 
     print("All simple tests tests passed.")
 
-def performanceBatching():
+def test_performance_batching():
     molecule_list = []
     n_molecules = 256
     for n in range( n_molecules ):
@@ -89,9 +90,7 @@ def performanceBatching():
         molecule = MoleculeGraph( Z, x, G )
         molecule_list.append(molecule)
 
-    print( "Merging batch" )
     batched_molecule = BatchedMoleculeGraph( molecule_list )
-    print( "Done merging" )
     
     offset = 0
     bond_offset = 0
@@ -103,8 +102,3 @@ def performanceBatching():
         assert pt.all(batched_molecule.edge_index[bond_offset:bond_offset+n_bonds,:] == molecule_list[n].edge_index + offset)
         offset += n_atoms
         bond_offset += n_bonds
-    print( 'All checks passed')
-
-if __name__ == '__main__':
-    testSimpleBatching()
-    performanceBatching()

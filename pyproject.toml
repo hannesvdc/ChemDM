@@ -18,7 +18,8 @@ dependencies = [
     "e3nn",
     "openmm",
     "ase",
-    "xtb"
+    "xtb",
+    "pytest"
 ]
 
 [project.scripts]                                                                                                                                    
@@ -29,6 +30,10 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
 
 [project.urls]
 Homepage = "https://github.com/hannesvdc/ChemDM"

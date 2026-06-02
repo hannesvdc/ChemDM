@@ -198,7 +198,6 @@ class NewtonE3NNLayer(nn.Module):
         """
         N = len( xA.Z )
 
-
         distance_keys = self._computeBondKeys( all_edges, N )
         bond_A_keys = self._computeBondKeys( xA.edge_index, N )
         bond_B_keys = self._computeBondKeys( xB.edge_index, N )

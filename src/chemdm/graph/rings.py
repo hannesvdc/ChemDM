@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from collections import deque
 import torch as pt
 
-from chemdm.MoleculeGraph import Molecule
-
 
 @dataclass(frozen=True)
 class RingInfo:
@@ -121,7 +119,7 @@ def _canonical_ring( ring: list[int] ) -> tuple[int, ...]:
     return min(candidates)
 
 
-def detect_ring_info(molecule: Molecule) -> RingInfo:
+def detect_ring_info( Z : pt.Tensor, edge_index : pt.Tensor) -> RingInfo:
     """
     Detect rings in a Molecule from its directed bond graph. This is the general-purpose
     entry point for ring detection and ring information calculations.
@@ -135,11 +133,11 @@ def detect_ring_info(molecule: Molecule) -> RingInfo:
     This is simple, robust for small molecular graphs, and fast enough to
     precompute once per molecule/endpoint.
     """
-    n_atoms = int( molecule.Z.shape[0] )
-    device = molecule.Z.device
+    n_atoms = int( Z.shape[0] )
+    device = Z.device
 
-    edges = _unique_undirected_edges(molecule.edge_index)
-    adj = _neighbors_per_atom(n_atoms, edges)
+    edges = _unique_undirected_edges( edge_index )
+    adj = _neighbors_per_atom( n_atoms, edges )
 
     # Ring detection. If a path between i and j exists while the bond i <-> j is removed,
     # a ring must exist!
