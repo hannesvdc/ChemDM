@@ -6,6 +6,9 @@ import chemdm.graph.rings as rings
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Self
 
+# Expose this class to the rest of the package.
+RingInformation = rings.RingInfo
+
 class Molecule(ABC):
     @property
     @abstractmethod

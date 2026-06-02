@@ -5,7 +5,7 @@ from typing import Optional
 
 import torch as pt
 
-from chemdm.MoleculeGraph import Molecule, BatchedMoleculeGraph, detectRing, detectRingBatched
+from chemdm.MoleculeGraph import Molecule, BatchedMoleculeGraph, detectRing, detectRingBatched, RingInformation
 
 
 # ============================================================
@@ -144,6 +144,9 @@ class MoleculeInformation:
 
     n_atoms: int
     n_edges: int
+    
+    # Optional fields
+    ring_info: Optional[RingInformation]
 
     molecule_id: Optional[pt.Tensor]
 
@@ -164,7 +167,7 @@ def one_hot_atomic_numbers( Z: pt.Tensor, allowed_atomic_numbers: list[int], *, 
     allowed_atoms = pt.tensor( allowed_atomic_numbers, device=Z.device, dtype=pt.long )
     out = ( Z_long[:,None] == allowed_atoms[None,:] )
 
-    return out
+    return out.to( dtype=dtype )
 
 
 def compute_degree( n_atoms: int, edge_index: pt.Tensor, *, dtype: pt.dtype = pt.float32) -> pt.Tensor:
@@ -186,7 +189,7 @@ def compute_degree( n_atoms: int, edge_index: pt.Tensor, *, dtype: pt.dtype = pt
     return degree
 
 
-def ring_size_flags( atom_ring_sizes: list[set[int]], ring_sizes: list[int], *, device: pt.device ) -> pt.Tensor:
+def ring_size_flags( atom_ring_sizes: list[set[int]], allowed_ring_sizes: list[int], *, device: pt.device, dtype : pt.dtype ) -> pt.Tensor:
     """
     Convert per-atom ring-size sets into multi-hot flags.
 
@@ -198,15 +201,17 @@ def ring_size_flags( atom_ring_sizes: list[set[int]], ring_sizes: list[int], *, 
     """
     n_atoms = len( atom_ring_sizes )
 
-    allowed_ring_sizes = pt.tensor( ring_sizes, dtype=pt.long, device=device )
-    flags = pt.zeros( (n_atoms, len(ring_sizes)), dtype=pt.long, device=device )
+    allowed_ring_sizes_tensor = pt.tensor( allowed_ring_sizes, dtype=pt.long, device=device )
+    flags = pt.zeros( (n_atoms, len(allowed_ring_sizes)), dtype=pt.long, device=device )
     for atom_idx, sizes in enumerate(atom_ring_sizes):
         current_ring_sizes = pt.tensor( sorted(sizes), dtype=pt.long, device=device ) # (1, n_rings)
+        if len(sizes) == 0:
+            continue
 
         # multi-hot encoding
-        flags[atom_idx, :] = pt.isin( allowed_ring_sizes, current_ring_sizes )
+        flags[atom_idx, :] = pt.isin( allowed_ring_sizes_tensor, current_ring_sizes )
 
-    return flags
+    return flags.to( dtype=dtype )
 
 
 def safe_normalize( x: pt.Tensor, *, eps: float = 1.0e-12 ) -> pt.Tensor:
@@ -221,9 +226,9 @@ def safe_normalize( x: pt.Tensor, *, eps: float = 1.0e-12 ) -> pt.Tensor:
 @pt.no_grad()
 def computeAtomInformation( molecule: Molecule,
                             *,
+                            ring_info : Optional[RingInformation] = None,
                             allowed_atomic_numbers: Optional[list[int]] = None,
-                            ring_sizes: Optional[list[int]] = None,
-                            include_ring_information: bool = True,
+                            allowed_ring_sizes: Optional[list[int]] = None,
     ) -> AtomInformation:
     """
     Compute atom-level model features.
@@ -234,8 +239,8 @@ def computeAtomInformation( molecule: Molecule,
     if allowed_atomic_numbers is None:
         allowed_atomic_numbers = DEFAULT_ATOMIC_NUMBERS
 
-    if ring_sizes is None:
-        ring_sizes = DEFAULT_RING_SIZES
+    if allowed_ring_sizes is None:
+        allowed_ring_sizes = DEFAULT_RING_SIZES
 
     Z = molecule.Z.long()
     device = Z.device
@@ -245,23 +250,18 @@ def computeAtomInformation( molecule: Molecule,
     dtype = molecule.x.dtype
 
     degree = compute_degree( n_atoms=n_atoms, edge_index=molecule.edge_index, dtype=dtype )
-    atom_type_one_hot = one_hot_atomic_numbers( Z, allowed_atomic_numbers=allowed_atomic_numbers ).to(dtype=dtype)
-    atom_mass = _ATOMIC_MASS_TABLE[Z-1]
+    atom_type_one_hot = one_hot_atomic_numbers( Z, allowed_atomic_numbers=allowed_atomic_numbers, dtype=dtype )
+    atom_mass = _ATOMIC_MASS_TABLE[Z].to( device=device, dtype=dtype )
     atom_mass_scaled = atom_mass / 100.0 # magic constant, I know...
 
-    if include_ring_information:
-        if isinstance(molecule, BatchedMoleculeGraph):
-            ring_info = detectRingBatched( molecule )
-        else:
-            ring_info = detectRing( molecule )
-
+    if ring_info is not None:
         atom_in_ring = ring_info.atom_in_ring.to(device=device)
         atom_ring_count = ring_info.atom_ring_count.to(device=device)
-        atom_ring_size_flags = ring_size_flags( ring_info.atom_ring_sizes, ring_sizes=ring_sizes, device=device )
+        atom_ring_size_flags = ring_size_flags( ring_info.atom_ring_sizes, allowed_ring_sizes=allowed_ring_sizes, device=device, dtype=dtype )
     else:
         atom_in_ring = pt.zeros((n_atoms,), dtype=pt.bool, device=device)
         atom_ring_count = pt.zeros((n_atoms,), dtype=pt.long, device=device)
-        atom_ring_size_flags = pt.zeros( (n_atoms, len(ring_sizes)), dtype=dtype, device=device )
+        atom_ring_size_flags = pt.zeros( (n_atoms, len(allowed_ring_sizes)), dtype=dtype, device=device )
 
     # scalar_features = pt.cat(
     #     [
@@ -293,7 +293,7 @@ def computeAtomInformation( molecule: Molecule,
 
 def edge_ring_features( edge_index: pt.Tensor,
                         rings: list[tuple[int, ...]],
-                        ring_sizes: list[int],
+                        allowed_ring_sizes: list[int],
     ) -> tuple[pt.Tensor, pt.Tensor, pt.Tensor]:
     """
     Compute edge-level ring features.
@@ -315,7 +315,7 @@ def edge_ring_features( edge_index: pt.Tensor,
 
     edge_in_ring = pt.zeros( (n_edges,), dtype=pt.bool, device=device )
     edge_ring_count = pt.zeros( (n_edges,), dtype=pt.long, device=device )
-    edge_ring_size_flags = pt.zeros( (n_edges, len(ring_sizes)), dtype=pt.long, device=device )
+    edge_ring_size_flags = pt.zeros( (n_edges, len(allowed_ring_sizes)), dtype=pt.long, device=device )
 
     if n_edges == 0 or len(rings) == 0:
         return edge_in_ring, edge_ring_count, edge_ring_size_flags
@@ -337,20 +337,20 @@ def edge_ring_features( edge_index: pt.Tensor,
         edge_in_ring = edge_in_ring | edge_mask
         edge_ring_count[edge_mask] += 1
 
-        if ring_size in ring_sizes:
-            k = ring_sizes.index(ring_size)
+        if ring_size in allowed_ring_sizes:
+            k = allowed_ring_sizes.index(ring_size)
             edge_ring_size_flags[edge_mask, k] = 1.0
 
     return edge_in_ring, edge_ring_count, edge_ring_size_flags
 
 def computeEdgeInformation( molecule: Molecule,
                             *,
-                            ring_sizes: Optional[list[int]] = None,
-                            include_ring_information: bool = True,
+                            ring_info : Optional[RingInformation] = None,
+                            allowed_ring_sizes: Optional[list[int]] = None,
                             eps: float = 1.0e-12,
     ) -> EdgeInformation:
-    if ring_sizes is None:
-        ring_sizes = DEFAULT_RING_SIZES
+    if allowed_ring_sizes is None:
+        allowed_ring_sizes = DEFAULT_RING_SIZES
 
     edge_index = molecule.edge_index.long()
     x = molecule.x
@@ -371,7 +371,7 @@ def computeEdgeInformation( molecule: Molecule,
             unit_dx=empty_vec,
             edge_in_ring=empty_bool,
             edge_ring_count=empty_long,
-            edge_ring_size_flags=pt.empty((0, len(ring_sizes)), dtype=dtype, device=device),
+            edge_ring_size_flags=pt.empty((0, len(allowed_ring_sizes)), dtype=dtype, device=device),
             same_molecule=None,
         )
 
@@ -389,22 +389,17 @@ def computeEdgeInformation( molecule: Molecule,
     else:
         same_molecule = None
 
-    if include_ring_information:
-        if isinstance(molecule, BatchedMoleculeGraph):
-            ring_info = detectRingBatched( molecule )
-        else:
-            ring_info = detectRing( molecule )
-
+    if ring_info is not None:
         edge_in_ring, edge_ring_count, edge_ring_size_flags = edge_ring_features(
             edge_index=edge_index,
             rings=ring_info.rings,
-            ring_sizes=ring_sizes,
+            allowed_ring_sizes=allowed_ring_sizes,
         )
     else:
         edge_in_ring = pt.zeros((edge_index.shape[0],), dtype=pt.bool, device=device)
         edge_ring_count = pt.zeros((edge_index.shape[0],), dtype=pt.long, device=device)
         edge_ring_size_flags = pt.zeros(
-            (edge_index.shape[0], len(ring_sizes)),
+            (edge_index.shape[0], len(allowed_ring_sizes)),
             dtype=dtype,
             device=device,
         )
@@ -430,17 +425,25 @@ def computeEdgeInformation( molecule: Molecule,
 def computeMoleculeInformation( molecule: Molecule,
                                 *,
                                 allowed_atomic_numbers: Optional[list[int]] = None,
-                                ring_sizes: Optional[list[int]] = None,
+                                allowed_ring_sizes: Optional[list[int]] = None,
                                 include_ring_information: bool = True,
     ) -> MoleculeInformation:
+    if include_ring_information:
+        if isinstance(molecule, BatchedMoleculeGraph):
+            ring_info = detectRingBatched( molecule )
+        else:
+            ring_info = detectRing( molecule )
+    else:
+        ring_info = None
+
     atoms = computeAtomInformation(
         molecule,
+        ring_info=ring_info,
         allowed_atomic_numbers=allowed_atomic_numbers,
-        ring_sizes=ring_sizes,
-        include_ring_information=include_ring_information,
+        allowed_ring_sizes=allowed_ring_sizes,
     )
 
-    edges = computeEdgeInformation(molecule)
+    edges = computeEdgeInformation( molecule, ring_info=ring_info )
 
     if isinstance(molecule, BatchedMoleculeGraph):
         molecule_id = molecule.molecule_id.long()
@@ -450,6 +453,7 @@ def computeMoleculeInformation( molecule: Molecule,
     return MoleculeInformation(
         atoms=atoms,
         edges=edges,
+        ring_info=ring_info,
         n_atoms=int(molecule.Z.shape[0]),
         n_edges=int(molecule.edge_index.shape[0]),
         molecule_id=molecule_id,
