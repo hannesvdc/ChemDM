@@ -154,13 +154,28 @@ def batchMolecules(molecules: List[Molecule]) -> BatchedMoleculeGraph:
     return BatchedMoleculeGraph( molecules )
 
 @pt.no_grad()
-def unbatchBatchedMolecule( batched_molecule : BatchedMoleculeGraph ) -> List[MoleculeGraph]:
+def assertNoCrossMoleculeEdges( edge_index: pt.Tensor, molecule_id: pt.Tensor ) -> None:
+    src = edge_index[:, 0].long()
+    dst = edge_index[:, 1].long()
+
+    bad = molecule_id[src] != molecule_id[dst]
+
+    if pt.any(bad):
+        bad_edges = edge_index[bad][:10].detach().cpu().tolist()
+        raise ValueError(
+            "Found edges connecting atoms from different molecules. "
+            f"Examples: {bad_edges}"
+        )
+
+@pt.no_grad()
+def unbatchBatchedMolecule( batched_molecule : Molecule ) -> List[ Molecule ]:
     """
     Unwrap a batched molecule into its constituent molecules. 
     """
     # Return the molecule graph itself if the passed molecule is not of batched type.
     if not isinstance(batched_molecule, BatchedMoleculeGraph):
         return [ batched_molecule ]
+    assertNoCrossMoleculeEdges( batched_molecule.edge_index, batched_molecule.molecule_id )
     
     device = batched_molecule.x.device
     
@@ -361,82 +376,3 @@ def recenterMolecule( molecule : Molecule ) -> Molecule:
         raise TypeError(f"Unsupported molecule type: {type(molecule)}")
 
     return molecule.copyWithNewPositions( x_centered )
-
-@pt.no_grad()
-def detectRing(molecule: Molecule) -> rings.RingInfo:
-    """
-    Detect graph rings in a Molecule.
-
-    This treats molecule.edge_index as a directed representation of an
-    undirected molecular bond graph.
-
-    Returns
-    -------
-    RingInfo
-        Per-atom ring membership, ring counts, ring sizes, and ring atom sets.
-    """
-    return rings.detect_ring_info( molecule )
-
-
-@pt.no_grad()
-def detectRingBatched(molecule: BatchedMoleculeGraph) -> rings.RingInfo:
-    """
-    Detect graph rings in a BatchedMoleculeGraph.
-
-    Ring detection is run separately per molecule_id and mapped back to the
-    global batch atom indices. This avoids artificial quadratic scaling in the
-    number of molecules in the batch.
-    """
-    # Fall back in case the input molecule is not of batched type
-    if not isinstance( molecule, BatchedMoleculeGraph ):
-        return detectRing( molecule )
-    
-    device = molecule.Z.device
-    molecule_id = molecule.molecule_id.long()
-    n_atoms_total = int(molecule.Z.shape[0])
-
-    local_molecules = unbatchBatchedMolecule(molecule)
-
-    atom_in_ring = pt.zeros(n_atoms_total, dtype=pt.bool, device=device)
-    atom_ring_count = pt.zeros(n_atoms_total, dtype=pt.long, device=device)
-    atom_ring_sizes: list[set[int]] = [set() for _ in range(n_atoms_total)]
-    global_rings: list[tuple[int, ...]] = []
-
-    unique_molecule_ids = pt.unique(molecule_id, sorted=True)
-
-    assert len(local_molecules) == len(unique_molecule_ids), (
-        "unbatchBatchedMolecule returned a different number of molecules than "
-        "there are unique molecule IDs."
-    )
-
-    for local_molecule, mol_id_tensor in zip(local_molecules, unique_molecule_ids):
-        mol_id = int(mol_id_tensor.item())
-
-        global_atoms = pt.nonzero( molecule_id == mol_id, as_tuple=False ).flatten()
-
-        local_info = rings.detect_ring_info(local_molecule)
-
-        assert local_info.atom_in_ring.shape[0] == global_atoms.numel()
-
-        # Atom-level outputs.
-        atom_in_ring[global_atoms] = local_info.atom_in_ring.to( device=device )
-        atom_ring_count[global_atoms] = local_info.atom_ring_count.to( device=device )
-        for local_idx, global_idx_tensor in enumerate(global_atoms):
-            global_idx = int(global_idx_tensor.item())
-            atom_ring_sizes[global_idx] = set(local_info.atom_ring_sizes[local_idx])
-
-        # Ring atom indices: local -> global.
-        for local_ring in local_info.rings:
-            global_ring = tuple(
-                sorted( int(global_atoms[local_idx].item()) for local_idx in local_ring )
-            )
-            global_rings.append(global_ring)
-
-    global_rings = sorted(global_rings, key=lambda r: (len(r), r))
-
-    return rings.RingInfo(
-        atom_in_ring=atom_in_ring,
-        atom_ring_count=atom_ring_count,
-        atom_ring_sizes=atom_ring_sizes,
-        rings=global_rings,
-    )
