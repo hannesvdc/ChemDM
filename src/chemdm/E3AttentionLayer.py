@@ -199,6 +199,13 @@ class E3AttentionLayer(nn.Module):
             "e3nn_edge_message_scalar_gate",
         )
 
+        # attention gating of the edge messages so they are normalized
+        self.edge_attention_score = MultiLayerPerceptron(
+            [self.radial_context_dim, 128, 128, 1],
+            nn.GELU,
+            "e3nn_edge_attention_score",
+        )
+
         # Equivariant self-interaction after aggregation.
         self.self_interaction = o3.Linear( self.irreps_node, self.irreps_node )
         with pt.no_grad():
@@ -480,9 +487,24 @@ class E3AttentionLayer(nn.Module):
 
         return pt.cat( ( edges.edge_features, scalar_features[edges.src], scalar_features[edges.dst] ), dim=1 ) # type: ignore
 
-    def _aggregate_messages( self, f: pt.Tensor, edges: EdgeData ) -> pt.Tensor:
+    def _aggregate_messages(self, f: pt.Tensor, edges: EdgeData) -> pt.Tensor:
         """
-        e3nn tensor-product message passing.
+        e3nn tensor-product message passing with destination-wise edge attention.
+
+        For each edge i -> j:
+
+            context_ij = concat(edge_features_ij, scalar_0e(f_i), scalar_0e(f_j))
+            weights_ij = radial_network(context_ij)
+            message_ij = TP(f_i, Y(r_ij), weights_ij)
+
+        Then incoming messages are attention-weighted per destination node j.
+
+        We use degree-scaled softmax attention:
+
+            alpha_ij = softmax_i(score_ij over incoming edges i -> j)
+            multiplier_ij = degree_j * alpha_ij
+
+        so the average incoming multiplier stays close to 1.
         """
         edge_attr = o3.spherical_harmonics(
             self.irreps_sh,
@@ -491,16 +513,28 @@ class E3AttentionLayer(nn.Module):
             normalization="component",
         )
 
-        # Scalar context for network weights to keep everything nicely equivariant
+        # Scalar context for tensor-product weights and attention scores.
         node_scalars = self.scalar_readout(f)
+
         radial_context = self._edge_context( f, edges, scalar_features=node_scalars )
-        weights = self.radial_network( radial_context )
 
         # Edge message from src to dst.
+        weights = self.radial_network(radial_context)
         edge_messages = self.tp( f[edges.src], edge_attr, weights )
 
-        # Scalar residual message gate.
-        gate_logits = self.edge_message_scalar_gate(radial_context)  # (E, 1)
+        # Destination-wise attention scores.
+        attention_logits = self.edge_attention_score(radial_context)
+        alpha = segment_softmax( attention_logits, edges.dst, n_segments=f.shape[0] )  # (E, 1), sums to 1 over incoming edges per dst
+
+        # Degree-scaled attention keeps the scale comparable to sum aggregation.
+        degree = pt.zeros( (f.shape[0], 1), dtype=f.dtype, device=f.device )
+        degree.index_add_( 0, edges.dst, pt.ones_like(alpha), )
+
+        attention_multiplier = alpha * degree[edges.dst]
+        edge_messages = attention_multiplier * edge_messages
+
+        # Optional residual scalar gate after attention.
+        gate_logits = self.edge_message_scalar_gate(radial_context)
         gate_residual = 0.5 * pt.tanh(gate_logits)
         edge_messages = (1.0 + gate_residual) * edge_messages
 
@@ -623,3 +657,41 @@ class E3AttentionLayer(nn.Module):
         dx = self._coordinate_update(xA, xB, s, x, f_new, edges)
 
         return f_new, dx
+    
+def segment_softmax( scores: pt.Tensor, index: pt.Tensor, n_segments: int ) -> pt.Tensor:
+    """
+    Softmax over variable-size groups.
+
+    scores:
+        Shape (E, 1)
+
+    index:
+        Shape (E,), group index for each edge.
+        For edge attention, this is edges.dst.
+
+    n_segments:
+        Number of groups. Usually number of nodes.
+
+    Returns
+    -------
+    alpha:
+        Shape (E, 1), with alpha summing to 1 over each group.
+    """
+    assert scores.ndim == 2 and scores.shape[1] == 1
+    assert index.ndim == 1
+    assert scores.shape[0] == index.shape[0]
+
+    scores_flat = scores[:, 0]
+    max_per_segment = pt.full( (n_segments,), -pt.inf, dtype=scores.dtype, device=scores.device )
+
+    max_per_segment.scatter_reduce_( 0, index, scores_flat, reduce="amax", include_self=True )
+
+    shifted = scores_flat - max_per_segment[index]
+    exp_scores = pt.exp(shifted)
+
+    denom = pt.zeros( (n_segments,), dtype=scores.dtype, device=scores.device )
+
+    denom.scatter_add_( 0, index, exp_scores )
+    alpha = exp_scores / denom[index].clamp_min(1.0e-12)
+
+    return alpha[:, None]
