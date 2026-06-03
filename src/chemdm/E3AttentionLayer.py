@@ -526,12 +526,7 @@ class E3AttentionLayer(nn.Module):
         attention_logits = self.edge_attention_score(radial_context)
         alpha = segment_softmax( attention_logits, edges.dst, n_segments=f.shape[0] )  # (E, 1), sums to 1 over incoming edges per dst
 
-        # Degree-scaled attention keeps the scale comparable to sum aggregation.
-        degree = pt.zeros( (f.shape[0], 1), dtype=f.dtype, device=f.device )
-        degree.index_add_( 0, edges.dst, pt.ones_like(alpha), )
-
-        attention_multiplier = alpha * degree[edges.dst]
-        edge_messages = attention_multiplier * edge_messages
+        edge_messages = alpha * edge_messages
 
         agg = pt.zeros_like(f)
         agg.index_add_(0, edges.dst, edge_messages)
