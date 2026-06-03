@@ -533,11 +533,6 @@ class E3AttentionLayer(nn.Module):
         attention_multiplier = alpha * degree[edges.dst]
         edge_messages = attention_multiplier * edge_messages
 
-        # Optional residual scalar gate after attention.
-        gate_logits = self.edge_message_scalar_gate(radial_context)
-        gate_residual = 0.5 * pt.tanh(gate_logits)
-        edge_messages = (1.0 + gate_residual) * edge_messages
-
         agg = pt.zeros_like(f)
         agg.index_add_(0, edges.dst, edge_messages)
 
