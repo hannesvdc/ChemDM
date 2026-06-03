@@ -16,13 +16,6 @@ from chemdm.MoleculeInformation import (
 from chemdm.MLP import MultiLayerPerceptron
 
 
-# Main return type for TPMoleculeEmbedding
-@dataclass(frozen=True)
-class TPMoleculeEmbeddingOutput:
-    node_features: pt.Tensor       # (N, node_embedding_dim)
-    edge_features: pt.Tensor       # (E, edge_embedding_dim)
-    edge_index: pt.Tensor          # (E, 2), directed union graph
-
 
 class TPMoleculeEmbedding(nn.Module):
     """
