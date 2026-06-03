@@ -254,7 +254,7 @@ def computeAtomInformation( molecule: Molecule,
 
     degree = compute_degree( n_atoms=n_atoms, edge_index=molecule.edge_index, dtype=dtype )
     atom_type_one_hot = one_hot_atomic_numbers( Z, allowed_atomic_numbers=allowed_atomic_numbers, dtype=dtype )
-    atom_mass = _ATOMIC_MASS_TABLE[Z].to( device=device, dtype=dtype )
+    atom_mass = _ATOMIC_MASS_TABLE.to(device=device)[Z].to( dtype=dtype )
     atom_mass_scaled = atom_mass / 100.0 # magic constant, I know...
 
     if ring_info is not None:

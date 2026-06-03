@@ -321,7 +321,7 @@ def findAllNeighborsReactantProduct( moleculeA : Molecule,
 
     # Build a temperary molecule with the same strucure as A and B but with positions x
     moleculeX = moleculeA.copyWithNewPositions( x )
-    distance_neighbors = findAllDistanceNeighbors( moleculeX, d_cutoff) # type: ignore
+    distance_neighbors = findAllDistanceNeighbors( moleculeX, d_cutoff )
 
     # Merge the neighbors
     bond_neighbors_A = moleculeA.edge_index

@@ -5,6 +5,8 @@ from typing import Optional
 import torch as pt
 import torch.nn as nn
 
+from dataclasses import dataclass
+
 from chemdm.MoleculeGraph import Molecule
 from chemdm.MoleculeInformation import (
     computeMoleculeInformation,
@@ -13,6 +15,13 @@ from chemdm.MoleculeInformation import (
 )
 from chemdm.MLP import MultiLayerPerceptron
 
+
+# Main return type for TPMoleculeEmbedding
+@dataclass(frozen=True)
+class TPMoleculeEmbeddingOutput:
+    node_features: pt.Tensor       # (N, node_embedding_dim)
+    edge_features: pt.Tensor       # (E, edge_embedding_dim)
+    edge_index: pt.Tensor          # (E, 2), directed union graph
 
 
 class TPMoleculeEmbedding(nn.Module):
@@ -29,6 +38,9 @@ class TPMoleculeEmbedding(nn.Module):
     It returns one scalar embedding per atom:
 
         tp_embedding(xA, xB): (N, embedding_dim)
+
+    TODO: In the future, we want to put edge embedding here too so the Newton layers
+    don't have to worry about that. That keeps the architecture and separation cleaner.
     """
 
     def __init__( self,
