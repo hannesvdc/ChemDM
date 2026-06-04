@@ -146,7 +146,7 @@ def run( input_data: dict,
                      fraction = progress_so_far + (1.0 - progress_so_far) * iter / n_steps )
     on_progress( "fine_tune_path", "Fine-tuning", fraction=0.50 )
     progress_so_far = on_progress.getTotalProgress()
-    path_opt, E_opt_kjm, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, lbfgs_maxiter=n_steps, callback=callback, max_workers=max_workers)
+    path_opt, E_opt_kjm, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, callback=callback, max_workers=max_workers)
     s = normalized_arclengths(path_opt)
     E_opt_kjm -= E_opt_kjm[0]
 

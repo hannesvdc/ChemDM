@@ -1,4 +1,6 @@
 import sys
+import os
+import traceback
 import numpy as np
 import scipy.optimize as opt
 import scipy.sparse as sp
@@ -8,24 +10,32 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 
 from chemdm.Constants import *
-from chemdm.xtbSetup import XTBPotential
 from chemdm.diagnostics import has_plateaued, has_started_increasing
 from chemdm.Logger import LSQLogger
+from typing import Any, Callable, Optional
 
-from typing import Callable, Optional
+_WORKER_XTB: Any | None = None
 
-ctx = mp.get_context( "spawn" )
-_WORKER_XTB: XTBPotential | None = None
-def init_xtb_worker( Z: np.ndarray, ):
+def init_xtb_worker(Z: np.ndarray):
     """
     Called once inside each worker process.
-
     Creates one persistent XTBPotential per process.
     """
     global _WORKER_XTB
-    _WORKER_XTB = XTBPotential( Z=np.asarray(Z, dtype=int) )
 
-def evaluate_xtb( XTB: XTBPotential, R_A: np.ndarray) -> tuple[float,np.ndarray]:
+    print(f"[xtb-worker {os.getpid()}] initializer start", file=sys.stderr, flush=True)
+
+    try:
+        from chemdm.xtbSetup import XTBPotential
+        print(f"[xtb-worker {os.getpid()}] imported XTBPotential", file=sys.stderr, flush=True)
+        _WORKER_XTB = XTBPotential(Z=np.asarray(Z, dtype=int))
+        print(f"[xtb-worker {os.getpid()}] XTBPotential created", file=sys.stderr, flush=True)
+    except BaseException:
+        print(f"[xtb-worker {os.getpid()}] initializer failed", file=sys.stderr, flush=True)
+        traceback.print_exc()
+        raise
+
+def evaluate_xtb( XTB, R_A: np.ndarray) -> tuple[float,np.ndarray]:
     """
     XTB : XTBPotential
     R_A: (n_atoms, 3), Angstrom
@@ -75,7 +85,7 @@ def evaluate_path_process_parallel( path_A: np.ndarray,
 
     return np.asarray(energies), np.asarray(forces)
 
-def evaluate_path( xtb : XTBPotential, path_A: np.ndarray ):
+def evaluate_path( xtb, path_A: np.ndarray ):
     """
     path_A: (n_images, n_atoms, 3), Angstrom
 
@@ -426,7 +436,6 @@ def run_neb_xtb( Z : np.ndarray,
                  k: float = 1.0/KJ_MOL_TO_EV,  # kJ/mol/A^2
                  max_step_A: float = 0.02,
                  force_tol: float = 2.8945599636993004, # kJ/mol/A
-                 lbfgs_maxiter : int = 15,
                  max_workers: int = 4,
                  callback : Optional[Callable] = None,
                 ):
@@ -473,7 +482,18 @@ def run_neb_xtb( Z : np.ndarray,
             return path_opt_A, E_best, info["best_force_rms"]
         return path_opt_A, E_best, info["best_force_rms"]
     
+    if max_workers <= 1:
+        print("[neb-xtb] using serial evaluator", file=sys.stderr, flush=True)
+        
+        from chemdm.xtbSetup import XTBPotential
+        xtb = XTBPotential(Z=Z)
+
+        neb_energy_and_force = lambda path_A: evaluate_path(xtb, path_A)
+        return run_with_evaluator(neb_energy_and_force)
+    
     # Process-parallel mode.
+    print( f"[neb-xtb] using spawn ProcessPoolExecutor with {max_workers} workers", file=sys.stderr, flush=True )
+    ctx = mp.get_context("spawn")
     with ProcessPoolExecutor( max_workers=max_workers,
                               mp_context=ctx,
                               initializer=init_xtb_worker,
