@@ -4,6 +4,7 @@ import scipy.optimize as opt
 import scipy.sparse as sp
 import torch as pt
 
+import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 
 from chemdm.Constants import *
@@ -13,7 +14,7 @@ from chemdm.Logger import LSQLogger
 
 from typing import Callable, Optional
 
-
+ctx = mp.get_context( "spawn" )
 _WORKER_XTB: XTBPotential | None = None
 def init_xtb_worker( Z: np.ndarray, ):
     """
@@ -453,8 +454,7 @@ def run_neb_xtb( Z : np.ndarray,
     """
 
     
-    def run_with_evaluator( neb_energy_and_force: Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]],
-                            pool : ProcessPoolExecutor ):
+    def run_with_evaluator( neb_energy_and_force: Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]] ):
     
         # Measure how well we can do at all with fixed end points
         E0, F0 = neb_energy_and_force(path0_A)
@@ -472,15 +472,11 @@ def run_neb_xtb( Z : np.ndarray,
             print('Adam converged')
             return path_opt_A, E_best, info["best_force_rms"]
         return path_opt_A, E_best, info["best_force_rms"]
-        #path_opt_A = path0_A
-        
-        # Else run a fine-tuning step using a quasi-Newton method
-        path_opt, E_best, info = neb_least_squares( neb_energy_and_force, path_opt_A, k, force_tol, lbfgs_maxiter, callback )
-        return path_opt, E_best, info["best_force_rms"]
     
     # Process-parallel mode.
-    with ProcessPoolExecutor( max_workers=max_workers, 
+    with ProcessPoolExecutor( max_workers=max_workers,
+                              mp_context=ctx,
                               initializer=init_xtb_worker,
                               initargs=( Z, ),  ) as pool:
-        neb_energy_and_force = lambda path_A: evaluate_path_process_parallel(path_A, pool)
-        return run_with_evaluator(neb_energy_and_force, pool)
+        neb_energy_and_force = lambda path_A: evaluate_path_process_parallel( path_A, pool )
+        return run_with_evaluator( neb_energy_and_force )
