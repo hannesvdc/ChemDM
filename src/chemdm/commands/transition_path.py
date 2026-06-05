@@ -6,7 +6,6 @@ sys.path block can go.
 """
 from __future__ import annotations
 
-import copy
 import os
 import sys
 from pathlib import Path
@@ -140,7 +139,8 @@ def run( input_data: dict,
     lr = 1e-2
     max_step_A = 0.02
     k = 1.0 * KJ_MOL_PER_EV   # kJ/mol/Å², equivalent to 1 eV/Å²
-    max_workers = n_images
+    max_threads = 12
+    max_workers = min( n_images, max_threads )
     def callback( iter : int, maxF : float ) -> None:
         on_progress( "fine_tune_path", f"(Step {iter}/{n_steps}) Max. Perpendicular Force: {maxF:.2f} [kJ / (mol A)]", 
                      fraction = progress_so_far + (1.0 - progress_so_far) * iter / n_steps )
