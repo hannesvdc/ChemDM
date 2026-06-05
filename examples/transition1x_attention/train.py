@@ -81,12 +81,18 @@ def main( exp_name : str, resume : bool = False ):
     irreps_node_str = "48x0e + 16x1o + 16x1e + 8x2e"
     irreps_qk_str = "16x0e + 8x1o + 4x1e"
     n_refinement_steps = 7
+    tp_embedding_dim = 64
+    tp_embedding_hidden_dim = 128
+    tp_embedding_hidden_layers = 2
     tp_network = EquivariantTransformer( irreps_node_str=irreps_node_str,
                                          irreps_qk_str=irreps_qk_str,
                                          n_refinement_steps=n_refinement_steps,
                                          d_cutoff=d_cutoff,
                                          n_freq=8,
-                                         n_rbf=n_rbf )
+                                         n_rbf=n_rbf,
+                                         tp_embedding_dim=tp_embedding_dim,
+                                         tp_embedding_hidden_dim=tp_embedding_hidden_dim,
+                                         tp_embedding_hidden_layers=tp_embedding_hidden_layers )
     n_params = sum(p.numel() for p in tp_network.parameters() if p.requires_grad)
     print( "Number of Trainable Parameters: ", n_params )
 
@@ -118,9 +124,15 @@ def main( exp_name : str, resume : bool = False ):
         "irreps_node": irreps_node_str,
         "irreps_qk": irreps_qk_str,
         "n_refinement_steps": n_refinement_steps,
+        "tp_embedding_dim": tp_embedding_dim,
+        "tp_embedding_hidden_dim": tp_embedding_hidden_dim,
+        "tp_embedding_hidden_layers": tp_embedding_hidden_layers,
         "loss_gamma": loss_gamma,
         "d_cutoff": d_cutoff,
         "n_rbf": n_rbf,
+        "lr_min": lr_min,
+        "lr_max": lr_max,
+        "warmup_epochs": warmup_epochs,
         "n_trainable_parameters": n_params,
     }
     exp_dir = make_experiment_dir( exp_name, root=root )
@@ -182,6 +194,8 @@ def main( exp_name : str, resume : bool = False ):
         n_batches = len(train_loader)
         epoch_loss = 0.0
         final_state_epoch_loss = 0.0
+        grad_norm_sum = 0.0
+        n_successful_batches = 0
         for batch_idx, (xA, xB, s, x_ref) in enumerate( train_loader ):
             optimizer.zero_grad( set_to_none=True )
 
@@ -206,6 +220,9 @@ def main( exp_name : str, resume : bool = False ):
             pt.nn.utils.clip_grad_norm_( tp_network.parameters(), 1.0 )
             optimizer.step()
 
+            grad_norm_sum += float(grad_norm)
+            n_successful_batches += 1
+
             # Print some information
             epoch_idx = epoch + (batch_idx+1.0) / n_batches
             train_counter.append(epoch_idx)
@@ -214,7 +231,13 @@ def main( exp_name : str, resume : bool = False ):
             if (batch_idx+1) % 1 == 0:
                 print('Train Epoch: {} [{}/{}] \tLoss: {:.6f} \t Gradient Norm {:.6f} \t Learning Rate {:.2E}'
                     .format( epoch, batch_idx+1, n_batches, loss.item(), grad_norm, optimizer.param_groups[-1]["lr"] ), flush=True)
-        return epoch_loss / n_batches, grad_norm, final_state_epoch_loss / n_batches
+
+        # Per-epoch averages. All three are means over successful batches
+        # only (failed batches don't contribute to numerator or denominator),
+        # so the reported loss isn't artificially depressed by skipped
+        # batches. max(..., 1) avoids div-by-zero if every batch errored.
+        denom = max(n_successful_batches, 1)
+        return epoch_loss / denom, grad_norm_sum / denom, final_state_epoch_loss / denom
 
     valid_counter = []
     valid_losses = []
@@ -254,24 +277,38 @@ def main( exp_name : str, resume : bool = False ):
             train_loss, train_grad, train_res_loss = train( epoch )
             print( "Train Epoch {} \tTotal Loss: {}\n".format(epoch, train_loss), flush=True )
             valid_loss, valid_res_loss = validate( epoch )
-            train_rmse = evaluate_rmse( train_loader )
-            valid_rmse = evaluate_rmse( valid_loader )
-            print( "Validation Epoch {} \tTotal Loss: {} \tTrain RMSE: {:.6f} \tValid RMSE: {:.6f}\n"
-                   .format(epoch, valid_loss, train_rmse, valid_rmse), flush=True )
+
+            # Expensive RMSE evaluation: only every 10 epochs (and at epoch 0
+            # so the initial baseline shows up in the wandb dashboard).
+            if epoch % 10 == 0:
+                train_rmse = evaluate_rmse( train_loader )
+                valid_rmse = evaluate_rmse( valid_loader )
+                print( "Validation Epoch {} \tTotal Loss: {} \tTrain RMSE: {:.6f} \tValid RMSE: {:.6f}\n"
+                       .format(epoch, valid_loss, train_rmse, valid_rmse), flush=True )
+            else:
+                train_rmse = None
+                valid_rmse = None
+                print( "Validation Epoch {} \tTotal Loss: {}\n".format(epoch, valid_loss), flush=True )
+
             if valid_loss < best_val_loss:
                 print('Saving best model')
                 best_val_loss = valid_loss
                 pt.save( tp_network.state_dict(), exp_dir / "best_gnn.pth" )
 
-            # Log to weights & biases
+            # Log to weights & biases. Only include the RMSE keys on the
+            # epochs where they were actually computed; wandb will then show
+            # a sparser line for these metrics instead of constants.
             if setup_wandb:
-                run.log({"epoch": epoch, "train_loss": train_loss,
-                         "train_grad": train_grad, "valid_loss" : valid_loss,
-                         "best_val_loss" : best_val_loss,
-                         "train_rmse": train_rmse, "valid_rmse": valid_rmse,
-                         "train_final_state_loss" : train_res_loss,
-                         "valid_final_state_loss" : valid_res_loss,
-                         "lr": optimizer.param_groups[0]["lr"]})
+                log_dict = {"epoch": epoch, "train_loss": train_loss,
+                            "train_grad": train_grad, "valid_loss" : valid_loss,
+                            "best_val_loss" : best_val_loss,
+                            "train_final_state_loss" : train_res_loss,
+                            "valid_final_state_loss" : valid_res_loss,
+                            "lr": optimizer.param_groups[0]["lr"]}
+                if train_rmse is not None:
+                    log_dict["train_rmse"] = train_rmse
+                    log_dict["valid_rmse"] = valid_rmse
+                run.log(log_dict)
 
             if epoch % 10 == 0:
                 pt.save( tp_network.state_dict(), exp_dir / "gnn.pth" )
