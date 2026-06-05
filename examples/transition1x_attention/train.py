@@ -15,7 +15,7 @@ import traceback
 from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.E3Transformer import E3Transformer
+from EquivariantTransformer import EquivariantTransformer
 from chemdm.NewtonLoss import NewtonLoss
 from chemdm.util import getGradientNorm, perCoordinateRMSE, collate_molecules
 
@@ -79,12 +79,14 @@ def main( exp_name : str, resume : bool = False ):
 
     # E3NN transition-path network
     irreps_node_str = "48x0e + 16x1o + 16x1e + 8x2e"
+    irreps_qk_str = "16x0e + 8x1o + 4x1e"
     n_refinement_steps = 7
-    tp_network = E3Transformer( irreps_node_str, 
-                               n_refinement_steps=n_refinement_steps, 
-                               d_cutoff=d_cutoff,
-                               n_freq=8,
-                               n_rbf=n_rbf)
+    tp_network = EquivariantTransformer( irreps_node_str=irreps_node_str,
+                                         irreps_qk_str=irreps_qk_str,
+                                         n_refinement_steps=n_refinement_steps,
+                                         d_cutoff=d_cutoff,
+                                         n_freq=8,
+                                         n_rbf=n_rbf )
     n_params = sum(p.numel() for p in tp_network.parameters() if p.requires_grad)
     print( "Number of Trainable Parameters: ", n_params )
 
@@ -106,7 +108,7 @@ def main( exp_name : str, resume : bool = False ):
 
     # Everything has been set up, now log the config and initialize weights&biases
     experiment_config = {
-        "architecture": "E3Transformer",
+        "architecture": "EquivariantTransformer",
         "experiment_name": exp_name,
         "data_directory": data_directory,
         "device": device_name,
@@ -114,6 +116,7 @@ def main( exp_name : str, resume : bool = False ):
         "batch_size": B,
         "epochs": n_epochs,
         "irreps_node": irreps_node_str,
+        "irreps_qk": irreps_qk_str,
         "n_refinement_steps": n_refinement_steps,
         "loss_gamma": loss_gamma,
         "d_cutoff": d_cutoff,
