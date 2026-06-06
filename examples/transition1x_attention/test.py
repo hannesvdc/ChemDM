@@ -7,44 +7,41 @@ from pathlib import Path
 import json
 
 from chemdm.TransitionPathDataset import TransitionPathDataset
-from chemdm.MoleculeGraph import BatchedMoleculeGraph, MoleculeGraph, batchMolecules
-from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.NewtonE3NN import NewtonE3NN
+from EquivariantTransformer import EquivariantTransformer
+from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, Molecule
+from chemdm.util import formula_from_Z
 
 from typing import List
 
-def loadNewtonModel( store_root : str, device : pt.device, dtype : pt.dtype) -> NewtonE3NN:
+def loadAttentionModel( store_root : Path, device : pt.device, dtype : pt.dtype) -> EquivariantTransformer:
     newton_weights = pt.load( Path(store_root) / 'best_gnn.pth', map_location=device, weights_only=True )
 
     d_cutoff = 5.0
     n_rbf = 10
 
-    # Endpoint embedding networks
-    embedding_state_size = 64
-    embedding_message_size = 64
-    n_embedding_layers = 5
-    xA_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
-    xB_embedding = MolecularEmbeddingGNN( embedding_state_size, embedding_message_size, n_embedding_layers, d_cutoff )
-
     # E3NN transition-path network
     irreps_node_str = "48x0e + 16x1o + 16x1e + 8x2e"
+    irreps_qk_str = "16x0e + 8x1o + 4x1e"
     n_refinement_steps = 7
-    tp_network = NewtonE3NN(
-        xA_embedding_network=xA_embedding,
-        xB_embedding_network=xB_embedding,
-        irreps_node_str=irreps_node_str,
-        n_refinement_steps=n_refinement_steps,
-        d_cutoff=d_cutoff,
-        n_freq=8,
-        n_rbf=n_rbf,
-    )
+    tp_embedding_dim = 64
+    tp_embedding_hidden_dim = 128
+    tp_embedding_hidden_layers = 2
+    tp_network = EquivariantTransformer( irreps_node_str=irreps_node_str,
+                                         irreps_qk_str=irreps_qk_str,
+                                         n_refinement_steps=n_refinement_steps,
+                                         d_cutoff=d_cutoff,
+                                         n_freq=8,
+                                         n_rbf=n_rbf,
+                                         tp_embedding_dim=tp_embedding_dim,
+                                         tp_embedding_hidden_dim=tp_embedding_hidden_dim,
+                                         tp_embedding_hidden_layers=tp_embedding_hidden_layers )
     tp_network.load_state_dict( newton_weights )
-    tp_network.to( dtype=dtype )
+    tp_network.to( device=device, dtype=dtype )
 
     return tp_network
 
 @pt.no_grad
-def evaluateML( tp_network : NewtonE3NN,
+def evaluateML( tp_network : EquivariantTransformer,
                 s : pt.Tensor,
                 Z : pt.Tensor, 
                xA : pt.Tensor, 
@@ -58,8 +55,8 @@ def evaluateML( tp_network : NewtonE3NN,
     # Evaluate
     xa_graph = MoleculeGraph(Z, xA, Ga)
     xb_graph = MoleculeGraph(Z, xB, Gb)
-    xa_batched = [xa_graph] * n_images
-    xb_batched = [xb_graph] * n_images
+    xa_batched : List[Molecule] = [xa_graph] * n_images
+    xb_batched : List[Molecule] = [xb_graph] * n_images
     xa_mol = batchMolecules( xa_batched )
     xb_mol = batchMolecules( xb_batched )
     s_values = [ s_i.expand(mol_size) for s_i in s ]
@@ -83,16 +80,20 @@ def main():
     with open( './data_config.json', "r" ) as f:
         data_config = json.load( f )
     data_directory = data_config["data_folder"]
-    store_root = data_config["store_root"]
-    
-    # Load the nework
+    experiment_name = "single_head_self_attention"
+    store_root = Path( data_config["store_root"] ) / experiment_name
+
+    # Load the nework. There is a memory overflow issue on mps, so we must use cpu
     device = pt.device( 'cpu' )
     dtype = pt.float32
-    network = loadNewtonModel( store_root, device, dtype )
+    network = loadAttentionModel( store_root, device, dtype )
     n_layers = network.n_refinement_steps+1
 
-    # Load the [train, val, test] dataset and measure the molecular error per iteration
-    for kind in ['train', 'val', 'test']:
+    # Per split: evaluate, save the layer-MSE matrix, and remember the
+    # dataset + final-layer RMSE for the post-eval analysis.
+    splits = ['train', 'val', 'test']
+    per_split: dict[str, tuple[np.ndarray, TransitionPathDataset]] = {}
+    for kind in splits:
         print( 'Evaluating', kind, 'Dataset' )
         dataset = TransitionPathDataset( kind, data_directory )
         n_molecules = len(dataset)
@@ -102,19 +103,63 @@ def main():
             if n % 100 == 0:
                 print( 'Reaction', n )
             trajectory = dataset[n][-1]
-            Z = trajectory.Z.to( dtype=pt.int )
-            xA = trajectory.xA.to( dtype=pt.float32 )
-            Ga = trajectory.GA.to( dtype=pt.int )
-            xB = trajectory.xB.to( dtype=pt.float32 )
-            Gb = trajectory.GB.to( dtype=pt.int )
-            s = trajectory.s.to( dtype=pt.float32 )
-            x_ref = trajectory.x.to( dtype=pt.float32 )
+            Z = trajectory.Z.to( device=device, dtype=pt.int )
+            xA = trajectory.xA.to( device=device, dtype=pt.float32 )
+            Ga = trajectory.GA.to( device=device, dtype=pt.int )
+            xB = trajectory.xB.to( device=device, dtype=pt.float32 )
+            Gb = trajectory.GB.to( device=device, dtype=pt.int )
+            s = trajectory.s.to( device=device, dtype=pt.float32 )
+            x_ref = trajectory.x.to( device=device, dtype=pt.float32 )
 
             _, layer_states = evaluateML( network, s, Z, xA, xB, Ga, Gb )
             errors = evaluateMoleculeErrors( layer_states, x_ref )
             molecule_errors[n,:] = errors
 
-        np.save( './experiments/' + kind + '_errors.npy', molecule_errors )
+        np.save( store_root /  str(kind + '_errors.npy'), molecule_errors )
+
+        # MSE is mean over (image, atom) of summed-squared-xyz, so sqrt is
+        # the standard per-atom RMSD in Å.
+        rmse = np.sqrt( np.maximum(molecule_errors[:, -1], 0.0) )
+        per_split[kind] = (rmse, dataset)
+
+    # Summary table.
+    print()
+    for kind, (rmse, _) in per_split.items():
+        pcts = np.percentile( rmse, [50, 90, 95, 99] )
+        print(
+            f'{kind:>5s}  n={len(rmse):>6d}  '
+            f'mean={rmse.mean():.3f}  median={pcts[0]:.3f}  '
+            f'p90={pcts[1]:.3f}  p95={pcts[2]:.3f}  p99={pcts[3]:.3f}  '
+            f'max={rmse.max():.3f}  [Å]'
+        )
+
+    # Top-N worst molecules per split (identity from the dataset already in scope).
+    n_worst = 5
+    for kind, (rmse, dataset) in per_split.items():
+        worst_idx = np.argsort( -rmse )[:n_worst]
+        print(f'\nTop {n_worst} worst {kind} molecules (by final-layer RMSE):')
+        for rank, idx in enumerate( worst_idx, start=1 ):
+            traj = dataset[int(idx)][-1]
+            formula = formula_from_Z( traj.Z )
+            n_atoms = int(traj.Z.numel())
+            n_images = int(traj.s.numel())
+            print(
+                f'  #{rank}  idx={int(idx):>5d}  RMSE={rmse[idx]:.3f} Å  '
+                f'formula={formula:<14s} (N={n_atoms}, images={n_images})  '
+                f'file={dataset.file_names[int(idx)]}'
+            )
+
+    # Histograms (one subplot per split).
+    fig, axes = plt.subplots( 1, len(per_split), figsize=(5 * len(per_split), 4), squeeze=False )
+    for ax, (kind, (rmse, _)) in zip( axes[0], per_split.items() ):
+        ax.hist( rmse, bins=50, edgecolor='black' )
+        ax.set_xlabel('per-molecule RMSE [Å]')
+        ax.set_ylabel('# molecules')
+        ax.set_title( f'{kind}  (n={len(rmse)}, median={np.median(rmse):.3f} Å)' )
+        ax.grid( axis='y', alpha=0.3 )
+    fig.suptitle('Final-layer per-molecule RMSE distributions')
+    plt.tight_layout()
+    plt.show()
 
 def plot():
     # Load train, val and test convergence
@@ -138,15 +183,6 @@ def plot():
         plt.ylabel( 'Molecule Error' )
     plt.show()
 
-def parseArguments():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument( '--plot', action='store_true', dest='plot' )
-    return parser.parse_args()
 
 if __name__ == '__main__':
-    args = parseArguments()
-    if hasattr( args, 'plot') and bool(args.plot):
-        plot()
-    else:
-        main()
+    main()

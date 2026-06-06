@@ -31,6 +31,8 @@ import numpy as np
 
 from qm9_parser import load_qm9_molecule
 
+from chemdm.util import Z_TO_SYMBOL
+
 from dotenv import load_dotenv
 
 def _histogram( values: list[int] ) -> str:
@@ -119,10 +121,9 @@ def explore( qm9_dir: Path, max_files: int | None = None, show_examples: int = 0
     print( f"\n  molecules with 0 rotatable bonds: {n_zero_rot:,}/{n:,} ({pct:.1f}%)" )
     print( f"  -> trainable for torsional diffusion: {n - n_zero_rot:,} ({100 - pct:.1f}%)" )
 
-    Z_to_sym = { 1: "H", 6: "C", 7: "N", 8: "O", 9: "F", 15: "P", 16: "S", 17: "Cl", 35: "Br", 53: "I" }
     print( f"\n  elements present (atomic number -> count):" )
     for z, c in sorted(element_counts.items()):
-        sym = Z_to_sym.get(z, f"Z={z}")
+        sym = Z_TO_SYMBOL.get(z, f"Z={z}")
         print(f"    {z:>3d} ({sym:>2s}): {c:>10,d}")
 
     print( f"\n  histogram of n_rotatable_bonds:" )
