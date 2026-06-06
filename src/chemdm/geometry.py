@@ -203,5 +203,84 @@ def perpendicular_basis_continuous( axis: np.ndarray ) -> tuple[np.ndarray, np.n
         u[m] = um
         v[m] = np.cross(axis[m], u[m])
         v[m] = v[m] / np.linalg.norm(v[m])
-
     return u, v
+
+def apply_torsion_update( x:  pt.Tensor,
+                          bonds: pt.Tensor,
+                          side_atom_idx: pt.Tensor,
+                          side_bond_idx: pt.Tensor,
+                          delta_tau: pt.Tensor,
+    ) -> pt.Tensor:
+    """
+    Apply per-bond torsion increments Δτ to a (possibly batched) atom point
+    cloud, leaving bond lengths and bond angles invariant.
+
+    For each rotatable bond i with endpoints (b_i, c_i) we rotate the atoms
+    on its c-side by Δτ_i around the bond axis (x_{c_i} - x_{b_i}) passing
+    through x_{b_i}. Proposition 1 of Jing et al. 2022 ("Torsional Diffusion
+    for Molecular Conformer Generation") shows that this operation is
+    well-defined regardless of any choice of reference neighbors, and that
+    the final geometry is independent of the order in which bonds are
+    processed when multiple Δτ_i are applied. We process bonds in their
+    natural order.
+
+    Parameters
+    ----------
+    x : (N, 3) float
+        Atom positions; may be a flat batched cloud (multiple molecules
+        concatenated along dim 0).
+    bonds : (m, 2) long
+        Rotatable-bond endpoints (b_i, c_i) as global atom indices into `x`.
+    side_atom_idx : (P,) long
+        COO-style: atom (global) index on the c-side of some bond.
+    side_bond_idx : (P,) long
+        COO-style: which row of `bonds` each side-atom belongs to.
+    delta_tau : (m,) float
+        Per-bond rotation angle in radians.
+
+    Returns
+    -------
+    x_new : (N, 3) float
+        New positions with the torsion updates applied. Input is not mutated.
+
+    Vectorization
+    -------------
+    Sequential over `m` bonds (Python loop), vectorized over the c-side
+    atoms within each bond using Rodrigues' rotation formula:
+
+        p' = p cosθ + (k x p) sinθ + k (k · p) (1 - cosθ)
+
+    where k is the unit bond axis and p = x_atom - x_{b_i}.
+    """
+    assert bonds.ndim == 2 and bonds.shape[1] == 2
+    assert side_atom_idx.shape == side_bond_idx.shape
+    assert delta_tau.shape == (bonds.shape[0],)
+
+    x_new = x.clone()
+    m = bonds.shape[0]
+    for i in range(m):
+        b = int(bonds[i, 0])
+        c = int(bonds[i, 1])
+
+        bond_vec = x_new[c] - x_new[b]  # (3,)
+        bond_axis = bond_vec / pt.linalg.norm(bond_vec).clamp_min(1.0e-8)   # (3,)
+
+        atoms = side_atom_idx[side_bond_idx == i]  # (P_i,)
+        if atoms.numel() == 0:
+            continue
+
+        center = x_new[b]  # (3,)
+        p = x_new[atoms] - center   # (P_i, 3)
+
+        angle = delta_tau[i]
+        cos_a = pt.cos( angle )
+        sin_a = pt.sin( angle )
+
+        # Broadcasting bond_axis (3,) over (P_i, 3):
+        cross = pt.linalg.cross( bond_axis.expand_as(p), p, dim=-1 )            # (P_i, 3)
+        dot = (bond_axis * p).sum(dim=-1, keepdim=True)                       # (P_i, 1)
+        p_rot = p * cos_a + cross * sin_a + bond_axis * dot * (1.0 - cos_a)     # (P_i, 3)
+
+        x_new[atoms] = p_rot + center
+
+    return x_new
