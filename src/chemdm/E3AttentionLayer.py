@@ -319,11 +319,7 @@ class E3AttentionLayer(nn.Module):
         return s
 
 
-    def _get_edges_and_bond_flags(
-        self,
-        xA: Molecule,
-        xB: Molecule,
-        x: pt.Tensor,
+    def _get_edges_and_bond_flags( self, xA: Molecule, xB: Molecule, x: pt.Tensor,
         fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
     ) -> tuple[pt.Tensor, pt.Tensor, pt.Tensor]:
         """
@@ -348,12 +344,8 @@ class E3AttentionLayer(nn.Module):
         return all_edges, is_bond_A, is_bond_B
 
 
-    def _build_edge_features(
-        self,
-        xA: Molecule,
-        xB: Molecule,
-        x: pt.Tensor,
-        fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
+    def _build_edge_features( self, xA: Molecule, xB: Molecule, x: pt.Tensor, 
+                             fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
     ) -> EdgeData:
         """
         Neighbor search and scalar edge-feature construction.
@@ -635,12 +627,7 @@ class E3AttentionLayer(nn.Module):
 
         return dx
 
-    def forward(
-        self,
-        xA: Molecule,
-        xB: Molecule,
-        s: pt.Tensor,
-        state: E3State,
+    def forward( self, xA: Molecule, xB: Molecule, s: pt.Tensor, state: E3State,
         *,
         fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
     ) -> tuple[pt.Tensor, pt.Tensor]:

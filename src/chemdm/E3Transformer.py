@@ -82,15 +82,10 @@ class E3Transformer(nn.Module):
                 if ir.l == 0 and ir.p == 1
             ]
         )
-        assert self.irreps_0e_out.dim > 0, (
-            "Expected at least one 0e block in irreps_node."
-        )
+        assert self.irreps_0e_out.dim > 0, "Expected at least one 0e block in irreps_node."
 
         self.irreps_0e_init = o3.Irreps(f"{self.scalar_init_dim}x0e")
-        self.initial_0e_lift = o3.Linear(
-            self.irreps_0e_init,
-            self.irreps_0e_out,
-        )
+        self.initial_0e_lift = o3.Linear( self.irreps_0e_init, self.irreps_0e_out )
 
         # 1o output block. Initial vector channels:
         #   1) xB - xA
@@ -105,10 +100,7 @@ class E3Transformer(nn.Module):
         )
 
         self.irreps_1o_init = o3.Irreps("3x1o")
-        self.initial_1o_lift = o3.Linear(
-            self.irreps_1o_init,
-            self.irreps_1o_out,
-        )
+        self.initial_1o_lift = o3.Linear( self.irreps_1o_init, self.irreps_1o_out )
 
         # 1e and 2e output blocks. These are zero-initialized for now.
         self.irreps_1e_out = o3.Irreps(
@@ -212,12 +204,7 @@ class E3Transformer(nn.Module):
         return E3State(f=f, x=x)
     
 
-    def refine_state(
-        self,
-        xA: Molecule,
-        xB: Molecule,
-        s: pt.Tensor,
-        state: E3State,
+    def refine_state( self, xA: Molecule, xB: Molecule, s: pt.Tensor, state: E3State,
         *,
         fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
     ) -> tuple[E3State, list[E3State]]:
@@ -249,14 +236,7 @@ class E3Transformer(nn.Module):
 
         return state, states
 
-    def forward(
-        self,
-        xA: Molecule,
-        xB: Molecule,
-        s: pt.Tensor,
-        *,
-        fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
-    ) -> tuple[Molecule, list[E3State]]:
+    def forward( self,  xA: Molecule, xB: Molecule, s: pt.Tensor ) -> tuple[Molecule, list[E3State]]:
         """
         Run K refinement steps starting from the endpoint-initialised state.
 
@@ -269,9 +249,7 @@ class E3Transformer(nn.Module):
             - Otherwise, each layer rebuilds its own current-x distance graph.
         """
         assert xA.Z.shape == xB.Z.shape
-        assert pt.equal(xA.Z, xB.Z), (
-            "`xA` and `xB` must have the same atoms in the same ordering."
-        )
+        assert pt.equal(xA.Z, xB.Z), "`xA` and `xB` must have the same atoms in the same ordering."
         assert xA.x.shape == xB.x.shape
         assert xA.x.device == xB.x.device
         assert xA.x.dtype == xB.x.dtype
@@ -282,8 +260,10 @@ class E3Transformer(nn.Module):
 
         # Decide which neighbor graph to use. Explicit kwarg wins; otherwise
         # the flag decides whether to precompute the endpoint-union graph.
-        if fixed_neighbors is None and self.use_fixed_neighbors:
+        if self.use_fixed_neighbors:
             fixed_neighbors = findFixedUnionNeighbors( xA, xB, self.d_cutoff )
+        else:
+            fixed_neighbors = None
 
         # Initialize node state from endpoints and arclength.
         state = self.initialize_state(xA, xB, s)
