@@ -9,7 +9,7 @@ from e3nn import o3
 
 from chemdm.TransitionPathMoleculeEmbedding import TPMoleculeEmbedding
 from chemdm.embedding import ArcLengthEmbedding
-from chemdm.MoleculeGraph import Molecule
+from chemdm.MoleculeGraph import Molecule, findFixedUnionNeighbors
 from chemdm.E3AttentionLayer import E3AttentionLayer, E3State
 
 
@@ -41,6 +41,7 @@ class E3Transformer(nn.Module):
                   tp_embedding_hidden_dim: int = 128,
                   tp_embedding_hidden_layers: int = 2,
                   initial_edge_feature_dim: int = 0,
+                  use_fixed_neighbors: bool = True,
     ) -> None:
         super().__init__()
 
@@ -50,6 +51,12 @@ class E3Transformer(nn.Module):
         self.d_cutoff = d_cutoff
         self.n_freq = n_freq
         self.n_rbf = n_rbf
+
+        # When True (default), forward() computes one neighbor graph from the
+        # endpoints (xA, xB) and reuses it across every refinement layer.
+        # When False, each layer recomputes a current-x distance graph from
+        # scratch (legacy behavior — heavier but adapts to coordinate updates).
+        self.use_fixed_neighbors = use_fixed_neighbors
 
         self.tp_embedding_dim = tp_embedding_dim
         self.initial_edge_feature_dim = initial_edge_feature_dim
@@ -205,12 +212,24 @@ class E3Transformer(nn.Module):
         return E3State(f=f, x=x)
     
 
-    def refine_state( self, xA: Molecule, xB: Molecule, s: pt.Tensor, state: E3State ) -> tuple[E3State, list[E3State]]:
+    def refine_state(
+        self,
+        xA: Molecule,
+        xB: Molecule,
+        s: pt.Tensor,
+        state: E3State,
+        *,
+        fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
+    ) -> tuple[E3State, list[E3State]]:
         """
         Apply the shared refinement layer multiple times.
 
         During training, returning all states is useful because it allows losses
         on intermediate refinements.
+
+        `fixed_neighbors`, if given, is passed unchanged to every layer call so
+        the neighbor search runs once for the whole forward pass instead of
+        once per refinement step.
         """
         initial_state = E3State(f=state.f, x=state.x)
         state = initial_state
@@ -218,19 +237,37 @@ class E3Transformer(nn.Module):
         states: list[E3State] = [state]
 
         for _ in range(self.n_refinement_steps):
-            f_new, dx = self.refinement_layer( xA, xB, s, state )
+            f_new, dx = self.refinement_layer( xA, xB, s, state, fixed_neighbors=fixed_neighbors )
 
             # Endpoint preservation. The factor 4 makes the maximum multiplier 1,
             # since max_s s(1-s) = 0.25.
             endpoint_mask = 4.0 * s[:, None] * (1.0 - s[:, None])
             x_new = state.x + endpoint_mask * dx
-            
+
             state = E3State(f=f_new, x=x_new)
             states.append(state)
 
         return state, states
 
-    def forward( self, xA: Molecule, xB: Molecule, s: pt.Tensor ) -> tuple[Molecule, list[E3State]]:
+    def forward(
+        self,
+        xA: Molecule,
+        xB: Molecule,
+        s: pt.Tensor,
+        *,
+        fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
+    ) -> tuple[Molecule, list[E3State]]:
+        """
+        Run K refinement steps starting from the endpoint-initialised state.
+
+        Neighbor graph handling:
+            - If `fixed_neighbors` is explicitly passed, use it (override path,
+              useful for tests/debug).
+            - Otherwise, if `self.use_fixed_neighbors` is True (default),
+              compute the endpoint-union graph internally once and reuse it
+              across every refinement layer.
+            - Otherwise, each layer rebuilds its own current-x distance graph.
+        """
         assert xA.Z.shape == xB.Z.shape
         assert pt.equal(xA.Z, xB.Z), (
             "`xA` and `xB` must have the same atoms in the same ordering."
@@ -243,11 +280,16 @@ class E3Transformer(nn.Module):
 
         assert s.numel() == len(xA.Z), "`s` must have the same number of elements as the number of atoms."
 
+        # Decide which neighbor graph to use. Explicit kwarg wins; otherwise
+        # the flag decides whether to precompute the endpoint-union graph.
+        if fixed_neighbors is None and self.use_fixed_neighbors:
+            fixed_neighbors = findFixedUnionNeighbors( xA, xB, self.d_cutoff )
+
         # Initialize node state from endpoints and arclength.
         state = self.initialize_state(xA, xB, s)
 
         # Repeatedly refine using the same learned update operator.
-        state, states = self.refine_state( xA, xB, s, state )
+        state, states = self.refine_state( xA, xB, s, state, fixed_neighbors=fixed_neighbors )
 
         # Put in the molecule framework and return.
         x_molecule = xA.copyWithNewPositions(state.x)

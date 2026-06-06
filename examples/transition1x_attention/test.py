@@ -2,6 +2,7 @@ import random
 import numpy as np
 import torch as pt
 import matplotlib.pyplot as plt
+import networkx as nx
 
 from pathlib import Path
 import json
@@ -76,6 +77,128 @@ def evaluateMoleculeErrors( layer_states : List[pt.Tensor], x_ref : pt.Tensor ) 
     mse = pt.mean( se, dim=(0,1) ) # (n_layers,)
     return mse.cpu().detach().numpy()
 
+def _reaction_features( traj ) -> dict:
+    """
+    Reaction-descriptor features computed from a Trajectory.
+
+    All features are local to the reactant -> product change. We treat each
+    covalent bond as an unordered atom pair (the input edge tensors may store
+    each bond in one direction or both — frozensets make the comparison
+    direction-agnostic).
+    """
+    Z = traj.Z
+
+    def canon( edges: pt.Tensor ) -> set:
+        # Edges as frozensets of two ints, self-loops dropped.
+        return set(
+            frozenset( (int(u), int(v)) )
+            for u, v in edges.tolist()
+            if int(u) != int(v)
+        )
+
+    edges_A = canon( traj.GA )
+    edges_B = canon( traj.GB )
+
+    broken = edges_A - edges_B
+    formed = edges_B - edges_A
+
+    reactive_atoms: set[int] = set()
+    for e in broken | formed:
+        reactive_atoms.update( e )
+
+    def is_H  ( a: int ) -> bool: return int(Z[a]) == 1
+    def is_NOS( a: int ) -> bool: return int(Z[a]) in (7, 8, 16)
+
+    def edge_has_H( edges: set ) -> bool:
+        return any( any( is_H(a) for a in e ) for e in edges )
+
+    # "Ring membership change" = the set of atoms participating in at least one
+    # ring differs between reactant and product.
+    def ring_atoms( edges: set ) -> frozenset[int]:
+        G = nx.Graph()
+        G.add_nodes_from( range( int(Z.numel()) ) )
+        for e in edges:
+            u, v = tuple(e)
+            G.add_edge( u, v )
+        return frozenset( a for cycle in nx.cycle_basis(G) for a in cycle )
+
+    max_disp = float( pt.linalg.norm( traj.xA - traj.xB, dim=-1 ).max().item() )
+
+    return {
+        "n_broken":          len( broken ),
+        "n_formed":          len( formed ),
+        "n_reactive_atoms":  len( reactive_atoms ),
+        "n_reactive_h":      sum( 1 for a in reactive_atoms if is_H(a) ),
+        "has_forming_HX":    edge_has_H( formed ),
+        "has_breaking_HX":   edge_has_H( broken ),
+        "has_ring_change":   ring_atoms(edges_A) != ring_atoms(edges_B),
+        "has_NOS_at_center": any( is_NOS(a) for a in reactive_atoms ),
+        "max_endpoint_disp": max_disp,
+    }
+
+
+def _print_feature_breakdown( rmse: np.ndarray, features: list[dict], kind: str ) -> None:
+    """
+    Per-feature group statistics: for each discrete reaction-feature value,
+    show how many molecules have that value and what their RMSE distribution
+    looks like (median / p90 / max). Highlights which reaction types are
+    pulling the val/test medians up.
+
+    For the continuous max-endpoint-displacement feature, we bucket into
+    quintiles so the table stays compact.
+    """
+    rmse = np.asarray(rmse)
+    print( f"\nFeature breakdown — {kind} (n={len(rmse)}):" )
+    header = f"  {'feature':<22s}  {'value':>6s}   {'n':>5s}   {'median':>6s}   {'p90':>6s}   {'max':>6s}  [Å]"
+    print( header )
+    print( "  " + "-" * (len(header) - 2) )
+
+    discrete = [
+        "n_broken", "n_formed", "n_reactive_atoms", "n_reactive_h",
+        "has_forming_HX", "has_breaking_HX", "has_ring_change", "has_NOS_at_center",
+    ]
+    for feat in discrete:
+        values = np.array( [f[feat] for f in features] )
+        for v in sorted( set( values.tolist() ) ):
+            mask = values == v
+            sub = rmse[mask]
+            v_str = ("yes" if v else "no") if isinstance(v, (bool, np.bool_)) else str(v)
+            print(
+                f"  {feat:<22s}  {v_str:>6s}   {len(sub):>5d}   "
+                f"{np.median(sub):>6.3f}   {np.percentile(sub, 90):>6.3f}   {sub.max():>6.3f}"
+            )
+
+    # Continuous feature -> quintile buckets.
+    feat = "max_endpoint_disp"
+    vals = np.array( [f[feat] for f in features] )
+    edges = np.percentile( vals, [0, 20, 40, 60, 80, 100] )
+    edge_str = ", ".join( f"{e:.2f}" for e in edges )
+    print( f"  {feat:<22s}  (quintiles by displacement, edges = [{edge_str}] Å)" )
+    for q in range(5):
+        lo, hi = edges[q], edges[q + 1]
+        mask = (vals >= lo) & (vals <= hi) if q == 4 else (vals >= lo) & (vals < hi)
+        sub = rmse[mask]
+        if len(sub) == 0:
+            continue
+        print(
+            f"  {feat:<22s}  {('Q' + str(q + 1)):>6s}   {len(sub):>5d}   "
+            f"{np.median(sub):>6.3f}   {np.percentile(sub, 90):>6.3f}   {sub.max():>6.3f}"
+        )
+
+
+def _format_feats( f: dict ) -> str:
+    """Compact one-line feature signature for the worst-N table."""
+    return (
+        f"broken={f['n_broken']} formed={f['n_formed']} "
+        f"reactive={f['n_reactive_atoms']}/{f['n_reactive_h']}H "
+        f"HX_form={'y' if f['has_forming_HX'] else 'n'} "
+        f"HX_break={'y' if f['has_breaking_HX'] else 'n'} "
+        f"ring_chg={'y' if f['has_ring_change'] else 'n'} "
+        f"NOS={'y' if f['has_NOS_at_center'] else 'n'} "
+        f"disp={f['max_endpoint_disp']:.2f}Å"
+    )
+
+
 def main():
     with open( './data_config.json', "r" ) as f:
         data_config = json.load( f )
@@ -90,19 +213,24 @@ def main():
     n_layers = network.n_refinement_steps+1
 
     # Per split: evaluate, save the layer-MSE matrix, and remember the
-    # dataset + final-layer RMSE for the post-eval analysis.
+    # dataset + final-layer RMSE + reaction features for the post-eval analysis.
     splits = ['train', 'val', 'test']
-    per_split: dict[str, tuple[np.ndarray, TransitionPathDataset]] = {}
+    per_split: dict[str, tuple[np.ndarray, TransitionPathDataset, list[dict]]] = {}
     for kind in splits:
         print( 'Evaluating', kind, 'Dataset' )
         dataset = TransitionPathDataset( kind, data_directory )
         n_molecules = len(dataset)
 
         molecule_errors = np.zeros( (n_molecules, n_layers) )
+        features_list: list[dict] = []
         for n in range( n_molecules ):
             if n % 100 == 0:
                 print( 'Reaction', n )
             trajectory = dataset[n][-1]
+
+            # Reaction-descriptor features (CPU-only set ops on edges).
+            features_list.append( _reaction_features( trajectory ) )
+
             Z = trajectory.Z.to( device=device, dtype=pt.int )
             xA = trajectory.xA.to( device=device, dtype=pt.float32 )
             Ga = trajectory.GA.to( device=device, dtype=pt.int )
@@ -120,11 +248,11 @@ def main():
         # MSE is mean over (image, atom) of summed-squared-xyz, so sqrt is
         # the standard per-atom RMSD in Å.
         rmse = np.sqrt( np.maximum(molecule_errors[:, -1], 0.0) )
-        per_split[kind] = (rmse, dataset)
+        per_split[kind] = (rmse, dataset, features_list)
 
     # Summary table.
     print()
-    for kind, (rmse, _) in per_split.items():
+    for kind, (rmse, _, _) in per_split.items():
         pcts = np.percentile( rmse, [50, 90, 95, 99] )
         print(
             f'{kind:>5s}  n={len(rmse):>6d}  '
@@ -133,9 +261,9 @@ def main():
             f'max={rmse.max():.3f}  [Å]'
         )
 
-    # Top-N worst molecules per split (identity from the dataset already in scope).
+    # Top-N worst molecules per split, annotated with reaction features.
     n_worst = 5
-    for kind, (rmse, dataset) in per_split.items():
+    for kind, (rmse, dataset, features_list) in per_split.items():
         worst_idx = np.argsort( -rmse )[:n_worst]
         print(f'\nTop {n_worst} worst {kind} molecules (by final-layer RMSE):')
         for rank, idx in enumerate( worst_idx, start=1 ):
@@ -148,10 +276,17 @@ def main():
                 f'formula={formula:<14s} (N={n_atoms}, images={n_images})  '
                 f'file={dataset.file_names[int(idx)]}'
             )
+            print( f'         feats: {_format_feats( features_list[int(idx)] )}' )
+
+    # Per-feature breakdown — surfaces which reaction *types* drive the RMSE
+    # distribution. Especially useful for val/test, where the long tail and
+    # train-vs-eval gap come from systematic reaction-class differences.
+    for kind, (rmse, _, features_list) in per_split.items():
+        _print_feature_breakdown( rmse, features_list, kind )
 
     # Histograms (one subplot per split).
     fig, axes = plt.subplots( 1, len(per_split), figsize=(5 * len(per_split), 4), squeeze=False )
-    for ax, (kind, (rmse, _)) in zip( axes[0], per_split.items() ):
+    for ax, (kind, (rmse, _, _)) in zip( axes[0], per_split.items() ):
         ax.hist( rmse, bins=50, edgecolor='black' )
         ax.set_xlabel('per-molecule RMSE [Å]')
         ax.set_ylabel('# molecules')

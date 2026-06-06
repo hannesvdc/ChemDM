@@ -14,7 +14,6 @@ import traceback
 
 from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
-from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from EquivariantTransformer import EquivariantTransformer
 from chemdm.NewtonLoss import NewtonLoss
 from chemdm.util import getGradientNorm, perCoordinateRMSE, collate_molecules
@@ -40,7 +39,7 @@ def make_experiment_dir(exp_name: str, root: str = "./experiments") -> Path:
     return exp_dir
 
 
-def main( exp_name : str, resume : bool = False ):
+def main( exp_name : str ):
     with open( './data_config.json', "r" ) as f:
         data_config = json.load( f )
     data_directory = data_config["data_folder"]
@@ -84,6 +83,9 @@ def main( exp_name : str, resume : bool = False ):
     tp_embedding_dim = 64
     tp_embedding_hidden_dim = 128
     tp_embedding_hidden_layers = 2
+    # Compute the neighbor graph once per forward pass from xA + xB (union of
+    # bonds and endpoint distance neighbors) instead of rebuilding per layer.
+    use_fixed_neighbors = True
     tp_network = EquivariantTransformer( irreps_node_str=irreps_node_str,
                                          irreps_qk_str=irreps_qk_str,
                                          n_refinement_steps=n_refinement_steps,
@@ -92,7 +94,8 @@ def main( exp_name : str, resume : bool = False ):
                                          n_rbf=n_rbf,
                                          tp_embedding_dim=tp_embedding_dim,
                                          tp_embedding_hidden_dim=tp_embedding_hidden_dim,
-                                         tp_embedding_hidden_layers=tp_embedding_hidden_layers )
+                                         tp_embedding_hidden_layers=tp_embedding_hidden_layers,
+                                         use_fixed_neighbors=use_fixed_neighbors )
     n_params = sum(p.numel() for p in tp_network.parameters() if p.requires_grad)
     print( "Number of Trainable Parameters: ", n_params )
 
@@ -127,6 +130,7 @@ def main( exp_name : str, resume : bool = False ):
         "tp_embedding_dim": tp_embedding_dim,
         "tp_embedding_hidden_dim": tp_embedding_hidden_dim,
         "tp_embedding_hidden_layers": tp_embedding_hidden_layers,
+        "use_fixed_neighbors": use_fixed_neighbors,
         "loss_gamma": loss_gamma,
         "d_cutoff": d_cutoff,
         "n_rbf": n_rbf,
@@ -163,7 +167,7 @@ def main( exp_name : str, resume : bool = False ):
         xs, states = tp_network( xA, xB, s )
         loss = loss_fcn( states, xs, x_target=x_ref )
         with pt.no_grad():
-            final_state_loss = loss_fcn._single_state_loss(xs.x, x_ref, xs.molecule_id)
+            final_state_loss = loss_fcn._single_state_loss( xs.x, x_ref, xs.molecule_id )
         return loss, final_state_loss
 
     @pt.no_grad()

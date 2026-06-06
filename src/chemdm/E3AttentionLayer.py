@@ -319,14 +319,28 @@ class E3AttentionLayer(nn.Module):
         return s
 
 
-    def _get_edges_and_bond_flags( self, xA: Molecule, xB: Molecule, x: pt.Tensor ) -> tuple[pt.Tensor, pt.Tensor, pt.Tensor]:
+    def _get_edges_and_bond_flags(
+        self,
+        xA: Molecule,
+        xB: Molecule,
+        x: pt.Tensor,
+        fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
+    ) -> tuple[pt.Tensor, pt.Tensor, pt.Tensor]:
         """
         Return all_edges, is_bond_A, is_bond_B.
+
+        If `fixed_neighbors` is given, skip the per-call neighbor search and use
+        the supplied (all_edges, is_bond_A, is_bond_B) — useful for transition-
+        path refinement where the same graph is reused across every layer.
         """
         device = x.device
         dtype = x.dtype
 
-        all_edges, is_bond_A, is_bond_B = findAllNeighborsReactantProduct( xA, xB, x, self.d_cutoff )
+        if fixed_neighbors is None:
+            all_edges, is_bond_A, is_bond_B = findAllNeighborsReactantProduct( xA, xB, x, self.d_cutoff )
+        else:
+            all_edges, is_bond_A, is_bond_B = fixed_neighbors
+
         all_edges = all_edges.to(device=device).long()
         is_bond_A = is_bond_A.to(device=device, dtype=dtype)
         is_bond_B = is_bond_B.to(device=device, dtype=dtype)
@@ -334,7 +348,13 @@ class E3AttentionLayer(nn.Module):
         return all_edges, is_bond_A, is_bond_B
 
 
-    def _build_edge_features( self, xA: Molecule, xB: Molecule, x: pt.Tensor ) -> EdgeData:
+    def _build_edge_features(
+        self,
+        xA: Molecule,
+        xB: Molecule,
+        x: pt.Tensor,
+        fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
+    ) -> EdgeData:
         """
         Neighbor search and scalar edge-feature construction.
 
@@ -352,7 +372,9 @@ class E3AttentionLayer(nn.Module):
             changed
             distance_only
         """
-        all_edges, is_bond_A, is_bond_B = self._get_edges_and_bond_flags( xA, xB, x )
+        all_edges, is_bond_A, is_bond_B = self._get_edges_and_bond_flags(
+            xA, xB, x, fixed_neighbors=fixed_neighbors,
+        )
 
         src = all_edges[:, 0].long()
         dst = all_edges[:, 1].long()
@@ -613,7 +635,15 @@ class E3AttentionLayer(nn.Module):
 
         return dx
 
-    def forward( self, xA: Molecule, xB: Molecule, s: pt.Tensor, state: E3State ) -> tuple[pt.Tensor, pt.Tensor]:
+    def forward(
+        self,
+        xA: Molecule,
+        xB: Molecule,
+        s: pt.Tensor,
+        state: E3State,
+        *,
+        fixed_neighbors: tuple[pt.Tensor, pt.Tensor, pt.Tensor] | None = None,
+    ) -> tuple[pt.Tensor, pt.Tensor]:
         """
         Apply one Newton/e3nn refinement layer.
 
@@ -627,6 +657,13 @@ class E3AttentionLayer(nn.Module):
             Per-atom arclength coordinate, shape (N,).
         state:
             Current E3State.
+        fixed_neighbors:
+            Optional (all_edges, is_bond_A, is_bond_B) tuple precomputed once
+            per molecule (e.g. via `findFixedUnionNeighbors`). When supplied,
+            the layer skips its per-call neighbor search and reuses these.
+            Edge SCALAR features (distances, RBFs, current-vs-endpoint deltas)
+            are still computed from the current `x`; only the edge LIST and
+            bond flags are taken as fixed.
 
         Returns
         -------
@@ -640,7 +677,7 @@ class E3AttentionLayer(nn.Module):
         f = state.f
         x = state.x
 
-        edges = self._build_edge_features( xA, xB, x )
+        edges = self._build_edge_features( xA, xB, x, fixed_neighbors=fixed_neighbors )
 
         agg = self._aggregate_messages(f, edges)
         f_new = self._update_features(f, agg)

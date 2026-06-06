@@ -67,6 +67,7 @@ class EquivariantTransformer(E3Transformer):
         initial_edge_feature_dim: int = 0,
         irreps_qk_str: str = "16x0e + 8x1o + 4x1e",
         irreps_v_str: Optional[str] = None,
+        use_fixed_neighbors: bool = True,
     ) -> None:
         # Build the parent. It constructs everything we need (embeddings,
         # arclength encoder, 0e/1o lifts, irreps blocks for 1e/2e) and also
@@ -82,6 +83,7 @@ class EquivariantTransformer(E3Transformer):
             tp_embedding_hidden_dim=tp_embedding_hidden_dim,
             tp_embedding_hidden_layers=tp_embedding_hidden_layers,
             initial_edge_feature_dim=initial_edge_feature_dim,
+            use_fixed_neighbors=use_fixed_neighbors,
         )
 
         # nn.Module.__setattr__ replaces the old binding cleanly: the

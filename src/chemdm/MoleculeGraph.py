@@ -352,6 +352,88 @@ def findAllNeighborsReactantProduct( moleculeA : Molecule,
     return all_neighbors, is_bond_A, is_bond_B
 
 
+@pt.no_grad()
+def findFixedUnionNeighbors( moleculeA : Molecule,
+                             moleculeB : Molecule,
+                             d_cutoff  : float
+                           ) -> Tuple[pt.Tensor, pt.Tensor, pt.Tensor]:
+    """
+    Fixed neighborhood graph: union of
+
+        bonds in A
+      U bonds in B
+      U distance neighbors of xA  (within d_cutoff)
+      U distance neighbors of xB  (within d_cutoff)
+
+    Distinguishing feature versus `findAllNeighborsReactantProduct`: the
+    distance neighbors are taken at the ENDPOINTS only (xA and xB), not at
+    a moving intermediate `x`. The resulting edge list + bond flags are
+    therefore safe to cache and reuse across every subsequent calculation.
+
+    Arguments
+    ---------
+    moleculeA : Molecule
+        Reactant graph (carries xA and bonds_A).
+    moleculeB : Molecule
+        Product graph (carries xB and bonds_B). Must have the same atoms in
+        the same ordering as moleculeA.
+    d_cutoff : float
+        Distance cutoff in Å.
+
+    Returns
+    -------
+    all_neighbors : Tensor of shape (n_edges, 2), unique directed edges.
+    is_bond_A     : Tensor of shape (n_edges,), 1 iff edge is a bond in A.
+    is_bond_B     : Tensor of shape (n_edges,), 1 iff edge is a bond in B.
+    """
+    assert pt.all( moleculeA.Z == moleculeB.Z ), \
+        f"Both molecules must have the same atoms in the same ordering."
+    if isinstance( moleculeA, BatchedMoleculeGraph ):
+        assert isinstance( moleculeB, BatchedMoleculeGraph ), \
+            f"If either molecule is batched, so must the other be."
+        assert pt.all( moleculeA.molecule_id == moleculeB.molecule_id ), \
+            f"Batched molecule A and B must represent the same batch."
+
+    device = moleculeA.x.device
+
+    bond_neighbors_A = moleculeA.edge_index
+    bond_neighbors_B = moleculeB.edge_index
+    dist_neighbors_A = findAllDistanceNeighbors( moleculeA, d_cutoff )
+    dist_neighbors_B = findAllDistanceNeighbors( moleculeB, d_cutoff )
+
+    all_edges = pt.cat( [ bond_neighbors_A, bond_neighbors_B,
+                          dist_neighbors_A, dist_neighbors_B ], dim=0 )
+
+    n_bA = bond_neighbors_A.shape[0]
+    n_bB = bond_neighbors_B.shape[0]
+    n_dA = dist_neighbors_A.shape[0]
+    n_dB = dist_neighbors_B.shape[0]
+
+    # Edge-source tags: 1 if the edge belongs to bonds_A / bonds_B, 0 otherwise.
+    edge_type_A = pt.cat([
+        pt.ones (n_bA, dtype=pt.float32, device=device),
+        pt.zeros(n_bB, dtype=pt.float32, device=device),
+        pt.zeros(n_dA, dtype=pt.float32, device=device),
+        pt.zeros(n_dB, dtype=pt.float32, device=device),
+    ])
+    edge_type_B = pt.cat([
+        pt.zeros(n_bA, dtype=pt.float32, device=device),
+        pt.ones (n_bB, dtype=pt.float32, device=device),
+        pt.zeros(n_dA, dtype=pt.float32, device=device),
+        pt.zeros(n_dB, dtype=pt.float32, device=device),
+    ])
+
+    all_neighbors, inverse = pt.unique( all_edges, dim=0, return_inverse=True )
+
+    is_bond_A = pt.zeros( all_neighbors.shape[0], dtype=pt.float32, device=device )
+    is_bond_A = pt.scatter_reduce( is_bond_A, 0, inverse, edge_type_A, reduce="amax", include_self=False )
+
+    is_bond_B = pt.zeros( all_neighbors.shape[0], dtype=pt.float32, device=device )
+    is_bond_B = pt.scatter_reduce( is_bond_B, 0, inverse, edge_type_B, reduce="amax", include_self=False )
+
+    return all_neighbors, is_bond_A, is_bond_B
+
+
 def recenterMolecule( molecule : Molecule ) -> Molecule:
     """
     Center the molecule to have zero unweighted center of mass. If the input 
