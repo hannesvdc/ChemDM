@@ -3,10 +3,14 @@ import numpy as np
 from chemdm.xtbSetup import XTBPotential
 from safeOptimizer import minimize_with_adam
 
+import os
 from pathlib import Path
 from collections import defaultdict
 import re
 import json
+
+from dotenv import load_dotenv
+load_dotenv()
 
 REACTION_FILE_PATTERN = re.compile( r"^(?P<split>.+?)_reaction_(?P<reaction_id>\d+)_molecule_(?P<molecule>.+)\.json$" )
 REACTION_FILE_TEMPLATE = "{split}_reaction_{reaction_id}_molecule_{molecule}.json"
@@ -75,7 +79,7 @@ def runRelaxation( xtb: XTBPotential,
     return minimized_positions_A, info
 
 if __name__ == '__main__':
-    data_dir  = Path( "/Users/hannesvdc/Open Numerics/ReactionStudio/data" )
+    data_dir  = Path( os.environ["PROCESSED_TRANSITION1X_FOLDER"] )
     molecule_map = build_molecule_reaction_map( data_dir, "train" )
     print(f"Found {len(molecule_map)} molecules: ", molecule_map.keys() )
 

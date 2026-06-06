@@ -8,10 +8,14 @@ from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, Molecule
 
 from loadModels import loadNewtonModel, loadDiffusionModel
 
+import os
 from pathlib import Path
 from collections import defaultdict
 import re
 import json
+
+from dotenv import load_dotenv
+load_dotenv()
 
 REACTION_FILE_PATTERN = re.compile( r"^(?P<split>.+?)_reaction_(?P<reaction_id>\d+)_molecule_(?P<molecule>.+)\.json$" )
 REACTION_FILE_TEMPLATE = "{split}_reaction_{reaction_id}_molecule_{molecule}.json"
@@ -102,22 +106,7 @@ def runNEB( tp_network : pt.nn.Module,
     print( f'Max Newton NEB Force {maxF} [kJ/(mol A)]')
 
     # Generate a few samples using the diffusion model
-    n_samples = 10
-    residual_scale = 0.15
-    T = 100
     best_initial = path0_A
-    best_F = maxF
-
-    # print( 'Generating Diffusion Samples')
-    # samples = sample_path( diffusion_network, xa_mol, xb_mol, s, newton_path, residual_scale, T, n_samples )
-    # print( 'Evaluating Forces ')
-    # for count in range(n_samples):
-    #     x_sample = samples[count, :,:,:].cpu().numpy()
-    #     maxF = evaluateMaxForce( context, x_sample, k )
-    #     if maxF < best_F:
-    #         best_F = maxF
-    #         best_initial = x_sample
-    #     print( f'Max. NEB Force for sample {count}: {maxF} [eV / A]')
 
     # Finally: run NEB
     n_steps = 1000
@@ -130,7 +119,7 @@ def runNEB( tp_network : pt.nn.Module,
     print( E_opt_kJ )
 
 if __name__ == '__main__':
-    data_dir  = Path( "/Users/hannesvdc/Open Numerics/ReactionStudio/data" )
+    data_dir = Path( os.environ["PROCESSED_TRANSITION1X_FOLDER"] )
     split = "test"
     molecule_map = build_molecule_reaction_map( data_dir, split )
     print( f"Found {len(molecule_map)} molecules: ", molecule_map.keys() )
