@@ -53,14 +53,22 @@ class MoleculeData:
     smiles: str
     Z: pt.Tensor                 # (N,)        long
     edge_index: pt.Tensor        # (E, 2)      long — undirected covalent bonds, both directions
-    bonds: pt.Tensor             # (m, 2)      long — rotatable bonds, one ordering each
+    bonds: pt.Tensor             # (m, 2)      long — rotatable bonds, canonical b<c ordering
+    side_atom_idx: pt.Tensor     # (P,)        long — atoms on the c-side of some bond
+    side_bond_idx: pt.Tensor     # (P,)        long — which bond (0..m-1) each side-atom belongs to
     conformers: list[dict]       # each: {x: (N, 3) float64, totalenergy, relativeenergy, boltzmannweight}
 
 
-def find_rotatable_bonds(mol) -> list[tuple[int, int]]:
+def find_rotatable_bonds( mol ) -> tuple[list[tuple[int, int]], list[list[int]]]:
     """
     Paper definition: severing the bond splits the graph into exactly two
     components, each with >= 2 atoms.
+
+    Returns
+    -------
+    rotatable : list of (b, c) atom-index pairs, canonical b < c ordering.
+    sides     : list of lists; sides[i] is the sorted atom indices on the
+                c-side of bond i (the component containing c after severance).
     """
     G = nx.Graph()
     G.add_nodes_from( range(mol.GetNumAtoms()) )
@@ -68,14 +76,18 @@ def find_rotatable_bonds(mol) -> list[tuple[int, int]]:
         G.add_edge( b.GetBeginAtomIdx(), b.GetEndAtomIdx() )
 
     rotatable: list[tuple[int, int]] = []
+    sides:     list[list[int]]       = []
     for u, v in list(G.edges()):
         G.remove_edge( u, v )
         comps = list(nx.connected_components(G))
         if len(comps) == 2 and all( len(c) >= 2 for c in comps ):
-            # Canonical ordering: lower index first, for reproducibility.
-            rotatable.append( (min(u, v), max(u, v)) )
+            b, c = (u, v) if u < v else (v, u)
+            rotatable.append( (b, c) )
+            # The c-side is whichever component contains c.
+            c_side = comps[0] if c in comps[0] else comps[1]
+            sides.append( sorted(c_side) )
         G.add_edge( u, v )
-    return rotatable
+    return rotatable, sides
 
 
 def load_qm9_molecule( path: Path ) -> MoleculeData:
@@ -103,8 +115,19 @@ def load_qm9_molecule( path: Path ) -> MoleculeData:
         dst += [v, u]
     edge_index = pt.tensor(list(zip(src, dst)), dtype=pt.long).reshape(-1, 2)
 
-    rot = find_rotatable_bonds( mol0 )
+    rot, sides = find_rotatable_bonds( mol0 )
     bonds = pt.tensor( rot, dtype=pt.long ).reshape(-1, 2)
+
+    # COO-style flatten of the per-bond c-side atom sets:
+    #   side_atom_idx[k] = atom index on the c-side of bond `side_bond_idx[k]`.
+    # Empty molecule (no rotatable bonds) gracefully yields empty (0,) tensors.
+    side_atom_flat: list[int] = []
+    side_bond_flat: list[int] = []
+    for i, atoms in enumerate(sides):
+        side_atom_flat.extend( atoms )
+        side_bond_flat.extend( [i] * len(atoms) )
+    side_atom_idx = pt.tensor( side_atom_flat, dtype=pt.long )
+    side_bond_idx = pt.tensor( side_bond_flat, dtype=pt.long )
 
     conformers = []
     for c in confs:
@@ -124,5 +147,7 @@ def load_qm9_molecule( path: Path ) -> MoleculeData:
         Z=Z,
         edge_index=edge_index,
         bonds=bonds,
+        side_atom_idx=side_atom_idx,
+        side_bond_idx=side_bond_idx,
         conformers=conformers,
     )
