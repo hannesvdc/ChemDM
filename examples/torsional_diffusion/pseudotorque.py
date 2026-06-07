@@ -35,9 +35,9 @@ Equivariance:
     o3.FullyConnectedTensorProduct, spherical harmonics of unit vectors, and
     attention with an SO(3)-invariant inner product.
 
-    Parity equivariance (δτ(−x) = −δτ(x)) holds because:
+    Parity equivariance (δτ(-x) = −δτ(x)) holds because:
       - Y_l → (-1)^l Y_l under x → -x, so Stage 1 + Stage 2 combined send
-        the output's parity to (parity of input feature) × (-1)^{l_1} ×
+        the output's parity to (parity of input feature) x (-1)^{l_1} x
         (-1)^{l_2}, and the path that lands in the 0o block has total
         parity -1 by construction.
       - The final linear map is bias-free and parity-preserving.
@@ -86,34 +86,30 @@ class PseudotorqueHead(nn.Module):
         Size of the atomic-number embedding table (covers Z up to n_elements−1).
     """
 
-    def __init__(
-        self,
-        irreps_node_str: str = "64x0e + 32x0o + 16x1o + 16x1e",
-        n_pseudo: int = 8,
-        irreps_inter_str: str = "16x0e + 16x0o + 8x1o + 8x1e + 4x2e + 4x2o",
-        lmax: int = 2,
-        head_cutoff: float = 5.0,
-        n_rbf: int = 16,
-        time_dim: int = 32,
-        z_embed_dim: int = 16,
-        n_elements: int = 120,
+    def __init__( self,
+                  irreps_node_str: str = "64x0e + 32x0o + 16x1o + 16x1e",
+                  n_pseudo: int = 8,
+                  irreps_inter_str: str = "16x0e + 16x0o + 8x1o + 8x1e + 4x2e + 4x2o",
+                  lmax: int = 2,
+                  head_cutoff: float = 5.0,
+                  n_rbf: int = 16,
+                  time_dim: int = 32,
+                  z_embed_dim: int = 16,
+                  n_elements: int = 120,
     ) -> None:
         super().__init__()
 
-        self.irreps_node = o3.Irreps(irreps_node_str)
-        self.irreps_sh = o3.Irreps.spherical_harmonics(lmax)
-        self.irreps_inter = o3.Irreps(irreps_inter_str)
+        self.irreps_node = o3.Irreps( irreps_node_str )
+        self.irreps_sh = o3.Irreps.spherical_harmonics( lmax )
+        self.irreps_inter = o3.Irreps( irreps_inter_str )
 
         self.head_cutoff = head_cutoff
         self.n_pseudo = n_pseudo
 
-        self.rbf = DistanceRBFEmbedding(0.0, head_cutoff, n_rbf=n_rbf)
+        self.rbf = DistanceRBFEmbedding( 0.0, head_cutoff, n_rbf=n_rbf )
 
         # Stage 1: f_a ⊗ Y(r̂_{a→m}) with per-pair radial weights.
-        self.tp1 = o3.FullyConnectedTensorProduct(
-            self.irreps_node, self.irreps_sh, self.irreps_inter,
-            shared_weights=False,
-        )
+        self.tp1 = o3.FullyConnectedTensorProduct( self.irreps_node, self.irreps_sh, self.irreps_inter, shared_weights=False )
         self.radial1 = MultiLayerPerceptron(
             [self.rbf.out_dim, 128, 128, self.tp1.weight_numel],
             nn.GELU,
@@ -123,15 +119,12 @@ class PseudotorqueHead(nn.Module):
         # Stage 2: inter ⊗ Y(r̂_{bc}). Output layout MATTERS: we depend on
         # `n_pseudo x 0o` coming first, then `n_pseudo x 0e`, when we split
         # along the feature dim below.
-        self.irreps_out = o3.Irreps(f"{n_pseudo}x0o + {n_pseudo}x0e")
-        self.tp2 = o3.FullyConnectedTensorProduct(
-            self.irreps_inter, self.irreps_sh, self.irreps_out,
-            shared_weights=True,
-        )
+        self.irreps_out = o3.Irreps( f"{n_pseudo}x0o + {n_pseudo}x0e" )
+        self.tp2 = o3.FullyConnectedTensorProduct( self.irreps_inter, self.irreps_sh, self.irreps_out, shared_weights=True )
 
         # Bond-level query (a parity-even scalar in R^{n_pseudo}) used to
         # attention-weight the contributions of nearby atoms.
-        self.z_embed = nn.Embedding(n_elements, z_embed_dim)
+        self.z_embed = nn.Embedding( n_elements, z_embed_dim )
         self.query_mlp = MultiLayerPerceptron(
             [2 * z_embed_dim + 1 + time_dim, 128, 128, n_pseudo],
             nn.GELU,
@@ -140,19 +133,18 @@ class PseudotorqueHead(nn.Module):
 
         # Final readout: n_pseudo → 1, no bias, no nonlinearity (so 0o
         # input maps to 0o output).
-        self.final = nn.Linear(n_pseudo, 1, bias=False)
+        self.final = nn.Linear( n_pseudo, 1, bias=False )
 
         self.score_scale = 1.0 / math.sqrt(n_pseudo)
 
-    def forward(
-        self,
-        f: pt.Tensor,                # (N, irreps_node.dim)
-        x: pt.Tensor,                # (N, 3)
-        Z: pt.Tensor,                # (N,)
-        bonds: pt.Tensor,            # (m, 2)  -- global (b, c) atom indices
-        atom_batch: pt.Tensor,       # (N,)    -- molecule index per atom
-        bond_batch: pt.Tensor,       # (m,)    -- molecule index per bond
-        time_emb_per_mol: pt.Tensor, # (B, time_dim)
+    def forward( self,
+                 f: pt.Tensor,                # (N, irreps_node.dim)
+                 x: pt.Tensor,                # (N, 3)
+                 Z: pt.Tensor,                # (N,)
+                 bonds: pt.Tensor,            # (m, 2)  -- global (b, c) atom indices
+                 atom_batch: pt.Tensor,       # (N,)    -- molecule index per atom
+                 bond_batch: pt.Tensor,       # (m,)    -- molecule index per bond
+                 time_emb_per_mol: pt.Tensor, # (B, time_dim)
     ) -> pt.Tensor:
         """
         Returns
@@ -174,10 +166,10 @@ class PseudotorqueHead(nn.Module):
         # of the bond midpoint. O(m * N) per batch — fine for drug-like sizes;
         # can be replaced with a proper radius graph if it ever becomes a
         # bottleneck.
-        dist_ma = pt.cdist(midpoints, x)                     # (m, N)
-        same_mol = bond_batch[:, None] == atom_batch[None, :]
+        dist_ma = pt.cdist( midpoints, x )                     # (m, N)
+        same_mol = ( bond_batch[:, None] == atom_batch[None, :] )
         mask = (dist_ma < self.head_cutoff) & same_mol
-        bond_idx, atom_idx = mask.nonzero(as_tuple=True)     # (P,), (P,)
+        bond_idx, atom_idx = mask.nonzero( as_tuple=True )     # (P,), (P,) P = total number of atoms within the cutoff distance
 
         # Per-pair geometry.
         r_am = midpoints[bond_idx] - x[atom_idx]             # (P, 3)
@@ -185,22 +177,19 @@ class PseudotorqueHead(nn.Module):
         rhat_am = r_am / d_am
 
         # Spherical harmonics.
-        Y_am = o3.spherical_harmonics(
-            self.irreps_sh, rhat_am, normalize=True, normalization="component"
-        )                                                    # (P, irreps_sh.dim)
-
-        Y_bc_per_bond = o3.spherical_harmonics(
-            self.irreps_sh, bond_dir, normalize=True, normalization="component"
-        )                                                    # (m, irreps_sh.dim)
+        Y_am = o3.spherical_harmonics( self.irreps_sh, rhat_am, normalize=True, normalization="component" ) # (P, irreps_sh.dim)
+        Y_bc_per_bond = o3.spherical_harmonics( self.irreps_sh, bond_dir, normalize=True, normalization="component" )  # (m, irreps_sh.dim)
         Y_bc = Y_bc_per_bond[bond_idx]                       # (P, irreps_sh.dim)
 
         # Stage 1: f_a ⊗ Y(r̂_{a→m}) with per-pair radial weights.
-        rbf = self.rbf(d_am)                                 # (P, n_rbf)
-        w1 = self.radial1(rbf)                               # (P, tp1.weight_numel)
-        inter = self.tp1(f[atom_idx], Y_am, w1)              # (P, irreps_inter.dim)
+        rbf = self.rbf( d_am )    # (P, n_rbf)
+        w1 = self.radial1( rbf )      # (P, tp1.weight_numel)
+        inter = self.tp1( f[atom_idx], Y_am, w1 )              # (P, irreps_inter.dim)
 
         # Stage 2: inter ⊗ Y(r̂_{bc}).
-        msg = self.tp2(inter, Y_bc)                          # (P, irreps_out.dim)
+        # This is the cross product between atom-> midpoint features
+        # and the bond axis. This produces a torque-like feature.
+        msg = self.tp2( inter, Y_bc )                          # (P, irreps_out.dim)
 
         # Split: irreps_out is layed out as `n_pseudo x 0o + n_pseudo x 0e`,
         # so the first n_pseudo columns are 0o (values), the next n_pseudo are
@@ -209,11 +198,11 @@ class PseudotorqueHead(nn.Module):
         K = msg[:, self.n_pseudo : 2 * self.n_pseudo]        # (P, n_pseudo), 0e
 
         # Bond-level query in R^{n_pseudo} (a 0e scalar bank).
-        Z_b = self.z_embed(Z[b_idx])                         # (m, z_embed_dim)
-        Z_c = self.z_embed(Z[c_idx])                         # (m, z_embed_dim)
+        Z_b = self.z_embed( Z[b_idx] )                         # (m, z_embed_dim)
+        Z_c = self.z_embed( Z[c_idx] )                         # (m, z_embed_dim)
         time_per_bond = time_emb_per_mol[bond_batch]         # (m, time_dim)
-        query_in = pt.cat([Z_b, Z_c, bond_len, time_per_bond], dim=-1)
-        Q = self.query_mlp(query_in)                         # (m, n_pseudo)
+        query_in = pt.cat( [Z_b, Z_c, bond_len, time_per_bond], dim=-1 )
+        Q = self.query_mlp( query_in )                         # (m, n_pseudo)
         Q_per_pair = Q[bond_idx]                             # (P, n_pseudo)
 
         # Attention.
@@ -221,8 +210,8 @@ class PseudotorqueHead(nn.Module):
         alpha = segment_softmax(score, bond_idx, n_segments=bonds.shape[0])    # (P, 1)
 
         weighted_V = alpha * V                                # (P, n_pseudo)
-        agg = pt.zeros(bonds.shape[0], self.n_pseudo, dtype=dtype, device=device)
-        agg.index_add_(0, bond_idx, weighted_V)               # (m, n_pseudo)
+        agg = pt.zeros( bonds.shape[0], self.n_pseudo, dtype=dtype, device=device )
+        agg.index_add_( 0, bond_idx, weighted_V )               # (m, n_pseudo)
 
         # Final readout: linear, no bias, no nonlinearity → preserves 0o.
         return self.final(agg).squeeze(-1)                    # (m,)

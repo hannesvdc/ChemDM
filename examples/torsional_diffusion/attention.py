@@ -80,13 +80,11 @@ class EquivariantAttentionLayer(nn.Module):
         self.irreps_sh = o3.Irreps.spherical_harmonics(self.lmax)
 
         # 0e block of node features — used for scalar edge context.
-        self.irreps_0e = o3.Irreps(
-            [(mul, ir) for mul, ir in self.irreps_node if ir.l == 0 and ir.p == 1]
-        )
+        self.irreps_0e = o3.Irreps( [(mul, ir) for mul, ir in self.irreps_node if ir.l == 0 and ir.p == 1] )
         assert self.irreps_0e.dim > 0, "Need at least one 0e block in irreps_node."
 
         # Edge scalar context: dist/cutoff, inv_dist, RBF.
-        self.rbf = DistanceRBFEmbedding(0.0, d_cutoff, n_rbf=n_rbf)
+        self.rbf = DistanceRBFEmbedding( 0.0, d_cutoff, n_rbf=n_rbf )
         self.eps = 0.02
         self.n_edge_scalar = 2 + self.rbf.out_dim
         self.radial_context_dim = self.n_edge_scalar + 2 * self.irreps_0e.dim
@@ -95,18 +93,13 @@ class EquivariantAttentionLayer(nn.Module):
         node_types = {(ir.l, ir.p) for _, ir in self.irreps_node}
         qk_types = {(ir.l, ir.p) for _, ir in self.irreps_qk}
         missing = qk_types - node_types
-        assert not missing, (
-            f"irreps_qk has (l, p) types {missing} not in irreps_node {irreps_node_str}."
-        )
+        assert not missing, f"irreps_qk has (l, p) types {missing} not in irreps_node {irreps_node_str}."
 
-        self.q_proj = o3.Linear(self.irreps_node, self.irreps_qk)
+        self.q_proj = o3.Linear( self.irreps_node, self.irreps_qk )
 
-        self.k_tp = o3.FullyConnectedTensorProduct(
-            self.irreps_node, self.irreps_sh, self.irreps_qk, shared_weights=False
-        )
-        self.v_tp = o3.FullyConnectedTensorProduct(
-            self.irreps_node, self.irreps_sh, self.irreps_v, shared_weights=False
-        )
+        # K and V can be any equivariant linea rmap
+        self.k_tp = o3.FullyConnectedTensorProduct( self.irreps_node, self.irreps_sh, self.irreps_qk, shared_weights=False )
+        self.v_tp = o3.FullyConnectedTensorProduct( self.irreps_node, self.irreps_sh, self.irreps_v, shared_weights=False )
         self.k_radial = MultiLayerPerceptron(
             [self.radial_context_dim, 128, 128, self.k_tp.weight_numel],
             nn.GELU,
@@ -118,22 +111,18 @@ class EquivariantAttentionLayer(nn.Module):
             "td_attn_v_radial",
         )
 
-        self.scalar_readout = o3.Linear(self.irreps_node, self.irreps_0e)
-        self.out_proj = o3.Linear(self.irreps_v, self.irreps_node)
+        self.scalar_readout = o3.Linear( self.irreps_node, self.irreps_0e )
+        self.out_proj = o3.Linear( self.irreps_v, self.irreps_node )
 
         self._setup_gate()
 
         self.score_scale = 1.0 / math.sqrt(self.irreps_qk.dim)
 
-    def _setup_gate(self) -> None:
-        self.irreps_gate_scalars = o3.Irreps(
-            [(mul, ir) for mul, ir in self.irreps_node if ir.l == 0 and ir.p == 1]
-        )
-        self.irreps_gate_gated = o3.Irreps(
-            [(mul, ir) for mul, ir in self.irreps_node if not (ir.l == 0 and ir.p == 1)]
-        )
-        n_gates = sum(mul for mul, _ in self.irreps_gate_gated)
-        self.irreps_gate_gates = o3.Irreps(f"{n_gates}x0e")
+    def _setup_gate( self ) -> None:
+        self.irreps_gate_scalars = o3.Irreps( [(mul, ir) for mul, ir in self.irreps_node if ir.l == 0 and ir.p == 1] )
+        self.irreps_gate_gated = o3.Irreps( [(mul, ir) for mul, ir in self.irreps_node if not (ir.l == 0 and ir.p == 1)] )
+        n_gates = sum( mul for mul, _ in self.irreps_gate_gated )
+        self.irreps_gate_gates = o3.Irreps( f"{n_gates}x0e" )
 
         # Construct Gate first, then project pre_gate into Gate's *own* irreps_in.
         # Gate internally sorts (irreps_scalars + irreps_gates + irreps_gated) by
@@ -149,12 +138,7 @@ class EquivariantAttentionLayer(nn.Module):
         )
         self.pre_gate = o3.Linear(self.irreps_node, self.gate.irreps_in)
 
-    def forward(
-        self,
-        f: pt.Tensor,
-        x: pt.Tensor,
-        edge_index: pt.Tensor,
-    ) -> pt.Tensor:
+    def forward( self, f: pt.Tensor, x: pt.Tensor, edge_index: pt.Tensor ) -> pt.Tensor:
         """
         Parameters
         ----------
@@ -171,39 +155,35 @@ class EquivariantAttentionLayer(nn.Module):
         src, dst = edge_index[0], edge_index[1]
 
         edge_vec = x[dst] - x[src]
-        dist_raw = pt.linalg.norm(edge_vec, dim=-1, keepdim=True).clamp_min(1.0e-8)
+        dist_raw = pt.linalg.norm( edge_vec, dim=-1, keepdim=True ).clamp_min(1.0e-8)
         edge_dir = edge_vec / dist_raw
 
         dist = dist_raw / self.d_cutoff
         inv_dist = self.eps / pt.sqrt(dist**2 + self.eps**2)
         rbf = self.rbf(dist_raw)
-        edge_scalars = pt.cat([dist, inv_dist, rbf], dim=-1)
+        edge_scalars = pt.cat( [dist, inv_dist, rbf], dim=-1 )
 
         node_scalars = self.scalar_readout(f)
-        radial_context = pt.cat(
-            [edge_scalars, node_scalars[src], node_scalars[dst]], dim=-1
-        )
+        radial_context = pt.cat( [edge_scalars, node_scalars[src], node_scalars[dst]], dim=-1 )
 
-        edge_sh = o3.spherical_harmonics(
-            self.irreps_sh, edge_dir, normalize=True, normalization="component"
-        )
+        edge_sh = o3.spherical_harmonics( self.irreps_sh, edge_dir, normalize=True, normalization="component" )
 
-        Q_all = self.q_proj(f)
+        Q_all = self.q_proj( f )
         Q_dst = Q_all[dst]
 
-        k_w = self.k_radial(radial_context)
-        v_w = self.v_radial(radial_context)
-        K_ij = self.k_tp(f[src], edge_sh, k_w)
-        V_ij = self.v_tp(f[src], edge_sh, v_w)
+        k_w = self.k_radial( radial_context )
+        v_w = self.v_radial( radial_context )
+        K_ij = self.k_tp( f[src], edge_sh, k_w )
+        V_ij = self.v_tp( f[src], edge_sh, v_w )
 
         # SO(3)-invariant inner product per edge, scaled by 1/sqrt(d_qk).
         score = (Q_dst * K_ij).sum(dim=-1, keepdim=True) * self.score_scale
-        alpha = segment_softmax(score, dst, n_segments=f.shape[0])
+        alpha = segment_softmax( score, dst, n_segments=f.shape[0] )
 
         weighted_V = alpha * V_ij
-        agg_v = pt.zeros(f.shape[0], self.irreps_v.dim, dtype=f.dtype, device=f.device)
-        agg_v.index_add_(0, dst, weighted_V)
-        agg = self.out_proj(agg_v)
+        agg_v = pt.zeros( f.shape[0], self.irreps_v.dim, dtype=f.dtype, device=f.device )
+        agg_v.index_add_( 0, dst, weighted_V )
+        agg = self.out_proj( agg_v )
 
-        f_update = self.gate(self.pre_gate(agg))
+        f_update = self.gate( self.pre_gate(agg) )
         return f + self.feature_residual_scale * f_update

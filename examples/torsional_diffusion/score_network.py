@@ -3,7 +3,7 @@ TorsionalScoreNetwork — the full score model for torsional diffusion.
 
 Composes:
     1. Atom embedding: Z -> 0e scalar features.
-    2. Sinusoidal embedding of log(σ(t)) -> 0e scalar features added per atom.
+    2. Sinusoidal embedding of diffusion time t -> 0e scalar features added per atom.
     3. Lift 0e scalars to the trunk irreps (higher-l blocks initialise to 0;
        they will be populated by the attention layers via TPs with Y(r̂_ij)).
     4. K layers of EquivariantAttentionLayer (SE(3)-Transformer Q/K/V attention).
@@ -31,6 +31,7 @@ import torch.nn as nn
 from e3nn import o3
 
 from chemdm.MLP import MultiLayerPerceptron
+from chemdm.embedding import SinusoidalEmbedding
 
 from attention import EquivariantAttentionLayer
 from pseudotorque import PseudotorqueHead
@@ -57,8 +58,9 @@ class TorsionalScoreNetwork(nn.Module):
         RBF count for the trunk and the head.
     n_pseudo:
         Per-atom pseudoscalar bank width in the head.
-    time_dim:
-        Width of the sinusoidal σ-embedding.
+    time_n_freq:
+        Number of sinusoidal frequencies in the time embedding. The resulting
+        embedding width is 2*time_n_freq + 2 (the +2 = raw `t` and `1-t`).
     z_embed_dim:
         Width of the atomic-number embedding used by the head's query MLP.
         Independent of the trunk's atom embedding.
@@ -69,53 +71,54 @@ class TorsionalScoreNetwork(nn.Module):
         reuse; not used internally.
     """
 
-    def __init__(
-        self,
-        irreps_node_str: str = "64x0e + 32x0o + 16x1o + 16x1e",
-        irreps_qk_str: str = "16x0e + 8x0o + 8x1o + 8x1e",
-        irreps_v_str: str | None = None,
-        n_layers: int = 4,
-        d_cutoff: float = 5.0,
-        head_cutoff: float = 5.0,
-        n_rbf: int = 16,
-        n_pseudo: int = 8,
-        time_dim: int = 32,
-        z_embed_dim: int = 16,
-        n_elements: int = 120,
-        sigma_min: float = 0.01 * math.pi,
-        sigma_max: float = math.pi,
+    def __init__( self,
+                 irreps_node_str: str = "64x0e + 32x0o + 16x1o + 16x1e",
+                 irreps_qk_str: str = "16x0e + 8x0o + 8x1o + 8x1e",
+                 irreps_v_str: str | None = None,
+                 n_layers: int = 4,
+                 d_cutoff: float = 5.0,
+                 head_cutoff: float = 5.0,
+                 n_rbf: int = 16,
+                 n_pseudo: int = 8,
+                 time_n_freq: int = 16,
+                 z_embed_dim: int = 16,
+                 n_elements: int = 120,
+                 sigma_min: float = 0.01 * math.pi,
+                 sigma_max: float = math.pi,
     ) -> None:
         super().__init__()
 
         self.irreps_node = o3.Irreps(irreps_node_str)
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
-        self.time_dim = time_dim
 
         # 0e block size — where the atom and time embeddings live before lift.
-        self.irreps_0e = o3.Irreps(
-            [(mul, ir) for mul, ir in self.irreps_node if ir.l == 0 and ir.p == 1]
-        )
+        self.irreps_0e = o3.Irreps( [(mul, ir) for mul, ir in self.irreps_node if ir.l == 0 and ir.p == 1] )
         self.scalar_dim = self.irreps_0e.dim
 
         # Atom embedding: Z -> 0e features of width scalar_dim.
-        self.z_embed = nn.Embedding(n_elements, self.scalar_dim)
+        # Let the network learn its own atomic embedding, perhaps more general than
+        # chemdm.MoleculeInformation
+        self.z_embed = nn.Embedding( n_elements, self.scalar_dim )
 
-        # σ-embedding MLP. The raw sinusoidal embedding is (B, time_dim); we
-        # project it to (B, scalar_dim) for adding to atom 0e features, and
-        # also pass the raw (B, time_dim) embedding to the head's query MLP.
-        self.time_mlp = MultiLayerPerceptron(
-            [time_dim, 2 * time_dim, self.scalar_dim],
-            nn.GELU,
-            "td_time_mlp",
-        )
+        # Time embedding: t ∈ [0, 1] -> (B, time_dim). include_endpoints=True
+        # appends the raw `t` and `1-t` to the sin/cos bank so the network has
+        # boundary-aware features at no expressivity cost.
+        self.time_embed = SinusoidalEmbedding( n_freq=time_n_freq, include_endpoints=True )
+        self.time_dim = self.time_embed.n_embeddings   # 2*n_freq + 2
+
+        # Time-embedding MLP: project the raw (B, time_dim) embedding to the 0e
+        # width so it can be added to atom features. The raw embedding is also
+        # passed through (unprojected) to the head's query MLP.
+        time_mlp_neurons = [self.time_dim, 2 * self.time_dim, self.scalar_dim]
+        self.time_mlp = MultiLayerPerceptron( time_mlp_neurons, nn.GELU, "td_time_mlp" )
 
         # Lift 0e features to irreps_node. Equivariant o3.Linear: only 0e -> 0e
         # paths have weights, so 0o / 1o / 1e blocks start at exactly zero and
         # are populated by the trunk attention layers below.
-        self.lift = o3.Linear(self.irreps_0e, self.irreps_node)
+        self.lift = o3.Linear( self.irreps_0e, self.irreps_node )
 
-        # Trunk.
+        # Trunk. Identical layer repeated.
         self.layers = nn.ModuleList([
             EquivariantAttentionLayer(
                 irreps_node_str=irreps_node_str,
@@ -127,60 +130,38 @@ class TorsionalScoreNetwork(nn.Module):
             for _ in range(n_layers)
         ])
 
-        # Head.
+        # Torque bond head.
         self.head = PseudotorqueHead(
             irreps_node_str=irreps_node_str,
             n_pseudo=n_pseudo,
             head_cutoff=head_cutoff,
             n_rbf=n_rbf,
-            time_dim=time_dim,
+            time_dim=self.time_dim,
             z_embed_dim=z_embed_dim,
             n_elements=n_elements,
         )
 
-    def _sigma_embedding(self, sigma: pt.Tensor) -> pt.Tensor:
-        """
-        Sinusoidal embedding of log(σ). The noise schedule is geometric in σ,
-        so log σ varies linearly with t and is the natural quantity to embed.
-
-        Parameters
-        ----------
-        sigma : (B,)
-
-        Returns
-        -------
-        (B, time_dim)
-        """
-        half = self.time_dim // 2
-        device = sigma.device
-        dtype = sigma.dtype
-        log_sigma = pt.log(sigma).unsqueeze(-1)              # (B, 1)
-        freqs = pt.exp(
-            pt.linspace(0.0, math.log(1000.0), half, device=device, dtype=dtype)
-        )                                                    # (half,)
-        args = log_sigma * freqs                             # (B, half)
-        return pt.cat([pt.sin(args), pt.cos(args)], dim=-1)  # (B, 2*half)
-
-    def forward(
-        self,
-        Z: pt.Tensor,                # (N,)
-        x: pt.Tensor,                # (N, 3)
-        sigma: pt.Tensor,            # (B,)
-        edge_index: pt.Tensor,       # (2, E)
-        bonds: pt.Tensor,            # (m, 2)
-        atom_batch: pt.Tensor,       # (N,)
-        bond_batch: pt.Tensor,       # (m,)
+    def forward( self,
+                 Z: pt.Tensor,                # (N,)
+                 x: pt.Tensor,                # (N, 3)
+                 t: pt.Tensor,                # (B,)  diffusion time ∈ [0, 1]
+                 edge_index: pt.Tensor,       # (2, E)
+                 bonds: pt.Tensor,            # (m, 2)
+                 atom_batch: pt.Tensor,       # (N,)
+                 bond_batch: pt.Tensor,       # (m,)
     ) -> pt.Tensor:
         """
         Returns
         -------
         delta_tau : (m,) — predicted score per rotatable bond.
         """
-        # Per-molecule sinusoidal σ-embedding, projected to 0e width.
-        sigma_emb = self._sigma_embedding(sigma)             # (B, time_dim)
-        time_scalar = self.time_mlp(sigma_emb)               # (B, scalar_dim)
+        # Per-molecule sinusoidal time embedding, projected to 0e width.
+        time_emb = self.time_embed(t)                     # (B, time_dim)
+        time_scalar = self.time_mlp(time_emb)                # (B, scalar_dim)
 
-        # Atom 0e features: Z embedding + per-atom σ scalar.
+        # Atom 0e features: Z embedding + per-atom time scalar.
+        # Add together because each is already the output of an MLP.
+        # This does not reduce expressiveness.
         f0e = self.z_embed(Z) + time_scalar[atom_batch]      # (N, scalar_dim)
 
         # Lift into the trunk irreps (higher-l blocks start at zero).
@@ -198,5 +179,5 @@ class TorsionalScoreNetwork(nn.Module):
             bonds=bonds,
             atom_batch=atom_batch,
             bond_batch=bond_batch,
-            time_emb_per_mol=sigma_emb,
+            time_emb_per_mol=time_emb,
         )

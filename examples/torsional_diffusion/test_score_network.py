@@ -47,7 +47,7 @@ def build_toy_batch(dtype: pt.dtype) -> dict:
 
     Z = pt.randint(1, 10, (N,))
     x = pt.randn(N, 3, dtype=dtype)
-    sigma = pt.tensor([0.3, 1.5], dtype=dtype)
+    t = pt.tensor([0.2, 0.8], dtype=dtype)   # diffusion time in [0, 1]
 
     def fully_connected(offset: int, n: int) -> pt.Tensor:
         idx = pt.arange(n) + offset
@@ -63,7 +63,7 @@ def build_toy_batch(dtype: pt.dtype) -> dict:
     bond_batch = pt.tensor([0, 0, 1, 1])
 
     return dict(
-        Z=Z, x=x, sigma=sigma,
+        Z=Z, x=x, t=t,
         edge_index=edge_index, bonds=bonds,
         atom_batch=atom_batch, bond_batch=bond_batch,
     )
@@ -87,7 +87,7 @@ def run_checks(dtype: pt.dtype) -> None:
 
     def call(x):
         return model(
-            Z=batch["Z"], x=x, sigma=batch["sigma"],
+            Z=batch["Z"], x=x, t=batch["t"],
             edge_index=batch["edge_index"], bonds=batch["bonds"],
             atom_batch=batch["atom_batch"], bond_batch=batch["bond_batch"],
         )
