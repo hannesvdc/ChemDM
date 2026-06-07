@@ -259,8 +259,8 @@ def apply_torsion_update( x:  pt.Tensor,
     x_new = x.clone()
     m = bonds.shape[0]
     for i in range(m):
-        b = int(bonds[i, 0])
-        c = int(bonds[i, 1])
+        b = bonds[i, 0]
+        c = bonds[i, 1]
 
         bond_vec = x_new[c] - x_new[b]  # (3,)
         bond_axis = bond_vec / pt.linalg.norm(bond_vec).clamp_min(1.0e-8)   # (3,)

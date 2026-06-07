@@ -25,11 +25,14 @@ val loss every epoch.
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import time
 from pathlib import Path
 
 import torch as pt
+import wandb
 from torch.utils.data import DataLoader
 from dotenv import load_dotenv
 
@@ -40,12 +43,25 @@ from diffusion import sigma_schedule, wrapped_normal_score, radius_graph
 from chemdm.geometry import apply_torsion_update
 
 # Training setup
-BATCH_SIZE   = 32
+BATCH_SIZE   = 16
 N_EPOCHS     = 5
 LR           = 3.0e-4
 CUTOFF       = 5.0
-LOG_EVERY    = 50          # steps between train-loss prints
+LOG_EVERY    = 100          # steps between train-loss prints
 NUM_WORKERS  = 0           # DataLoader workers; >0 needs collator pickle-ability
+
+# Weights & Biases
+WANDB_ENTITY  = "hannesvdc-open-numerics"
+WANDB_PROJECT = "torsional_diffusion"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--name", type=str, required=True, dest="name",
+        help="Experiment name. Checkpoints go to ./checkpoints/<name>/.",
+    )
+    return parser.parse_args()
 
 
 # Loss
@@ -75,7 +91,7 @@ def perturb_and_score( model:  TorsionalScoreNetwork, batch:  dict[str, pt.Tenso
     """
     # Move the batch onto the compute device once, in place.
     for k, v in batch.items():
-        batch[k] = v.to( device=device, non_blocking=True )
+        batch[k] = v.to( device=device )
 
     B = int( batch["bond_batch"].max().item() ) + 1   # number of molecules in batch
     m = batch["bonds"].shape[0]                       # total rotatable bonds in batch
@@ -86,7 +102,7 @@ def perturb_and_score( model:  TorsionalScoreNetwork, batch:  dict[str, pt.Tenso
     sigma_bond = sigma[batch["bond_batch"]]  # (m,) e.g. [0, 0, 0, 1, 1, 2, 2, 2, 2, ...] given mol_0 | mol_1 | mol_2 | ...
 
     # Noise increment Δτ for conditional wrapped normal
-    eps = pt.randn(m, device=device)
+    eps = pt.randn( m, device=device )
     delta_tau = sigma_bond * eps                      # (m,)
 
     # Bridge τ → x: apply Δτ to x_0 to get x_t.
@@ -107,17 +123,23 @@ def perturb_and_score( model:  TorsionalScoreNetwork, batch:  dict[str, pt.Tenso
 
 
 # Main
-def main() -> None:
+def main( exp_name: str ) -> None:
     load_dotenv()
+    with open( "./data_config.json", "r" ) as f:
+        data_config = json.load( f )
 
-    qm9_dir = Path( os.environ["QM9_FOLDER"] )
-    parsed_dir = qm9_dir.parent / "parsed"
-    ckpt_dir   = Path( "./checkpoints" )
+    qm9_dir     = Path( data_config["data_folder"] )
+    parsed_dir  = qm9_dir.parent / "parsed"
+    store_root  = data_config.get( "store_root", "./checkpoints" )
+    ckpt_dir    = Path( store_root ) / exp_name
     ckpt_dir.mkdir( parents=True, exist_ok=True )
 
-    device_str = os.environ.get("DEVICE", "mps")
-    device = pt.device( device_str )
-    print(f"device: {device}")
+    device_str  = data_config.get( "device", os.environ.get("DEVICE", "mps") )
+    device      = pt.device( device_str )
+    setup_wandb = data_config.get( "setup_wandb", True )
+
+    print(f"experiment:  {exp_name}")
+    print(f"device:      {device}")
     print(f"checkpoints: {ckpt_dir}")
 
     # Data
@@ -143,6 +165,29 @@ def main() -> None:
 
     # Regular Adam optimizer. Might add weight decay later.
     optimizer = pt.optim.Adam( model.parameters(), lr=LR )
+
+    # Config snapshot + optional Weights&Biases logging.
+    experiment_config = {
+        "architecture":           "TorsionalScoreNetwork",
+        "experiment_name":        exp_name,
+        "device":                 device_str,
+        "batch_size":             BATCH_SIZE,
+        "n_epochs":                N_EPOCHS,
+        "lr":                     LR,
+        "cutoff":                 CUTOFF,
+        "n_trainable_parameters": n_params,
+    }
+    with open( ckpt_dir / "config.json", "w" ) as f:
+        json.dump( experiment_config, f, indent=2 )
+
+    run = None
+    if setup_wandb:
+        run = wandb.init(
+            entity  = WANDB_ENTITY,
+            project = WANDB_PROJECT,
+            name    = exp_name,
+            config  = experiment_config,
+        )
 
     # Training
     best_val_loss = float("inf")
@@ -207,6 +252,17 @@ def main() -> None:
             pt.save( model.state_dict(), ckpt_dir / "best.pt" )
             print( f"  -> new best val_loss ({val_loss:.4f}); saved best.pt" )
 
+        if setup_wandb and run is not None:
+            run.log({
+                "epoch":         epoch,
+                "train_loss":    train_loss,
+                "val_loss":      val_loss,
+                "best_val_loss": best_val_loss,
+                "epoch_time":    epoch_dt,
+                "lr":            optimizer.param_groups[0]["lr"],
+            })
+
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main( args.name )
