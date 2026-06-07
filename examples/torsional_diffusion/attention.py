@@ -83,10 +83,13 @@ class EquivariantAttentionLayer(nn.Module):
         self.irreps_0e = o3.Irreps( [(mul, ir) for mul, ir in self.irreps_node if ir.l == 0 and ir.p == 1] )
         assert self.irreps_0e.dim > 0, "Need at least one 0e block in irreps_node."
 
-        # Edge scalar context: dist/cutoff, inv_dist, RBF.
+        # Edge scalar context: dist/cutoff, inv_dist, is_bond, RBF.
+        # is_bond is a 0/1 flag distinguishing covalent neighbors from
+        # distance-only neighbors in the union graph returned by
+        # `chemdm.MoleculeGraph.findAllNeighbors`.
         self.rbf = DistanceRBFEmbedding( 0.0, d_cutoff, n_rbf=n_rbf )
         self.eps = 0.02
-        self.n_edge_scalar = 2 + self.rbf.out_dim
+        self.n_edge_scalar = 3 + self.rbf.out_dim
         self.radial_context_dim = self.n_edge_scalar + 2 * self.irreps_0e.dim
 
         # Q must be representable by an o3.Linear of irreps_node.
@@ -138,21 +141,22 @@ class EquivariantAttentionLayer(nn.Module):
         )
         self.pre_gate = o3.Linear(self.irreps_node, self.gate.irreps_in)
 
-    def forward( self, f: pt.Tensor, x: pt.Tensor, edge_index: pt.Tensor ) -> pt.Tensor:
+    def forward( self, f: pt.Tensor, x: pt.Tensor, neighbors: pt.Tensor, is_bond: pt.Tensor ) -> pt.Tensor:
         """
         Parameters
         ----------
-        f:           (N, irreps_node.dim) — node equivariant features
-        x:           (N, 3)               — atom positions (held fixed)
-        edge_index:  (2, E)               — directed pairs [src, dst]; assumed
-                                            to already respect molecule
-                                            boundaries when batching.
+        f:          (N, irreps_node.dim) — node equivariant features
+        x:          (N, 3)               — atom positions (held fixed)
+        neighbors:  (2, E)               — directed pairs [src, dst]; assumed to
+                                           already respect molecule boundaries.
+        is_bond:    (E,) float           — 1.0 if the edge is a covalent bond,
+                                           0.0 if it is a distance-only neighbor.
 
         Returns
         -------
         f_new : (N, irreps_node.dim)
         """
-        src, dst = edge_index[0], edge_index[1]
+        src, dst = neighbors[0], neighbors[1]
 
         edge_vec = x[dst] - x[src]
         dist_raw = pt.linalg.norm( edge_vec, dim=-1, keepdim=True ).clamp_min(1.0e-8)
@@ -161,7 +165,7 @@ class EquivariantAttentionLayer(nn.Module):
         dist = dist_raw / self.d_cutoff
         inv_dist = self.eps / pt.sqrt(dist**2 + self.eps**2)
         rbf = self.rbf(dist_raw)
-        edge_scalars = pt.cat( [dist, inv_dist, rbf], dim=-1 )
+        edge_scalars = pt.cat( [dist, inv_dist, is_bond.unsqueeze(-1), rbf], dim=-1 )
 
         node_scalars = self.scalar_readout(f)
         radial_context = pt.cat( [edge_scalars, node_scalars[src], node_scalars[dst]], dim=-1 )

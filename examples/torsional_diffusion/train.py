@@ -38,17 +38,19 @@ from dotenv import load_dotenv
 
 from dataset import TorsionalDataset, collate_torsional
 from score_network import TorsionalScoreNetwork
-from diffusion import sigma_schedule, wrapped_normal_score, radius_graph
+from diffusion import sigma_schedule, wrapped_normal_score
 
 from chemdm.geometry import apply_torsion_update
+from chemdm.MoleculeGraph import findAllNeighbors
 
 # Training setup
 BATCH_SIZE   = 16
 N_EPOCHS     = 5
 LR           = 3.0e-4
 CUTOFF       = 5.0
-LOG_EVERY    = 100          # steps between train-loss prints
-NUM_WORKERS  = 0           # DataLoader workers; >0 needs collator pickle-ability
+LOG_EVERY    = 100              # steps between train-loss prints
+NUM_WORKERS  = 0                # DataLoader workers; >0 needs collator pickle-ability
+DTYPE        = pt.float32       # float dtype for both model and per-batch tensors
 
 # Weights & Biases
 WANDB_ENTITY  = "hannesvdc-open-numerics"
@@ -83,40 +85,49 @@ def loss_fn( delta_tau_pred: pt.Tensor, # (m,)  model output
 
 
 # One training / evaluation step
-def perturb_and_score( model:  TorsionalScoreNetwork, batch:  dict[str, pt.Tensor], device: pt.device ) -> pt.Tensor:
+def perturb_and_score( model: TorsionalScoreNetwork, batch: dict, device: pt.device ) -> pt.Tensor:
     """
     The shared core of training and validation. Given a clean batch from
     the dataset, sample a diffusion time, perturb torsions, forward through
     the model, and return the DSM loss.
     """
-    # Move the batch onto the compute device once, in place.
-    for k, v in batch.items():
-        batch[k] = v.to( device=device )
+    # Move the batch onto the compute device. BatchedMoleculeGraph.to() handles
+    # Z (long, device only) and x (float, device + dtype) consistently.
+    mol = batch["mol"].to( device=device, dtype=DTYPE )
+    bonds         = batch["bonds"].to( device=device )
+    side_atom_idx = batch["side_atom_idx"].to( device=device )
+    side_bond_idx = batch["side_bond_idx"].to( device=device )
+    bond_batch    = batch["bond_batch"].to( device=device )
 
-    B = int( batch["bond_batch"].max().item() ) + 1   # number of molecules in batch
-    m = batch["bonds"].shape[0]                       # total rotatable bonds in batch
+    B = int( bond_batch.max().item() ) + 1            # number of molecules in batch
+    m = bonds.shape[0]                                # total rotatable bonds in batch
 
     # Diffusion time + per-bond σ.
     t = pt.rand( B, device=device )
-    sigma = sigma_schedule(t)  # (B,)  one σ per molecule, B=32
-    sigma_bond = sigma[batch["bond_batch"]]  # (m,) e.g. [0, 0, 0, 1, 1, 2, 2, 2, 2, ...] given mol_0 | mol_1 | mol_2 | ...
+    sigma = sigma_schedule(t)                         # (B,)
+    sigma_bond = sigma[bond_batch]                    # (m,)
 
     # Noise increment Δτ for conditional wrapped normal
     eps = pt.randn( m, device=device )
     delta_tau = sigma_bond * eps                      # (m,)
 
     # Bridge τ → x: apply Δτ to x_0 to get x_t.
-    x_t = apply_torsion_update( batch["x"], batch["bonds"], batch["side_atom_idx"], batch["side_bond_idx"], delta_tau )
+    x_t = apply_torsion_update( mol.x, bonds, side_atom_idx, side_bond_idx, delta_tau )
 
-    # Build the spatial graph from current x_t (must be rebuilt — atoms moved).
-    edge_index = radius_graph( x_t, batch["atom_batch"], cutoff=CUTOFF )
+    # Build the union neighbor graph from current x_t: covalent bonds ∪ atom
+    # pairs within CUTOFF. The is_bond flag tells the trunk which is which.
+    # KDTree handles batched separation natively via the molecule_id trick.
+    mol_t = mol.copyWithNewPositions( x_t )
+    neighbors_E2, is_bond = findAllNeighbors( mol_t, CUTOFF )
+    neighbors = neighbors_E2.T.contiguous()       # (2, E)
+    is_bond   = is_bond.to( dtype=DTYPE )         # float for edge context
 
     # Score model forward. This is not the backward diffusion, just training the model.
     # The model takes t directly; σ stays in scope for the loss weighting only.
     delta_tau_pred = model(
-        Z=batch["Z"], x=x_t, t=t,
-        edge_index=edge_index, bonds=batch["bonds"],
-        atom_batch=batch["atom_batch"], bond_batch=batch["bond_batch"],
+        mol=mol_t, t=t,
+        neighbors=neighbors, is_bond=is_bond,
+        bonds=bonds, bond_batch=bond_batch,
     )
 
     return loss_fn( delta_tau_pred, delta_tau, sigma_bond )
@@ -159,7 +170,7 @@ def main( exp_name: str ) -> None:
     )
 
     # Model + optimiser
-    model = TorsionalScoreNetwork().to(device)
+    model = TorsionalScoreNetwork().to( device=device, dtype=DTYPE )
     n_params = sum( p.numel() for p in model.parameters() )
     print(f"model parameters: {n_params:,}")
 

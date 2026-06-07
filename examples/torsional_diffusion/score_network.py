@@ -32,6 +32,7 @@ from e3nn import o3
 
 from chemdm.MLP import MultiLayerPerceptron
 from chemdm.embedding import SinusoidalEmbedding
+from chemdm.MoleculeGraph import Molecule
 
 from attention import EquivariantAttentionLayer
 from pseudotorque import PseudotorqueHead
@@ -142,12 +143,11 @@ class TorsionalScoreNetwork(nn.Module):
         )
 
     def forward( self,
-                 Z: pt.Tensor,                # (N,)
-                 x: pt.Tensor,                # (N, 3)
+                 mol: Molecule,               # carries Z (N,), x (N, 3), molecule_id (N,)
                  t: pt.Tensor,                # (B,)  diffusion time ∈ [0, 1]
-                 edge_index: pt.Tensor,       # (2, E)
+                 neighbors: pt.Tensor,        # (2, E)  trunk's radius+bond graph
+                 is_bond: pt.Tensor,          # (E,)    1.0 if edge is a covalent bond
                  bonds: pt.Tensor,            # (m, 2)
-                 atom_batch: pt.Tensor,       # (N,)
                  bond_batch: pt.Tensor,       # (m,)
     ) -> pt.Tensor:
         """
@@ -155,8 +155,12 @@ class TorsionalScoreNetwork(nn.Module):
         -------
         delta_tau : (m,) — predicted score per rotatable bond.
         """
+        Z          = mol.Z
+        x          = mol.x
+        atom_batch = mol.molecule_id
+
         # Per-molecule sinusoidal time embedding, projected to 0e width.
-        time_emb = self.time_embed(t)                     # (B, time_dim)
+        time_emb    = self.time_embed(t)                     # (B, time_dim)
         time_scalar = self.time_mlp(time_emb)                # (B, scalar_dim)
 
         # Atom 0e features: Z embedding + per-atom time scalar.
@@ -167,17 +171,16 @@ class TorsionalScoreNetwork(nn.Module):
         # Lift into the trunk irreps (higher-l blocks start at zero).
         f = self.lift(f0e)                                   # (N, irreps_node.dim)
 
-        # Attention trunk.
+        # Attention trunk. Layer signature stays flat (f, x, neighbors, is_bond)
+        # — the SE(3) attention isn't molecule-specific, it's a generic graph op.
         for layer in self.layers:
-            f = layer(f, x, edge_index)
+            f = layer(f, x, neighbors, is_bond)
 
         # Pseudotorque head: per-rotatable-bond δτ_i, sign-flips under parity.
         return self.head(
             f=f,
-            x=x,
-            Z=Z,
+            mol=mol,
             bonds=bonds,
-            atom_batch=atom_batch,
             bond_batch=bond_batch,
             time_emb_per_mol=time_emb,
         )

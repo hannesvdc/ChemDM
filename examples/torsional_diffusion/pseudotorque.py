@@ -139,10 +139,8 @@ class PseudotorqueHead(nn.Module):
 
     def forward( self,
                  f: pt.Tensor,                # (N, irreps_node.dim)
-                 x: pt.Tensor,                # (N, 3)
-                 Z: pt.Tensor,                # (N,)
+                 mol,                         # Molecule (carries Z, x, molecule_id)
                  bonds: pt.Tensor,            # (m, 2)  -- global (b, c) atom indices
-                 atom_batch: pt.Tensor,       # (N,)    -- molecule index per atom
                  bond_batch: pt.Tensor,       # (m,)    -- molecule index per bond
                  time_emb_per_mol: pt.Tensor, # (B, time_dim)
     ) -> pt.Tensor:
@@ -151,6 +149,10 @@ class PseudotorqueHead(nn.Module):
         -------
         delta_tau : (m,) — pseudoscalar score per rotatable bond.
         """
+        Z          = mol.Z
+        x          = mol.x
+        atom_batch = mol.molecule_id
+
         device = x.device
         dtype = x.dtype
 

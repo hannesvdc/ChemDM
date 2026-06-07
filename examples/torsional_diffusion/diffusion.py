@@ -1,7 +1,7 @@
 """
 Diffusion-side utilities for torsional-diffusion training and sampling.
 
-Three small helpers, all stateless:
+Two small helpers, both stateless:
 
     sigma_schedule(t, sigma_min, sigma_max)
         Geometric noise schedule σ(t) = σ_min^(1−t) σ_max^t. Default bounds
@@ -13,10 +13,10 @@ Three small helpers, all stateless:
         wrapped-normal kernel on the m-torus factorises across coordinates,
         so per-bond evaluation is exact.
 
-    radius_graph(x, atom_batch, cutoff)
-        cdist-based directed neighbor pairs within `cutoff`, restricted to
-        atoms in the same molecule. Returns (2, E) suitable for the score
-        network's `edge_index`.
+The trunk's radius graph is now built via
+`chemdm.MoleculeGraph.findAllDistanceNeighbors`, which uses scipy KDTree and
+handles batched-molecule separation natively via `molecule_id`. See
+`train.py` for the call site.
 """
 
 from __future__ import annotations
@@ -84,28 +84,3 @@ def wrapped_normal_score( delta: pt.Tensor,  sigma: pt.Tensor, num_terms: int = 
     # (max-subtract) internally.
     weights = pt.nn.functional.softmax( log_w, dim=-1 )                           # (..., 2K+1)
     return -(shifted * weights).sum(dim=-1) / sigma ** 2
-
-
-def radius_graph( x: pt.Tensor, atom_batch: pt.Tensor, cutoff: float ) -> pt.Tensor:
-    """
-    Build a directed edge_index (2, E) of all atom pairs within `cutoff`,
-    restricted to atoms sharing the same molecule (`atom_batch` index).
-
-    cdist-based and O(N²) — fine for QM9-scale batches (N_total ≲ 1000).
-    Self-loops are excluded.
-
-    Parameters
-    ----------
-    x          : (N, 3) float — flat batched positions
-    atom_batch : (N,)   long  — molecule index per atom
-    cutoff     : float        — distance threshold [Å]
-
-    Returns
-    -------
-    edge_index : (2, E) long  — [src, dst] pairs
-    """
-    dist = pt.cdist(x, x)                                                       # (N, N)
-    same = atom_batch.unsqueeze(0) == atom_batch.unsqueeze(1)                   # (N, N)
-    mask = (dist < cutoff) & (dist > 0.0) & same
-    src, dst = mask.nonzero(as_tuple=True)
-    return pt.stack([src, dst], dim=0)
