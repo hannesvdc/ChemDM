@@ -8,6 +8,7 @@ import json
 from rdkit import Chem
 from rdkit.Chem import rdDetermineBonds
 
+from collections import Counter
 from chemdm.Trajectory import Trajectory, enforceCOM
 
 import matplotlib.pyplot as plt
@@ -146,13 +147,12 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
         storage_counter = 0
         reaction_counter = -1
 
-        reaction_weights : dict[int, float] = {}
+        metadata_records = []
         for molecule in molecules:
             print('molecule', molecule)
             molecule_data = data[molecule]
             reactions = molecule_data.keys()
 
-            n_reactions = len( reactions )
             for reaction in reactions:
                 reaction_counter += 1
 
@@ -269,12 +269,15 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                 # Save the trajectories for this reaction.
                 with open( os.path.join(store_directory, f"{evaltype}_reaction_{reaction_counter}.pkl"), "wb") as sf:
                     pickle.dump( reaction_trajectories, sf )
-                    reaction_weights[ reaction_counter ] = 1.0 / n_reactions
-                    print( f"Number of trajectories for reaction {reaction_counter}: {len(reaction_trajectories)}. Also weight {reaction_weights[reaction_counter]}")
                 with open( os.path.join(store_directory_unique, f"{evaltype}_reaction_{reaction_counter}.pkl"), "wb") as sf:
                     pickle.dump( reaction_trajectories[-1], sf )
-                    reaction_weights[ reaction_counter ] = 1.0 / n_reactions
-                    print( f"Number of trajectories for reaction {reaction_counter}: {len(reaction_trajectories)}. Also weight {reaction_weights[reaction_counter]}")
+                
+                metadata_records.append({
+                    "reaction_counter": reaction_counter,
+                    "molecule": str(molecule),
+                    "reaction": str(reaction),
+                    "group_id": str(molecule),
+                })
                 # with open( os.path.join(app_store_directory, f"{evaltype}_reaction_{reaction_counter}_molecule_{molecule}.json"), "w") as sf:
                 #     trajectory = reaction_trajectories[-1]
 
@@ -293,7 +296,15 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                 storage_counter += 1
         print( f"Number of {evaltype} reactions store: {storage_counter} / {reaction_counter}" )
 
-        with open( os.path.join(store_directory_unique, f"{evaltype}_metadata.json"), "w" ) as mf:
-            print( "Storing Metadata" )
-            json_dict = { "reaction_weights" : reaction_weights }
-            json.dump( json_dict, mf )
+    # after all molecules/reactions for this split:
+    group_counts = Counter(record["group_id"] for record in metadata_records)
+    reaction_weights = {}
+    for record in metadata_records:
+        n_stored = group_counts[record["group_id"]]
+        weight = 1.0 / n_stored
+        reaction_weights[str(record["reaction_counter"])] = weight
+
+    metadata_path = os.path.join(store_directory, f"{evaltype}_metadata.json")
+    print(f"Storing metadata at {metadata_path}")
+    with open(metadata_path, "w") as mf:
+        json.dump( { "reaction_weights": reaction_weights }, mf )

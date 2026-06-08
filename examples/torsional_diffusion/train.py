@@ -120,7 +120,7 @@ def perturb_and_score( model: TorsionalScoreNetwork, batch: dict, device: pt.dev
     mol_t = mol.copyWithNewPositions( x_t )
     neighbors_E2, is_bond = findAllNeighbors( mol_t, CUTOFF )
     neighbors = neighbors_E2.T.contiguous()       # (2, E)
-    is_bond   = is_bond.to( dtype=DTYPE )         # float for edge context
+    is_bond = is_bond.to( dtype=DTYPE )         # float for edge context
 
     # Score model forward. This is not the backward diffusion, just training the model.
     # The model takes t directly; σ stays in scope for the loss weighting only.
