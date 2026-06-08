@@ -95,7 +95,7 @@ def collate_molecules(batch : List[List[Trajectory]]
     """
     Batching molecules and random points on the path.
     """
-    trajectories = list(itertools.chain.from_iterable( batch )) # squash the nested list of trajectories
+    trajectories = list( itertools.chain.from_iterable( batch ) ) # squash the nested list of trajectories
 
     # Sample random points on the trajectory for each molecule
     xA_molecules = []
@@ -103,9 +103,7 @@ def collate_molecules(batch : List[List[Trajectory]]
     s_list = []
     x_list = []
     for trajectory in trajectories:
-        trajectory = enforceCOM( trajectory )
-        trajectory = alignToReactant( trajectory )
-
+        
         xA = MoleculeGraph( trajectory.Z, trajectory.xA, trajectory.GA )
         xA_molecules.append( xA )
         xB = MoleculeGraph( trajectory.Z, trajectory.xB, trajectory.GB )
@@ -119,4 +117,54 @@ def collate_molecules(batch : List[List[Trajectory]]
 
     xA = batchMolecules( xA_molecules )
     xB = batchMolecules( xB_molecules )
+    return xA, xB, s, x_ref
+
+def collate_trajectories( batch : List[List[Trajectory]],
+                         ) -> Tuple[BatchedMoleculeGraph, BatchedMoleculeGraph, pt.Tensor, pt.Tensor]:
+    """
+
+    Batch molecules and include all images along each trajectory.
+
+    Input
+    -----
+    batch:
+        List of dataset items. Each item is a list of Trajectory objects.
+        Usually each list now contains one trajectory.
+
+    Returns
+    -------
+    xA:
+        Batched reactant molecules, repeated once per path image.
+    xB:
+        Batched product molecules, repeated once per path image.
+    s:
+        Per-atom arclength values, shape (total_atoms_over_all_images,)
+    x_ref:
+        Reference coordinates for every image, shape (total_atoms_over_all_images, 3)
+    """
+    trajectories = list(itertools.chain.from_iterable(batch))
+    xA_molecules = []
+    xB_molecules = []
+    s_list = []
+    x_list = []
+
+    for trajectory in trajectories:
+        n_images = len(trajectory.s)
+
+        for image_idx in range(n_images):
+            xA = MoleculeGraph( trajectory.Z, trajectory.xA, trajectory.GA )
+            xB = MoleculeGraph( trajectory.Z, trajectory.xB, trajectory.GB )
+            xA_molecules.append(xA)
+            xB_molecules.append(xB)
+
+            # One scalar s value per atom in this molecule image.
+            s_image = trajectory.s[image_idx] * pt.ones_like( trajectory.Z,dtype=trajectory.x.dtype, device=trajectory.x.device )
+            s_list.append(s_image)
+            x_list.append(trajectory.x[image_idx, :, :])
+
+    s = pt.cat( s_list, dim=0 )          # (total_atoms,)
+    x_ref = pt.cat( x_list, dim=0 )      # (total_atoms, 3)
+    xA = batchMolecules( xA_molecules )
+    xB = batchMolecules( xB_molecules )
+
     return xA, xB, s, x_ref

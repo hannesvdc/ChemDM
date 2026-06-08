@@ -8,11 +8,11 @@ import json
 from rdkit import Chem
 from rdkit.Chem import rdDetermineBonds
 
-from chemdm.Trajectory import Trajectory, enforceCOM, alignToReactant
+from chemdm.Trajectory import Trajectory, enforceCOM
 
 import matplotlib.pyplot as plt
 
-from typing import List, Set
+from typing import List
 
 def local_minima_indices( d : np.ndarray,
                           drop_fraction : float = 0.85,
@@ -64,17 +64,17 @@ def xyz_to_rdkit_mol(atomic_numbers, positions, charge=0):
 
     mol = Chem.RWMol()
     for z in atomic_numbers:
-        mol.AddAtom(Chem.Atom(int(z)))
+        mol.AddAtom( Chem.Atom(int(z)) )
 
-    conf = Chem.Conformer(len(atomic_numbers))
+    conf = Chem.Conformer( len(atomic_numbers) ) 
     for i, (x, y, z) in enumerate(positions):
         conf.SetAtomPosition(i, (float(x), float(y), float(z)))
 
     mol = mol.GetMol()
-    mol.AddConformer(conf)
+    mol.AddConformer( conf )
 
     # infer connectivity and bond orders from 3D geometry
-    rdDetermineBonds.DetermineConnectivity(mol)
+    rdDetermineBonds.DetermineConnectivity( mol )
     #rdDetermineBonds.DetermineBondOrders(mol, charge=charge)
 
     return mol
@@ -132,7 +132,9 @@ def prune_bonds_by_valence(bonds, x, z):
 plot_trajectories = False
 data_directory = "/Users/hannesvdc/transition1x/"
 store_directory = data_directory + "processed/"
+store_directory_unique = data_directory + "processed_unique/"
 app_store_directory = data_directory + "app/"
+trajectories_per_reaction = 1
 with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
     for evaltype in ['train', 'test', 'val']:
         data = f[evaltype]
@@ -143,11 +145,14 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
 
         storage_counter = 0
         reaction_counter = -1
+
+        reaction_weights : dict[int, float] = {}
         for molecule in molecules:
             print('molecule', molecule)
             molecule_data = data[molecule]
             reactions = molecule_data.keys()
 
+            n_reactions = len( reactions )
             for reaction in reactions:
                 reaction_counter += 1
 
@@ -171,10 +176,10 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                 assert np.sum(matches) == 1
 
                 # Infer chemical bonds from positions
-                molA = xyz_to_rdkit_mol(Z, xA, charge=0)
+                molA = xyz_to_rdkit_mol( Z, xA, charge=0 )
                 bonds_A = bond_set( molA )
                 pruned_bonds_A = prune_bonds_by_valence( bonds_A, xA, Z )
-                molB = xyz_to_rdkit_mol(Z, xB, charge=0)
+                molB = xyz_to_rdkit_mol( Z, xB, charge=0 )
                 bonds_B = bond_set( molB )
                 pruned_bonds_B = prune_bonds_by_valence( bonds_B, xB, Z )
 
@@ -184,7 +189,7 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                 distance_from_product = np.linalg.norm( (positions_data - xB[np.newaxis,:,:]).reshape(positions_data.shape[0], -1), axis=1)
                 indices = local_minima_indices( distance_from_reactant )
                 indices = np.insert( indices, 0, [1] )
-                indices = indices[-10:] # only keep the last 10 trajectories
+                indices = indices[-10:] 
                 contains_long_path = (max(indices[1:] - indices[0:-1]) > 15) or ((len(distance_from_reactant) - indices[-1]) > 15)
                 non_overlapping = (np.max(distance_from_product[np.min(indices):]) < np.min(distance_from_reactant[np.min(indices)]))
 
@@ -264,20 +269,31 @@ with h5py.File( os.path.join(data_directory, "Transition1x.h5"), "r") as f:
                 # Save the trajectories for this reaction.
                 with open( os.path.join(store_directory, f"{evaltype}_reaction_{reaction_counter}.pkl"), "wb") as sf:
                     pickle.dump( reaction_trajectories, sf )
-                with open( os.path.join(app_store_directory, f"{evaltype}_reaction_{reaction_counter}_molecule_{molecule}.json"), "w") as sf:
-                    trajectory = reaction_trajectories[-1]
+                    reaction_weights[ reaction_counter ] = 1.0 / n_reactions
+                    print( f"Number of trajectories for reaction {reaction_counter}: {len(reaction_trajectories)}. Also weight {reaction_weights[reaction_counter]}")
+                with open( os.path.join(store_directory_unique, f"{evaltype}_reaction_{reaction_counter}.pkl"), "wb") as sf:
+                    pickle.dump( reaction_trajectories[-1], sf )
+                    reaction_weights[ reaction_counter ] = 1.0 / n_reactions
+                    print( f"Number of trajectories for reaction {reaction_counter}: {len(reaction_trajectories)}. Also weight {reaction_weights[reaction_counter]}")
+                # with open( os.path.join(app_store_directory, f"{evaltype}_reaction_{reaction_counter}_molecule_{molecule}.json"), "w") as sf:
+                #     trajectory = reaction_trajectories[-1]
 
-                    # CoM enforcement for data validation.
-                    trajectory = enforceCOM( trajectory )
+                #     # CoM enforcement for data validation.
+                #     trajectory = enforceCOM( trajectory )
 
-                    # Store as JSON
-                    json_dict = { "Z" : trajectory.Z.tolist(), 
-                                "xA": trajectory.xA.tolist(),
-                                "xB": trajectory.xB.tolist(),
-                                "s": trajectory.s.tolist(),
-                                "x": trajectory.x.tolist(),
-                                "GA": trajectory.GA.tolist(),
-                                "GB": trajectory.GB.tolist()}
-                    json.dump( json_dict, sf )
+                #     # Store as JSON
+                #     json_dict = { "Z" : trajectory.Z.tolist(), 
+                #                 "xA": trajectory.xA.tolist(),
+                #                 "xB": trajectory.xB.tolist(),
+                #                 "s": trajectory.s.tolist(),
+                #                 "x": trajectory.x.tolist(),
+                #                 "GA": trajectory.GA.tolist(),
+                #                 "GB": trajectory.GB.tolist()}
+                #     json.dump( json_dict, sf )
                 storage_counter += 1
         print( f"Number of {evaltype} reactions store: {storage_counter} / {reaction_counter}" )
+
+        with open( os.path.join(store_directory_unique, f"{evaltype}_metadata.json"), "w" ) as mf:
+            print( "Storing Metadata" )
+            json_dict = { "reaction_weights" : reaction_weights }
+            json.dump( json_dict, mf )

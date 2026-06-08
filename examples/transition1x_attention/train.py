@@ -4,7 +4,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import matplotlib.pyplot as plt
 
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 import wandb
 from pathlib import Path
@@ -16,7 +16,7 @@ from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
 from EquivariantTransformer import EquivariantTransformer
 from chemdm.NewtonLoss import NewtonLoss
-from chemdm.util import getGradientNorm, perCoordinateRMSE, collate_molecules
+from chemdm.util import getGradientNorm, perCoordinateRMSE, collate_trajectories
 
 from typing import Tuple
 
@@ -50,23 +50,33 @@ def main( exp_name : str ):
     B = 1
     train_dataset = TransitionPathDataset( "train", data_directory )
     pin_memory = device_name.startswith("cuda")
+    train_sampler = WeightedRandomSampler(
+        weights=train_dataset.sample_weights,
+        num_samples=len(train_dataset),
+        replacement=True,
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=B,
-        shuffle=True,
+        sampler=train_sampler,
         num_workers=8,
-        collate_fn=collate_molecules,
+        collate_fn=collate_trajectories,
         pin_memory=pin_memory,
         persistent_workers=True, 
         prefetch_factor=2,
     )
     valid_dataset = TransitionPathDataset( "val", data_directory )
+    valid_sampler = WeightedRandomSampler(
+        weights=valid_dataset.sample_weights,
+        num_samples=len(valid_dataset),
+        replacement=True,
+    )
     valid_loader = DataLoader(
         valid_dataset,
         batch_size=B,
-        shuffle=False,
+        sampler=valid_sampler,
         num_workers=4,
-        collate_fn=collate_molecules,
+        collate_fn=collate_trajectories,
         pin_memory=pin_memory,
         persistent_workers=True,
         prefetch_factor=2,
