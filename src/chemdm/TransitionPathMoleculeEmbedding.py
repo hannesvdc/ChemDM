@@ -8,6 +8,8 @@ import torch.nn as nn
 from chemdm.MoleculeGraph import Molecule
 from chemdm.MoleculeInformation import (
     computeMoleculeInformation,
+    hybridization_features,
+    HYBRIDIZATION_FEATURE_DIM,
     DEFAULT_ATOMIC_NUMBERS,
     DEFAULT_RING_SIZES,
 )
@@ -88,11 +90,16 @@ class TPMoleculeEmbedding(nn.Module):
             + 1  # is_reactive_hydrogen
         )
 
+    def _hybridization_feature_dim( self ) -> int:
+        # g_A, g_B, g_B - g_A, |g_B - g_A| → 4 * 8 = 32 dims per atom.
+        return 4 * HYBRIDIZATION_FEATURE_DIM
+
     def _raw_feature_dim(self) -> int:
         return (
             self._common_feature_dim()
             + 2 * self._topology_feature_dim()
             + self._reaction_feature_dim()
+            + self._hybridization_feature_dim()
         )
     
     def build_common_features( self, info ) -> pt.Tensor:
@@ -169,6 +176,32 @@ class TPMoleculeEmbedding(nn.Module):
             dim=-1,
         )
 
+    @pt.no_grad()
+    def build_hybridization_features(
+        self,
+        xA: Molecule,
+        xB: Molecule,
+        *,
+        dtype: pt.dtype,
+        device: pt.device,
+    ) -> pt.Tensor:
+        """
+        Local-geometry descriptors computed at both endpoints, concatenated as
+        [g_A, g_B, g_B - g_A, |g_B - g_A|] per atom. See
+        `chemdm.MoleculeInformation.hybridization_features` for the per-endpoint
+        feature definitions. Returns (N, 4 * HYBRIDIZATION_FEATURE_DIM).
+        """
+        gA = hybridization_features(
+            xA.x.to(device=device, dtype=dtype),
+            xA.edge_index.to(device=device),
+        )
+        gB = hybridization_features(
+            xB.x.to(device=device, dtype=dtype),
+            xB.edge_index.to(device=device),
+        )
+        diff = gB - gA
+        return pt.cat( [gA, gB, diff, pt.abs(diff)], dim=-1 )
+
     def build_raw_features( self, xA: Molecule, xB: Molecule ) -> pt.Tensor:
         """
         Build raw scalar endpoint/change features before the learnable MLP.
@@ -225,6 +258,9 @@ class TPMoleculeEmbedding(nn.Module):
 
         reaction_features = self.build_reaction_features( xA, xB, dtype=dtype, device=device )
 
+        # Local-geometry / hybridization-like descriptors at both endpoints.
+        hyb_features = self.build_hybridization_features( xA, xB, dtype=dtype, device=device )
+
         # Actually append everything
         raw = pt.cat( [
                 common_features,
@@ -236,6 +272,7 @@ class TPMoleculeEmbedding(nn.Module):
                 ring_count_change,
                 abs_ring_count_change,
                 reaction_features,
+                hyb_features,
             ],
             dim=-1,
         )

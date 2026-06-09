@@ -462,3 +462,115 @@ def computeMoleculeInformation( molecule: Molecule,
         n_edges=int(molecule.edge_index.shape[0]),
         molecule_id=molecule_id,
     )
+
+
+# ============================================================
+# Hybridization-like local-geometry features (per atom, scalar)
+# ============================================================
+
+HYBRIDIZATION_FEATURE_DIM = 8
+
+_DEFAULT_SIGMA_LINEAR      = 0.15
+_DEFAULT_SIGMA_TRIGONAL    = 0.20
+_DEFAULT_SIGMA_TETRAHEDRAL = 0.20
+_DEFAULT_SIGMA_PLANAR      = 0.20
+
+
+@pt.no_grad()
+def hybridization_features(
+    x:                  pt.Tensor,
+    edge_index:         pt.Tensor,
+    *,
+    sigma_linear:       float = _DEFAULT_SIGMA_LINEAR,
+    sigma_trigonal:     float = _DEFAULT_SIGMA_TRIGONAL,
+    sigma_tetrahedral:  float = _DEFAULT_SIGMA_TETRAHEDRAL,
+    sigma_planar:       float = _DEFAULT_SIGMA_PLANAR,
+) -> pt.Tensor:
+    """
+    Per-atom local-geometry features computed from bonded neighbors only.
+
+    Returns a `(N, 8)` tensor with columns
+
+        0: mean_cos               — mean of pairwise cosines of bond directions
+        1: min_cos                — most-acute pair (closest to 180°)
+        2: max_cos                — most-obtuse pair (closest to 0°)
+        3: linearity              — exp(-(min_cos + 1)² / σ_linear²),       sp-like
+        4: trigonal               — exp(-mean((c + 1/2)²) / σ_trigonal²),    sp²-like
+        5: tetrahedral            — exp(-mean((c + 1/3)²) / σ_tetrahedral²), sp³-like
+        6: planarity              — exp(-pyr_vol² / σ_planar²)  (degree-3 atoms only)
+        7: pyramidal_volume       — |v1 · (v2 × v3)|             (degree-3 atoms only)
+
+    Atoms with degree < 2 (isolated atoms, terminal H, …) get all-zero
+    feature vectors. Atoms with degree != 3 get zero for the last two
+    columns since the scalar triple product needs exactly three neighbors.
+
+    Parameters
+    ----------
+    x:           (N, 3)   atom positions
+    edge_index:  (E, 2)   bonded neighbors as directed atom-index pairs (both
+                          directions); only the `src → dst` direction is read,
+                          so each undirected bond should appear twice.
+    sigma_*:     gaussian widths controlling how tightly each soft score
+                 concentrates around its ideal cosine. Defaults from the
+                 design spec.
+    """
+    assert x.ndim == 2 and x.shape[1] == 3
+    assert edge_index.ndim == 2 and edge_index.shape[1] == 2
+
+    N = int(x.shape[0])
+    device = x.device
+    dtype = x.dtype
+
+    features = pt.zeros( (N, HYBRIDIZATION_FEATURE_DIM), dtype=dtype, device=device )
+    if edge_index.numel() == 0 or N == 0:
+        return features
+
+    src = edge_index[:, 0]
+    dst = edge_index[:, 1]
+
+    bond_vec = x[dst] - x[src]                                                                    # (E, 3)
+    bond_dir = bond_vec / pt.linalg.norm( bond_vec, dim=-1, keepdim=True ).clamp_min(1.0e-12)     # (E, 3)
+
+    # Sort edges by src so each atom's outgoing edges form a contiguous block.
+    order      = pt.argsort( src, stable=True )
+    v_sorted   = bond_dir[order]
+    counts     = pt.bincount( src, minlength=N )                          # (N,) degree of each atom
+    offsets    = pt.cat([ pt.zeros(1, dtype=pt.long, device=device),
+                          counts.cumsum(0) ])                              # (N+1,)
+
+    for i in range(N):
+        d = int( counts[i] )
+        if d < 2:
+            continue
+
+        s = int( offsets[i] )
+        e = int( offsets[i + 1] )
+        v_i = v_sorted[s:e]                                                # (d, 3)
+
+        cos_mat = v_i @ v_i.T                                              # (d, d) symmetric
+        iu      = pt.triu_indices( d, d, offset=1, device=device )
+        pairs   = cos_mat[iu[0], iu[1]]                                    # (d*(d-1)/2,)
+
+        mean_cos = pairs.mean()
+        min_cos  = pairs.min()
+        max_cos  = pairs.max()
+
+        linearity   = pt.exp( -((min_cos + 1.0) ** 2)             / (sigma_linear      ** 2) )
+        trigonal    = pt.exp( -((pairs + 0.5)     ** 2).mean()    / (sigma_trigonal    ** 2) )
+        tetrahedral = pt.exp( -((pairs + 1.0/3.0) ** 2).mean()    / (sigma_tetrahedral ** 2) )
+
+        if d == 3:
+            v1, v2, v3 = v_i[0], v_i[1], v_i[2]
+            pyr_vol    = pt.abs( (v1 * pt.linalg.cross( v2, v3, dim=-1 )).sum() )
+            planarity  = pt.exp( -pyr_vol ** 2 / (sigma_planar ** 2) )
+        else:
+            pyr_vol    = pt.zeros((), dtype=dtype, device=device)
+            planarity  = pt.zeros((), dtype=dtype, device=device)
+
+        features[i] = pt.stack([
+            mean_cos, min_cos, max_cos,
+            linearity, trigonal, tetrahedral,
+            planarity, pyr_vol,
+        ])
+
+    return features
