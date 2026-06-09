@@ -164,11 +164,13 @@ def main( exp_name: str ) -> None:
     train_loader = DataLoader(
         train_ds, batch_size=BATCH_SIZE, shuffle=True,
         collate_fn=collate_torsional, num_workers=NUM_WORKERS,
+        persistent_workers=NUM_WORKERS > 0, prefetch_factor=2 if NUM_WORKERS > 0 else None,
         drop_last=True,
     )
     val_loader = DataLoader(
         val_ds, batch_size=BATCH_SIZE, shuffle=False,
         collate_fn=collate_torsional, num_workers=NUM_WORKERS,
+        persistent_workers=NUM_WORKERS > 0, prefetch_factor=2 if NUM_WORKERS > 0 else None,
         drop_last=False,
     )
 
@@ -225,6 +227,7 @@ def main( exp_name: str ) -> None:
 
     # Training
     best_val_loss = float("inf")
+    global_step   = 0
     for epoch in range(1, N_EPOCHS + 1):
         model.train()
 
@@ -239,14 +242,21 @@ def main( exp_name: str ) -> None:
             loss.backward()
             optimizer.step()
 
-            running_loss += float(loss.item())
+            loss_val = float(loss.item())
+            running_loss += loss_val
             n_steps += 1
+            global_step += 1
             if step % LOG_EVERY == 0:
                 avg = running_loss / max(n_steps, 1)
                 print(
                     f"  Epoch {epoch}  step {step:>5d}/{len(train_loader):<5d}  "
-                    f"train_loss = {loss.item():.4f}  (running avg {avg:.4f})"
+                    f"train_loss = {loss_val:.4f}  (running avg {avg:.4f})"
                 )
+                if setup_wandb and run is not None:
+                    run.log({
+                        "global_step":     global_step,
+                        "train_loss_step": loss_val,
+                    })
 
         train_loss = running_loss / n_steps
         epoch_dt = time.time() - epoch_t0
