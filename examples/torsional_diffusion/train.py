@@ -34,6 +34,7 @@ from pathlib import Path
 import torch as pt
 import wandb
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from dotenv import load_dotenv
 
 from dataset import TorsionalDataset, collate_torsional
@@ -44,13 +45,15 @@ from chemdm.geometry import apply_torsion_update
 from chemdm.MoleculeGraph import findAllNeighbors
 
 # Training setup
-BATCH_SIZE   = 16
-N_EPOCHS     = 5
-LR           = 3.0e-4
-CUTOFF       = 5.0
-LOG_EVERY    = 100              # steps between train-loss prints
-NUM_WORKERS  = 0                # DataLoader workers; >0 needs collator pickle-ability
-DTYPE        = pt.float32       # float dtype for both model and per-batch tensors
+BATCH_SIZE = 128
+N_EPOCHS = 1000
+LR_MAX = 3.0e-4          # peak learning rate (end of warmup)
+LR_MIN = 3.0e-6          # floor learning rate (end of cosine + start of warmup)
+WARMUP_EPOCHS = 10               # linear warmup duration
+CUTOFF = 5.0
+LOG_EVERY = 100             # steps between train-loss prints
+NUM_WORKERS = 0               # DataLoader workers; >0 needs collator pickle-ability
+DTYPE = pt.float32      # float dtype for both model and per-batch tensors
 
 # Weights & Biases
 WANDB_ENTITY  = "hannesvdc-open-numerics"
@@ -174,8 +177,26 @@ def main( exp_name: str ) -> None:
     n_params = sum( p.numel() for p in model.parameters() )
     print(f"model parameters: {n_params:,}")
 
-    # Regular Adam optimizer. Might add weight decay later.
-    optimizer = pt.optim.Adam( model.parameters(), lr=LR )
+    # Adam (no weight decay for v1) with a linear warmup + cosine annealing LR
+    # schedule, stepped per epoch. The schedule starts at LR_MIN, warms up to
+    # LR_MAX over WARMUP_EPOCHS, then cosines back down to LR_MIN by the end.
+    optimizer = pt.optim.Adam( model.parameters(), lr=LR_MAX )
+    warmup_scheduler = LinearLR(
+        optimizer,
+        start_factor=LR_MIN / LR_MAX,
+        end_factor=1.0,
+        total_iters=WARMUP_EPOCHS,
+    )
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=N_EPOCHS - WARMUP_EPOCHS,
+        eta_min=LR_MIN,
+    )
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[WARMUP_EPOCHS],
+    )
 
     # Config snapshot + optional Weights&Biases logging.
     experiment_config = {
@@ -183,8 +204,10 @@ def main( exp_name: str ) -> None:
         "experiment_name":        exp_name,
         "device":                 device_str,
         "batch_size":             BATCH_SIZE,
-        "n_epochs":                N_EPOCHS,
-        "lr":                     LR,
+        "n_epochs":               N_EPOCHS,
+        "lr_max":                 LR_MAX,
+        "lr_min":                 LR_MIN,
+        "warmup_epochs":          WARMUP_EPOCHS,
         "cutoff":                 CUTOFF,
         "n_trainable_parameters": n_params,
     }
@@ -272,6 +295,10 @@ def main( exp_name: str ) -> None:
                 "epoch_time":    epoch_dt,
                 "lr":            optimizer.param_groups[0]["lr"],
             })
+
+        # Advance the LR schedule. Stepping per epoch (not per batch) matches
+        # the transition1x convention; the cosine cycle covers N_EPOCHS - WARMUP.
+        scheduler.step()
 
 
 if __name__ == "__main__":

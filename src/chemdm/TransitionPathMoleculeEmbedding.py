@@ -5,8 +5,6 @@ from typing import Optional
 import torch as pt
 import torch.nn as nn
 
-from dataclasses import dataclass
-
 from chemdm.MoleculeGraph import Molecule
 from chemdm.MoleculeInformation import (
     computeMoleculeInformation,
