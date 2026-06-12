@@ -51,7 +51,7 @@ LR_MAX = 3.0e-4          # peak learning rate (end of warmup)
 LR_MIN = 3.0e-6          # floor learning rate (end of cosine + start of warmup)
 WARMUP_EPOCHS = 10               # linear warmup duration
 CUTOFF = 5.0
-LOG_EVERY = 100             # steps between train-loss prints
+LOG_EVERY = 10             # steps between train-loss prints
 NUM_WORKERS = 0               # DataLoader workers; >0 needs collator pickle-ability
 DTYPE = pt.float32      # float dtype for both model and per-batch tensors
 
@@ -97,10 +97,10 @@ def perturb_and_score( model: TorsionalScoreNetwork, batch: dict, device: pt.dev
     # Move the batch onto the compute device. BatchedMoleculeGraph.to() handles
     # Z (long, device only) and x (float, device + dtype) consistently.
     mol = batch["mol"].to( device=device, dtype=DTYPE )
-    bonds         = batch["bonds"].to( device=device )
+    bonds = batch["bonds"].to( device=device )
     side_atom_idx = batch["side_atom_idx"].to( device=device )
     side_bond_idx = batch["side_bond_idx"].to( device=device )
-    bond_batch    = batch["bond_batch"].to( device=device )
+    bond_batch = batch["bond_batch"].to( device=device )
 
     B = int( bond_batch.max().item() ) + 1            # number of molecules in batch
     m = bonds.shape[0]                                # total rotatable bonds in batch
