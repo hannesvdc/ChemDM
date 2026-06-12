@@ -19,6 +19,7 @@ __pycache__/
 models/**
 **.npy
 **.pth
+**.pt
 **.png
 
 # Distribution / packaging

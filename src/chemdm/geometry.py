@@ -224,6 +224,10 @@ def apply_torsion_update( x:  pt.Tensor,
     processed when multiple Δτ_i are applied. We process bonds in their
     natural order.
 
+    Important: this function assumes bonds are undirected, and b is always
+    the left (fixed) end point, and c will be rotated. If a bond appears twice
+    (b -> c) and (c -> b), two torsion updates will be applied (one in each direction).
+
     Parameters
     ----------
     x : (N, 3) float

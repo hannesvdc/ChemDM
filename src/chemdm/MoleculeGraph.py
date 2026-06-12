@@ -2,6 +2,7 @@ import torch as pt
 
 import chemdm.graph.algorithms as alg
 import chemdm.graph.rings as rings
+from chemdm.graph.kdtree import KDTree
 
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Self
@@ -256,6 +257,85 @@ def findAllDistanceNeighbors( molecule: Molecule,
 
 
 @pt.no_grad()
+def findAllDistanceNeighbors_gpu( molecule: Molecule,
+                                  cutoff: float
+                                ) -> pt.Tensor:
+    """
+    On-device version of `findAllDistanceNeighbors` using the native KDTree
+    in `chemdm.graph.kdtree`. Same contract: shape (n_neighbors, 2), symmetric
+    (both directions), excludes self-edges, and (for batched molecules)
+    excludes cross-molecule edges via a fourth bias dimension.
+
+    Stays on `molecule.x.device` for the whole call — no CPU round-trip and
+    no `pt.unique` / `scatter_reduce`, so the sampler doesn't have to sync.
+    """
+    if isinstance( molecule, BatchedMoleculeGraph ):
+        bias = molecule.molecule_id[:, None].to( dtype=molecule.x.dtype ) * (2.0 * cutoff)
+        x = pt.cat( [ molecule.x, bias ], dim=1 )
+    else:
+        x = molecule.x
+
+    pairs = KDTree( x ).query_pairs( r=cutoff )      # (E, 2), i<j, long
+    if pairs.numel() == 0:
+        return pt.empty( (0, 2), dtype=pt.long, device=x.device )
+
+    return pt.cat( [ pairs, pairs.flip( dims=(1,) ) ], dim=0 )
+
+
+@pt.no_grad()
+def findAllNeighbors_gpu( molecule : Molecule,
+                          d_cutoff : float
+                        ) -> Tuple[pt.Tensor, pt.Tensor]:
+    """
+    On-device version of `findAllNeighbors`. Unique union of bond edges and
+    distance-cutoff edges plus a float32 `is_bond` flag.
+
+    Skips `pt.unique(dim=0)` and `scatter_reduce` (both CPU-syncing on MPS)
+    by packing (src, dst) into a 1-D int64 key and using sorted searchsorted
+    to detect which distance edges are also bonds. Assumes both edge sets are
+    internally duplicate-free — true in practice (dataset bond lists and
+    `KDTree.query_pairs`-derived symmetric edges are each unique).
+    """
+    bond_edges = molecule.edge_index.long()
+    dist_edges = findAllDistanceNeighbors_gpu( molecule, d_cutoff )
+    return _mergeBondAndDistanceNeighbors_gpu(
+        bond_edges, dist_edges, n_atoms=int( molecule.Z.shape[0] ),
+    )
+
+
+def _mergeBondAndDistanceNeighbors_gpu(
+    bond_edges: pt.Tensor,
+    dist_edges: pt.Tensor,
+    n_atoms: int,
+) -> Tuple[pt.Tensor, pt.Tensor]:
+    device  = bond_edges.device
+    n_bonds = bond_edges.shape[0]
+    n_dist  = dist_edges.shape[0]
+
+    if n_bonds == 0:
+        return dist_edges, pt.zeros( n_dist, dtype=pt.float32, device=device )
+    if n_dist == 0:
+        return bond_edges, pt.ones( n_bonds, dtype=pt.float32, device=device )
+
+    # Pack (src, dst) -> src * stride + dst. stride >= n_atoms keeps the map injective.
+    stride = max( n_atoms, 1 )
+    bond_keys = bond_edges[:, 0] * stride + bond_edges[:, 1]
+    dist_keys = dist_edges[:, 0] * stride + dist_edges[:, 1]
+
+    bond_sorted, _ = pt.sort( bond_keys )
+    idx = pt.searchsorted( bond_sorted, dist_keys ).clamp( max=bond_sorted.shape[0] - 1 )
+    is_dup = bond_sorted[idx] == dist_keys
+
+    non_dup_dist = dist_edges[ ~is_dup ]
+    all_edges = pt.cat( [ bond_edges, non_dup_dist ], dim=0 )
+    is_bond = pt.cat([
+        pt.ones ( n_bonds,                dtype=pt.float32, device=device ),
+        pt.zeros( non_dup_dist.shape[0],  dtype=pt.float32, device=device ),
+    ])
+    return all_edges, is_bond
+
+
+@pt.no_grad()
 def findAllNeighbors( molecule : Molecule,
                       d_cutoff : float
                     ) -> Tuple[pt.Tensor, pt.Tensor]:
@@ -280,6 +360,131 @@ def findAllNeighbors( molecule : Molecule,
     bond_neighbors = molecule.edge_index
     distance_neighbors = findAllDistanceNeighbors( molecule, d_cutoff )
     return alg.mergeBondAndDistanceNeighbors(bond_neighbors, distance_neighbors)
+
+
+def _unionEdgesWithMembership(
+    edge_sets: List[pt.Tensor],
+    n_atoms:   int,
+) -> Tuple[pt.Tensor, List[pt.Tensor]]:
+    """
+    Union of N internally-unique edge_index tensors. Returns the unique
+    edge list and a per-input boolean membership tensor (True where the
+    unique edge belongs to that input set).
+
+    Replaces the `pt.unique(dim=0) + scatter_reduce(amax)` pattern with
+    `pt.argsort` + first-occurrence selection + `pt.searchsorted` so the
+    work stays on-device with no CPU fallback on MPS.
+    """
+    assert len( edge_sets ) > 0, "edge_sets must be non-empty"
+    device = edge_sets[0].device
+    stride = max( n_atoms, 1 )
+
+    edge_sets_long = [ es.long() for es in edge_sets ]
+    sorted_keys_per_set: List[pt.Tensor] = []
+    for es in edge_sets_long:
+        if es.numel() == 0:
+            sorted_keys_per_set.append( pt.empty( 0, dtype=pt.long, device=device ) )
+        else:
+            keys = es[:, 0] * stride + es[:, 1]
+            sorted_keys_per_set.append( pt.sort( keys ).values )
+
+    all_edges = pt.cat( edge_sets_long, dim=0 )
+    if all_edges.shape[0] == 0:
+        empty_mask = pt.empty( 0, dtype=pt.bool, device=device )
+        return ( pt.empty( (0, 2), dtype=pt.long, device=device ),
+                 [ empty_mask for _ in edge_sets ] )
+
+    all_keys = all_edges[:, 0] * stride + all_edges[:, 1]
+    sort_idx = pt.argsort( all_keys )
+    keys_s   = all_keys[sort_idx]
+    edges_s  = all_edges[sort_idx]
+
+    is_first = pt.cat([
+        pt.ones( 1, dtype=pt.bool, device=device ),
+        keys_s[1:] != keys_s[:-1],
+    ])
+    unique_edges = edges_s[is_first]
+    unique_keys  = keys_s [is_first]
+
+    memberships: List[pt.Tensor] = []
+    for sk in sorted_keys_per_set:
+        if sk.numel() == 0:
+            memberships.append( pt.zeros( unique_edges.shape[0], dtype=pt.bool, device=device ) )
+        else:
+            idx = pt.searchsorted( sk, unique_keys ).clamp( max=sk.shape[0] - 1 )
+            memberships.append( sk[idx] == unique_keys )
+
+    return unique_edges, memberships
+
+
+@pt.no_grad()
+def findAllNeighborsReactantProduct_gpu(
+    moleculeA : Molecule,
+    moleculeB : Molecule,
+    x         : pt.Tensor,
+    d_cutoff  : float,
+) -> Tuple[pt.Tensor, pt.Tensor, pt.Tensor]:
+    """
+    On-device version of `findAllNeighborsReactantProduct`. Same contract:
+    union of `bonds_A`, `bonds_B`, and the distance-cutoff edges computed on
+    the intermediate coordinates `x`, plus float32 `is_bond_A` / `is_bond_B`
+    flags. Uses the on-device KDTree and avoids `pt.unique(dim=0)` /
+    `scatter_reduce`.
+    """
+    assert pt.all( moleculeA.Z == moleculeB.Z ), \
+        f"Both molecules must have the same atoms in the same ordering."
+    if isinstance( moleculeA, BatchedMoleculeGraph ):
+        assert isinstance( moleculeB, BatchedMoleculeGraph ), \
+            f"If either molecule is batched, so must the other be."
+        assert pt.all( moleculeA.molecule_id == moleculeB.molecule_id ), \
+            f"Batched molecule A and B must represent the same batch."
+
+    moleculeX = moleculeA.copyWithNewPositions( x )
+    dist_edges = findAllDistanceNeighbors_gpu( moleculeX, d_cutoff )
+
+    bonds_A = moleculeA.edge_index.long()
+    bonds_B = moleculeB.edge_index.long()
+
+    unique_edges, memberships = _unionEdgesWithMembership(
+        [ bonds_A, bonds_B, dist_edges ],
+        n_atoms=int( moleculeA.Z.shape[0] ),
+    )
+    is_bond_A = memberships[0].to( dtype=pt.float32 )
+    is_bond_B = memberships[1].to( dtype=pt.float32 )
+    return unique_edges, is_bond_A, is_bond_B
+
+
+@pt.no_grad()
+def findFixedUnionNeighbors_gpu(
+    moleculeA : Molecule,
+    moleculeB : Molecule,
+    d_cutoff  : float,
+) -> Tuple[pt.Tensor, pt.Tensor, pt.Tensor]:
+    """
+    On-device version of `findFixedUnionNeighbors`. Union of `bonds_A`,
+    `bonds_B`, distance-cutoff edges at `xA`, and distance-cutoff edges at
+    `xB`. Returns float32 `is_bond_A` / `is_bond_B` flags.
+    """
+    assert pt.all( moleculeA.Z == moleculeB.Z ), \
+        f"Both molecules must have the same atoms in the same ordering."
+    if isinstance( moleculeA, BatchedMoleculeGraph ):
+        assert isinstance( moleculeB, BatchedMoleculeGraph ), \
+            f"If either molecule is batched, so must the other be."
+        assert pt.all( moleculeA.molecule_id == moleculeB.molecule_id ), \
+            f"Batched molecule A and B must represent the same batch."
+
+    bonds_A = moleculeA.edge_index.long()
+    bonds_B = moleculeB.edge_index.long()
+    dist_A  = findAllDistanceNeighbors_gpu( moleculeA, d_cutoff )
+    dist_B  = findAllDistanceNeighbors_gpu( moleculeB, d_cutoff )
+
+    unique_edges, memberships = _unionEdgesWithMembership(
+        [ bonds_A, bonds_B, dist_A, dist_B ],
+        n_atoms=int( moleculeA.Z.shape[0] ),
+    )
+    is_bond_A = memberships[0].to( dtype=pt.float32 )
+    is_bond_B = memberships[1].to( dtype=pt.float32 )
+    return unique_edges, is_bond_A, is_bond_B
 
 
 @pt.no_grad()
