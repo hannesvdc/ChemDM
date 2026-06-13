@@ -140,7 +140,7 @@ class PseudotorqueHead(nn.Module):
     def forward( self,
                  f: pt.Tensor,                # (N, irreps_node.dim)
                  mol,                         # Molecule (carries Z, x, molecule_id)
-                 bonds: pt.Tensor,            # (m, 2)  -- global (b, c) atom indices
+                 rotatable_bonds: pt.Tensor,  # (m, 2)  -- global (b, c) atom indices
                  bond_batch: pt.Tensor,       # (m,)    -- molecule index per bond
                  time_emb_per_mol: pt.Tensor, # (B, time_dim)
     ) -> pt.Tensor:
@@ -156,8 +156,8 @@ class PseudotorqueHead(nn.Module):
         device = x.device
         dtype = x.dtype
 
-        b_idx = bonds[:, 0]
-        c_idx = bonds[:, 1]
+        b_idx = rotatable_bonds[:, 0]
+        c_idx = rotatable_bonds[:, 1]
 
         bond_vec = x[c_idx] - x[b_idx]
         bond_len = pt.linalg.norm(bond_vec, dim=-1, keepdim=True).clamp_min(1.0e-8)
@@ -209,10 +209,10 @@ class PseudotorqueHead(nn.Module):
 
         # Attention.
         score = (Q_per_pair * K).sum(dim=-1, keepdim=True) * self.score_scale  # (P, 1)
-        alpha = segment_softmax(score, bond_idx, n_segments=bonds.shape[0])    # (P, 1)
+        alpha = segment_softmax(score, bond_idx, n_segments=rotatable_bonds.shape[0])    # (P, 1)
 
         weighted_V = alpha * V                                # (P, n_pseudo)
-        agg = pt.zeros( bonds.shape[0], self.n_pseudo, dtype=dtype, device=device )
+        agg = pt.zeros( rotatable_bonds.shape[0], self.n_pseudo, dtype=dtype, device=device )
         agg.index_add_( 0, bond_idx, weighted_V )               # (m, n_pseudo)
 
         # Final readout: linear, no bias, no nonlinearity → preserves 0o.

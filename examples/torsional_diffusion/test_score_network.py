@@ -83,13 +83,13 @@ def build_toy_batch(dtype: pt.dtype) -> dict:
     # value (e.g. if it were used as a position-dependent quantity).
     is_bond = (pt.rand( neighbors.shape[1] ) < 0.3).to(dtype)
 
-    bonds      = pt.tensor([[0, 1], [2, 3], [N1 + 0, N1 + 1], [N1 + 2, N1 + 3]])
-    bond_batch = pt.tensor([0, 0, 1, 1])
+    rotatable_bonds = pt.tensor([[0, 1], [2, 3], [N1 + 0, N1 + 1], [N1 + 2, N1 + 3]])
+    bond_batch      = pt.tensor([0, 0, 1, 1])
 
     return dict(
         mol=mol, t=t,
         neighbors=neighbors, is_bond=is_bond,
-        bonds=bonds, bond_batch=bond_batch,
+        rotatable_bonds=rotatable_bonds, bond_batch=bond_batch,
     )
 
 
@@ -115,7 +115,7 @@ def run_checks(dtype: pt.dtype) -> None:
         return model(
             mol=mol_at_x, t=batch["t"],
             neighbors=batch["neighbors"], is_bond=batch["is_bond"],
-            bonds=batch["bonds"], bond_batch=batch["bond_batch"],
+            rotatable_bonds=batch["rotatable_bonds"], bond_batch=batch["bond_batch"],
         )
 
     out = call(batch["mol"].x)

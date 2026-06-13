@@ -50,11 +50,11 @@ SIGMA_MAX_DEFAULT = math.pi
 @pt.no_grad()
 def sample_torsional_diffusion(
     model:         TorsionalScoreNetwork,
-    mol:           Molecule,                 # BatchedMoleculeGraph carrying Z, x_init, molecule_id
-    bonds:         pt.Tensor,                # (m_total, 2)   rotatable bond endpoints (global atom indices)
-    side_atom_idx: pt.Tensor,                # (P_total,)     atoms on the c-side
-    side_bond_idx: pt.Tensor,                # (P_total,)     bond index per side-atom
-    bond_batch:    pt.Tensor,                # (m_total,)     molecule index per bond
+    mol:             Molecule,               # BatchedMoleculeGraph carrying Z, x_init, molecule_id
+    rotatable_bonds: pt.Tensor,              # (m_total, 2)   rotatable bond endpoints (global atom indices)
+    side_atom_idx:   pt.Tensor,              # (P_total,)     atoms on the c-side
+    side_bond_idx:   pt.Tensor,              # (P_total,)     bond index per side-atom
+    bond_batch:      pt.Tensor,              # (m_total,)     molecule index per bond
     *,
     n_steps:       int   = 20,
     sigma_min:     float = SIGMA_MIN_DEFAULT,
@@ -73,13 +73,13 @@ def sample_torsional_diffusion(
     device = mol.x.device
 
     B = int( bond_batch.max().item() ) + 1
-    m = bonds.shape[0]
+    m = rotatable_bonds.shape[0]
 
     # 1. Uniform-on-torus initialization. Adding Uniform([0, 2π)) to whatever
     #    torsion the input molecule has gives Uniform([0, 2π)) mod 2π.
     delta_tau_init = pt.rand( m, device=device, dtype=dtype ) * (2.0 * math.pi)
     x = apply_torsion_update(
-        mol.x, bonds, side_atom_idx, side_bond_idx, delta_tau_init,
+        mol.x, rotatable_bonds, side_atom_idx, side_bond_idx, delta_tau_init,
     )
 
     # 2. Reverse SDE loop. Steps go from t = 1 down to t = 0 in dt = 1/K
@@ -103,7 +103,7 @@ def sample_torsional_diffusion(
         score = model(
             mol=mol_t, t=t_per_mol,
             neighbors=neighbors, is_bond=is_bond,
-            bonds=bonds, bond_batch=bond_batch,
+            rotatable_bonds=rotatable_bonds, bond_batch=bond_batch,
         )
 
         # Reverse SDE step. Drop the noise on the last step (k == 1) for a
@@ -116,7 +116,7 @@ def sample_torsional_diffusion(
         delta_tau_step = drift + noise
 
         x = apply_torsion_update(
-            x, bonds, side_atom_idx, side_bond_idx, delta_tau_step,
+            x, rotatable_bonds, side_atom_idx, side_bond_idx, delta_tau_step,
         )
 
     return x

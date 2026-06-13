@@ -147,7 +147,7 @@ class TorsionalScoreNetwork(nn.Module):
                  t: pt.Tensor,                # (B,)  diffusion time ∈ [0, 1]
                  neighbors: pt.Tensor,        # (2, E)  trunk's radius+bond graph
                  is_bond: pt.Tensor,          # (E,)    1.0 if edge is a covalent bond
-                 bonds: pt.Tensor,            # (m, 2)
+                 rotatable_bonds: pt.Tensor,  # (m, 2)
                  bond_batch: pt.Tensor,       # (m,)
     ) -> pt.Tensor:
         """
@@ -180,7 +180,7 @@ class TorsionalScoreNetwork(nn.Module):
         return self.head(
             f=f,
             mol=mol,
-            bonds=bonds,
+            rotatable_bonds=rotatable_bonds,
             bond_batch=bond_batch,
             time_emb_per_mol=time_emb,
         )

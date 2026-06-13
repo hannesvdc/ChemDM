@@ -31,8 +31,8 @@ Per-split .pt file layout (a dict):
 
     mol_smiles     : list[str]                       length M
     mol_Z          : list[Tensor (N_i,) long]        length M
-    mol_edge_index : list[Tensor (E_i, 2) long]      length M  — covalent bonds, both directions
-    mol_bonds      : list[Tensor (m_i, 2) long]      length M  — rotatable bonds, canonical b<c
+    mol_edge_index      : list[Tensor (E_i, 2) long]      length M  — covalent bonds, both directions
+    mol_rotatable_bonds : list[Tensor (m_i, 2) long]      length M  — rotatable bonds, canonical b<c
     mol_side_atom  : list[Tensor (P_i,) long]        length M  (COO)
     mol_side_bond  : list[Tensor (P_i,) long]        length M  (COO)
     x_flat         : Tensor (sum_c N_c, 3) float32             — all conformer positions concatenated
@@ -96,7 +96,7 @@ def scan_and_split( qm9_dir: Path, train_frac: float, val_frac: float, seed: int
             if n_failed <= 5:
                 print( f"  skip {fn}: {e}" )
             continue
-        if d.bonds.shape[0] == 0:
+        if d.rotatable_bonds.shape[0] == 0:
             n_zero_rot += 1
             continue
         smiles_keep.append( d.smiles )
@@ -125,12 +125,12 @@ def preparse_split( qm9_dir: Path, smiles_list: list[str] ) -> dict:
     Load every (mol, conformer) pair for one split and pack into the .pt layout
     documented at the top of this file.
     """
-    mol_smiles     : list[str]       = []
-    mol_Z          : list[pt.Tensor] = []
-    mol_edge_index : list[pt.Tensor] = []   # covalent bonds, (E, 2) per mol — for findAllNeighbors
-    mol_bonds      : list[pt.Tensor] = []
-    mol_side_atom  : list[pt.Tensor] = []
-    mol_side_bond  : list[pt.Tensor] = []
+    mol_smiles          : list[str]       = []
+    mol_Z               : list[pt.Tensor] = []
+    mol_edge_index      : list[pt.Tensor] = []   # covalent bonds, (E, 2) per mol — for findAllNeighbors
+    mol_rotatable_bonds : list[pt.Tensor] = []
+    mol_side_atom       : list[pt.Tensor] = []
+    mol_side_bond       : list[pt.Tensor] = []
 
     # Accumulate per-conformer positions as individual tensors during the
     # parse loop, then cat() them into one flat tensor at the end. This
@@ -150,12 +150,12 @@ def preparse_split( qm9_dir: Path, smiles_list: list[str] ) -> dict:
             print( f"  parsed {m:>7,d}/{len(smiles_list):,}  ({m/dt:.0f} mol/s, eta {eta:.0f}s)" )
         d = load_qm9_molecule( qm9_dir / f"{smi}.pickle" )
 
-        mol_smiles.append    ( d.smiles )
-        mol_Z.append         ( d.Z )
-        mol_edge_index.append( d.edge_index )
-        mol_bonds.append     ( d.bonds )
-        mol_side_atom.append ( d.side_atom_idx )
-        mol_side_bond.append ( d.side_bond_idx )
+        mol_smiles.append         ( d.smiles )
+        mol_Z.append              ( d.Z )
+        mol_edge_index.append     ( d.edge_index )
+        mol_rotatable_bonds.append( d.rotatable_bonds )
+        mol_side_atom.append      ( d.side_atom_idx )
+        mol_side_bond.append      ( d.side_bond_idx )
 
         N = int( d.Z.shape[0] )
         for conf in d.conformers:
@@ -168,15 +168,15 @@ def preparse_split( qm9_dir: Path, smiles_list: list[str] ) -> dict:
     mol_id = pt.tensor( mol_id_flat, dtype=pt.long )
 
     return {
-        "mol_smiles":     mol_smiles,
-        "mol_Z":          mol_Z,
-        "mol_edge_index": mol_edge_index,
-        "mol_bonds":      mol_bonds,
-        "mol_side_atom":  mol_side_atom,
-        "mol_side_bond":  mol_side_bond,
-        "x_flat":         x_flat,
-        "x_offset":       x_offset,
-        "mol_id":         mol_id,
+        "mol_smiles":          mol_smiles,
+        "mol_Z":               mol_Z,
+        "mol_edge_index":      mol_edge_index,
+        "mol_rotatable_bonds": mol_rotatable_bonds,
+        "mol_side_atom":       mol_side_atom,
+        "mol_side_bond":       mol_side_bond,
+        "x_flat":              x_flat,
+        "x_offset":            x_offset,
+        "mol_id":              mol_id,
     }
 
 

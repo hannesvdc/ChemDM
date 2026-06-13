@@ -42,10 +42,10 @@ class TorsionalDataset( Dataset ):
 
     Returned by __getitem__(idx):
 
-        mol            MoleculeGraph    Z, conformer positions, empty chemistry bonds
-        bonds          (m, 2)  long     rotatable bond endpoints, b < c, atom-local indices
-        side_atom_idx  (P,)    long     atoms on the c-side of each bond, atom-local indices
-        side_bond_idx  (P,)    long     which bond (0..m-1) each side-atom belongs to
+        mol              MoleculeGraph    Z, conformer positions, empty chemistry bonds
+        rotatable_bonds  (m, 2)  long     rotatable bond endpoints, b < c, atom-local indices
+        side_atom_idx    (P,)    long     atoms on the c-side of each bond, atom-local indices
+        side_bond_idx    (P,)    long     which bond (0..m-1) each side-atom belongs to
 
     Topology fields (Z, rotatable bonds, side_*) are shared across all conformers
     of a given molecule — `__getitem__` looks them up by `mol_id[idx]` rather than
@@ -54,12 +54,12 @@ class TorsionalDataset( Dataset ):
 
     def __init__( self, split_pt: Path ):
         data = pt.load( split_pt, weights_only=False )
-        self.mol_smiles     = data["mol_smiles"]
-        self.mol_Z          = data["mol_Z"]
-        self.mol_edge_index = data["mol_edge_index"]   # covalent bonds per mol, (E_i, 2)
-        self.mol_bonds      = data["mol_bonds"]
-        self.mol_side_atom  = data["mol_side_atom"]
-        self.mol_side_bond  = data["mol_side_bond"]
+        self.mol_smiles          = data["mol_smiles"]
+        self.mol_Z               = data["mol_Z"]
+        self.mol_edge_index      = data["mol_edge_index"]   # covalent bonds per mol, (E_i, 2)
+        self.mol_rotatable_bonds = data["mol_rotatable_bonds"]
+        self.mol_side_atom       = data["mol_side_atom"]
+        self.mol_side_bond       = data["mol_side_bond"]
         self.x_flat         = data["x_flat"]    # (sum_c N_c, 3)  float32
         self.x_offset       = data["x_offset"]  # (C+1,)          long
         self.mol_id         = data["mol_id"]    # (C,)            long
@@ -72,14 +72,14 @@ class TorsionalDataset( Dataset ):
         s = int( self.x_offset[idx] )
         e = int( self.x_offset[idx + 1] )
         return {
-            "mol":           MoleculeGraph(
-                                  Z=self.mol_Z[m],
-                                  x=self.x_flat[s:e],   # view into x_flat, no copy
-                                  bonds=self.mol_edge_index[m],
-                              ),
-            "bonds":         self.mol_bonds[m],
-            "side_atom_idx": self.mol_side_atom[m],
-            "side_bond_idx": self.mol_side_bond[m],
+            "mol":             MoleculeGraph(
+                                    Z=self.mol_Z[m],
+                                    x=self.x_flat[s:e],   # view into x_flat, no copy
+                                    bonds=self.mol_edge_index[m],
+                                ),
+            "rotatable_bonds": self.mol_rotatable_bonds[m],
+            "side_atom_idx":   self.mol_side_atom[m],
+            "side_bond_idx":   self.mol_side_bond[m],
         }
 
 
@@ -91,30 +91,30 @@ def collate_torsional( batch: List[dict] ) -> dict:
 
     Returns a dict with:
 
-        mol            BatchedMoleculeGraph     Z (N_total,), x (N_total, 3), molecule_id (N_total,)
-        bonds          (m_total, 2)   long      atom indices, globally offset
-        side_atom_idx  (P_total,)     long      atom indices, globally offset
-        side_bond_idx  (P_total,)     long      bond indices, globally offset
-        bond_batch     (m_total,)     long      molecule index per bond  (0..B-1)
+        mol              BatchedMoleculeGraph     Z (N_total,), x (N_total, 3), molecule_id (N_total,)
+        rotatable_bonds  (m_total, 2)   long      atom indices, globally offset
+        side_atom_idx    (P_total,)     long      atom indices, globally offset
+        side_bond_idx    (P_total,)     long      bond indices, globally offset
+        bond_batch       (m_total,)     long      molecule index per bond  (0..B-1)
 
     `mol.molecule_id` serves as the per-atom batch index — no separate
     `atom_batch` tensor needed.
     """
-    bonds_chunks: list[pt.Tensor] = []
-    sa_chunks:    list[pt.Tensor] = []
-    sb_chunks:    list[pt.Tensor] = []
-    bond_batch:   list[pt.Tensor] = []
+    rot_chunks: list[pt.Tensor] = []
+    sa_chunks:  list[pt.Tensor] = []
+    sb_chunks:  list[pt.Tensor] = []
+    bond_batch: list[pt.Tensor] = []
 
     atom_offset = 0
     bond_offset = 0
     for i, ex in enumerate( batch ):
         N = int( ex["mol"].Z.numel() )
-        m = int( ex["bonds"].shape[0] )
+        m = int( ex["rotatable_bonds"].shape[0] )
 
-        bonds_chunks.append( ex["bonds"]         + atom_offset )
-        sa_chunks.append   ( ex["side_atom_idx"] + atom_offset )
-        sb_chunks.append   ( ex["side_bond_idx"] + bond_offset )
-        bond_batch.append  ( pt.full( (m,), i, dtype=pt.long ) )
+        rot_chunks.append( ex["rotatable_bonds"] + atom_offset )
+        sa_chunks.append ( ex["side_atom_idx"]   + atom_offset )
+        sb_chunks.append ( ex["side_bond_idx"]   + bond_offset )
+        bond_batch.append( pt.full( (m,), i, dtype=pt.long ) )
 
         atom_offset += N
         bond_offset += m
@@ -122,11 +122,11 @@ def collate_torsional( batch: List[dict] ) -> dict:
     batched_mol = batchMolecules( [ ex["mol"] for ex in batch ] )
 
     return {
-        "mol":           batched_mol,
-        "bonds":         pt.cat( bonds_chunks ),
-        "side_atom_idx": pt.cat( sa_chunks ),
-        "side_bond_idx": pt.cat( sb_chunks ),
-        "bond_batch":    pt.cat( bond_batch ),
+        "mol":             batched_mol,
+        "rotatable_bonds": pt.cat( rot_chunks ),
+        "side_atom_idx":   pt.cat( sa_chunks ),
+        "side_bond_idx":   pt.cat( sb_chunks ),
+        "bond_batch":      pt.cat( bond_batch ),
     }
 
 
@@ -145,5 +145,5 @@ if __name__ == '__main__':
 
     print( "ex1 N:", int(data1["mol"].Z.numel()), "  ex2 N:", int(data2["mol"].Z.numel()) )
     print( "batch N_total:", int(collated["mol"].Z.numel()) )
-    print( "batch m_total:", int(collated["bonds"].shape[0]) )
+    print( "batch m_total:", int(collated["rotatable_bonds"].shape[0]) )
     print( "molecule_id unique:", pt.unique(collated["mol"].molecule_id).tolist() )

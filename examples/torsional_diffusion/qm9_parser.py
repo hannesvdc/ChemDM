@@ -53,7 +53,7 @@ class MoleculeData:
     smiles: str
     Z: pt.Tensor                 # (N,)        long
     edge_index: pt.Tensor        # (E, 2)      long — undirected covalent bonds, both directions
-    bonds: pt.Tensor             # (m, 2)      long — rotatable bonds, canonical b<c ordering
+    rotatable_bonds: pt.Tensor   # (m, 2)      long — rotatable bonds, canonical b<c ordering
     side_atom_idx: pt.Tensor     # (P,)        long — atoms on the c-side of some bond
     side_bond_idx: pt.Tensor     # (P,)        long — which bond (0..m-1) each side-atom belongs to
     conformers: list[dict]       # each: {x: (N, 3) float64, totalenergy, relativeenergy, boltzmannweight}
@@ -107,7 +107,7 @@ def load_qm9_molecule( path: Path ) -> MoleculeData:
 
     Z = pt.tensor( [a.GetAtomicNum() for a in mol0.GetAtoms()], dtype=pt.long )
 
-    # Covalent edges, both directions, layout (E, 2) to match `bonds`.
+    # Covalent edges, both directions, layout (E, 2) to match `rotatable_bonds`.
     src, dst = [], []
     for b in mol0.GetBonds():
         u, v = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
@@ -116,7 +116,7 @@ def load_qm9_molecule( path: Path ) -> MoleculeData:
     edge_index = pt.tensor(list(zip(src, dst)), dtype=pt.long).reshape(-1, 2)
 
     rot, sides = find_rotatable_bonds( mol0 )
-    bonds = pt.tensor( rot, dtype=pt.long ).reshape(-1, 2)
+    rotatable_bonds = pt.tensor( rot, dtype=pt.long ).reshape(-1, 2)
 
     # COO-style flatten of the per-bond c-side atom sets:
     #   side_atom_idx[k] = atom index on the c-side of bond `side_bond_idx[k]`.
@@ -146,7 +146,7 @@ def load_qm9_molecule( path: Path ) -> MoleculeData:
         smiles=raw["smiles"],
         Z=Z,
         edge_index=edge_index,
-        bonds=bonds,
+        rotatable_bonds=rotatable_bonds,
         side_atom_idx=side_atom_idx,
         side_bond_idx=side_bond_idx,
         conformers=conformers,

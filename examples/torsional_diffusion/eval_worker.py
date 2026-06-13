@@ -29,7 +29,6 @@ from rdkit.Chem import AllChem
 from rdkit import RDLogger
 
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
-from chemdm.geometry import kabsch_align_torch
 
 from score_network import TorsionalScoreNetwork
 from sampler import sample_torsional_diffusion
@@ -64,6 +63,16 @@ def rdkit_starting_geometry( qm9_dir: Path, smiles: str, dtype: pt.dtype = DTYPE
     params.randomSeed = seed
     if AllChem.EmbedMolecule( rdmol, params ) < 0:
         return None
+
+    # MMFF94 relaxation pulls bond lengths / angles toward an actual molecular-
+    # mechanics minimum, closing some of the L̂-vs-L_gt distributional gap that
+    # raw ETKDG leaves on the table. MMFF lacks parameters for a few unusual
+    # atom types; in those cases we keep the raw ETKDG geometry rather than
+    # dropping the molecule from eval.
+    try:
+        AllChem.MMFFOptimizeMolecule( rdmol, maxIters=200 )
+    except Exception:
+        pass
 
     pos = rdmol.GetConformer(0).GetPositions()
     return pt.tensor( pos, dtype=dtype )
@@ -135,10 +144,10 @@ def sample_chunk( model: TorsionalScoreNetwork,
         return []
 
     molecules: list[MoleculeGraph] = []
-    bonds_chunks: list[pt.Tensor]     = []
+    rot_chunks: list[pt.Tensor]    = []
     sa_chunks: list[pt.Tensor]     = []
     sb_chunks: list[pt.Tensor]     = []
-    bond_batch_ch: list[pt.Tensor]     = []
+    bond_batch_ch: list[pt.Tensor] = []
 
     atom_ranges: list[tuple[int, int]] = []
     Ns: list[int] = []
@@ -154,9 +163,9 @@ def sample_chunk( model: TorsionalScoreNetwork,
 
         for _ in range(K):
             molecules.append( MoleculeGraph( Z=md["Z"], x=md["x_init"], bonds=md["cov_edges"] ) )
-            bonds_chunks .append( md["rot_bonds"]      + atom_offset )
-            sa_chunks.append( md["side_atom_idx"]  + atom_offset )
-            sb_chunks.append( md["side_bond_idx"]  + bond_offset )
+            rot_chunks.append( md["rot_bonds"] + atom_offset )
+            sa_chunks.append( md["side_atom_idx"] + atom_offset )
+            sb_chunks.append( md["side_bond_idx"] + bond_offset )
             bond_batch_ch.append( pt.full((m,), bond_batch_idx, dtype=pt.long) )
 
             atom_ranges.append( (atom_offset, atom_offset + N) )
@@ -165,7 +174,7 @@ def sample_chunk( model: TorsionalScoreNetwork,
             bond_batch_idx += 1
 
     mol_batched = batchMolecules( molecules ).to( device=device, dtype=dtype )
-    bonds_b = pt.cat( bonds_chunks  ).to( device=device )
+    rot_b = pt.cat( rot_chunks   ).to( device=device )
     sa_b = pt.cat( sa_chunks     ).to( device=device )
     sb_b = pt.cat( sb_chunks     ).to( device=device )
     bond_batch_b = pt.cat( bond_batch_ch ).to( device=device )
@@ -173,7 +182,7 @@ def sample_chunk( model: TorsionalScoreNetwork,
     x_sampled_flat = sample_torsional_diffusion(
         model = model,
         mol = mol_batched,
-        bonds = bonds_b,
+        rotatable_bonds = rot_b,
         side_atom_idx = sa_b,
         side_bond_idx = sb_b,
         bond_batch = bond_batch_b,
@@ -229,7 +238,7 @@ def main():
     data = pt.load(parsed_dir / "test.pt", weights_only=False)
     mol_Z = data["mol_Z"]
     mol_edge_index = data["mol_edge_index"]
-    mol_bonds = data["mol_bonds"]
+    mol_rotatable_bonds = data["mol_rotatable_bonds"]
     mol_side_atom = data["mol_side_atom"]
     mol_side_bond = data["mol_side_bond"]
     x_flat = data["x_flat"]
@@ -267,7 +276,7 @@ def main():
         mol_data.append({
             "Z":             Z,
             "cov_edges":     mol_edge_index[mi],
-            "rot_bonds":     mol_bonds[mi],
+            "rot_bonds":     mol_rotatable_bonds[mi],
             "side_atom_idx": mol_side_atom[mi],
             "side_bond_idx": mol_side_bond[mi],
             "x_init":        x_init,

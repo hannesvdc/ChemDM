@@ -89,7 +89,7 @@ def explore( qm9_dir: Path, max_files: int | None = None, show_examples: int = 0
 
         N = int( d.Z.shape[0] )
         nh = int( (d.Z != 1).sum().item() )
-        nr = int( d.bonds.shape[0] )
+        nr = int( d.rotatable_bonds.shape[0] )
         nc = len( d.conformers )
 
         n_atoms.append( N )

@@ -97,13 +97,13 @@ def perturb_and_score( model: TorsionalScoreNetwork, batch: dict, device: pt.dev
     # Move the batch onto the compute device. BatchedMoleculeGraph.to() handles
     # Z (long, device only) and x (float, device + dtype) consistently.
     mol = batch["mol"].to( device=device, dtype=DTYPE )
-    bonds = batch["bonds"].to( device=device )
+    rotatable_bonds = batch["rotatable_bonds"].to( device=device )
     side_atom_idx = batch["side_atom_idx"].to( device=device )
     side_bond_idx = batch["side_bond_idx"].to( device=device )
     bond_batch = batch["bond_batch"].to( device=device )
 
     B = int( bond_batch.max().item() ) + 1            # number of molecules in batch
-    m = bonds.shape[0]                                # total rotatable bonds in batch
+    m = rotatable_bonds.shape[0]                      # total rotatable bonds in batch
 
     # Diffusion time + per-bond σ.
     t = pt.rand( B, device=device )
@@ -115,7 +115,7 @@ def perturb_and_score( model: TorsionalScoreNetwork, batch: dict, device: pt.dev
     delta_tau = sigma_bond * eps                      # (m,)
 
     # Bridge τ → x: apply Δτ to x_0 to get x_t.
-    x_t = apply_torsion_update( mol.x, bonds, side_atom_idx, side_bond_idx, delta_tau )
+    x_t = apply_torsion_update( mol.x, rotatable_bonds, side_atom_idx, side_bond_idx, delta_tau )
 
     # Build the union neighbor graph from current x_t: covalent bonds ∪ atom
     # pairs within CUTOFF. The is_bond flag tells the trunk which is which.
@@ -130,7 +130,7 @@ def perturb_and_score( model: TorsionalScoreNetwork, batch: dict, device: pt.dev
     delta_tau_pred = model(
         mol=mol_t, t=t,
         neighbors=neighbors, is_bond=is_bond,
-        bonds=bonds, bond_batch=bond_batch,
+        rotatable_bonds=rotatable_bonds, bond_batch=bond_batch,
     )
 
     return loss_fn( delta_tau_pred, delta_tau, sigma_bond )
