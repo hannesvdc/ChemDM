@@ -98,6 +98,22 @@ def kabsch_align_torch(P: pt.Tensor,
     return Pc @ R
 
 
+def kabsch_aligned_rmsd_torch(P: pt.Tensor,
+                              Q: pt.Tensor) -> pt.Tensor:
+    """
+    RMSD between P and Q after Kabsch-aligning P onto Q.
+
+    P, Q : (n_atoms, 3)
+
+    Returns a 0-D tensor: sqrt( mean over atoms of ||P_aligned - Q_centered||² ).
+    Caller filters atoms (e.g. heavy-only) before passing in.
+    """
+    P_aligned = kabsch_align_torch(P, Q)
+    Q_centered = Q - Q.mean(dim=0, keepdim=True)
+    diff = P_aligned - Q_centered
+    return pt.sqrt((diff ** 2).sum(-1).mean())
+
+
 def kabsch_rotation_torch(P: pt.Tensor,
                           Q: pt.Tensor) -> pt.Tensor:
     """
