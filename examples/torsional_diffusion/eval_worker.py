@@ -38,7 +38,7 @@ RDLogger.DisableLog("rdApp.*")
 
 # Config — N_SAMPLES_PER_MOL, N_STEPS, CUTOFF, DTYPE are worker-only.
 # B_MOL must match the value in evaluate.py.
-N_SAMPLES_PER_MOL = 10
+N_SAMPLES_PER_MOL = 100
 N_STEPS = 20
 B_MOL = 8
 CUTOFF = 5.0
@@ -232,7 +232,7 @@ def main():
     mode = sys.argv[2]
     if mode not in ("rdkit", "crest"):
         raise ValueError(f"unknown mode {mode!r}; expected 'rdkit' or 'crest'")
-    device_str = 'mps'
+    device_str = 'cpu'
     device = pt.device(device_str)
 
     data = pt.load(parsed_dir / "test.pt", weights_only=False)
