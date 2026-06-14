@@ -1,0 +1,430 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{bm}
+\usepackage{hyperref}
+\usepackage{array}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\dx}{\Delta x}
+\newcommand{\dq}{\Delta q}
+
+\title{P-RFO Notes\\
+       \large Partitioned Rational-Function Optimization for Saddle Search}
+\author{Notes for ChemDM}
+\date{}
+
+\begin{document}
+\maketitle
+
+\noindent A conceptual reference for partitioned rational-function optimization
+as implemented in \texttt{src/chemdm/prfo.py}.  Captures the \emph{why}, not
+just the \emph{what} --- in particular why BFGS fails for saddle search, where
+the ``shift'' in P-RFO comes from, and why this is a saddle \emph{finder} and
+not a reaction \emph{path} method.
+
+\section{The problem}
+
+Find a first-order saddle point of a potential energy surface $E(x)$ using
+\emph{only forces} $-\nabla E$, no analytic Hessian.  The first-order saddle
+has
+\begin{equation*}
+  \nabla E = 0, \qquad H = \nabla^2 E \text{ has exactly one negative eigenvalue}.
+\end{equation*}
+
+Two challenges: (a) the gradient alone is zero at every minimum \emph{and}
+every saddle, so gradient-following cannot distinguish them, and (b) the
+Hessian is expensive --- the very thing we want to avoid computing.
+
+\section{Why BFGS specifically fails}
+
+The BFGS quasi-Newton update
+\begin{equation*}
+  H_{k+1} = H_k + \frac{y y^T}{y^T s}
+                - \frac{H_k s s^T H_k}{s^T H_k s},
+  \qquad s = x_{k+1} - x_k, \quad y = g_{k+1} - g_k,
+\end{equation*}
+\emph{provably preserves positive definiteness} when the curvature condition
+$y^T s > 0$ holds.  Line search enforces this condition for minimization.
+
+The consequence for saddle search is fatal: if $H_0 = I$ (PD), every
+subsequent $H_k$ is PD by induction.  The lowest eigenvalue can never cross
+zero.  The Newton step $-H_k^{-1} g$ always points downhill.  \textbf{You
+converge to a minimum, no matter how close you start to a saddle.}
+
+This is not a corner case --- it is a fundamental structural mismatch.  BFGS
+was designed for minimization and bakes that intent into its update rule.
+
+The fix is to use a quasi-Newton update that \emph{does not preserve PD}:
+
+\begin{center}
+\begin{tabular}{l c l}
+\hline
+Update & PD-preserving & Used for \\
+\hline
+BFGS & yes & minimization \\
+SR1 (symmetric rank-1) & no & saddle search (unstable if $r^T s$ small) \\
+PSB (Powell-symmetric-Broyden) & no & saddle search (stable, slower) \\
+\textbf{Bofill} (SR1/PSB convex mix) & no & saddle search (best of both) \\
+\hline
+\end{tabular}
+\end{center}
+
+\noindent \texttt{prfo.py} uses Bofill with weight
+$\varphi = (r^T s)^2 / (\|r\|^2 \|s\|^2)$ --- the cosine squared between the
+residual $r = y - H_k s$ and $s$.  SR1-heavy when those vectors align,
+PSB-heavy when they do not.
+
+\section{Newton with an indefinite Hessian --- almost works}
+
+Suppose we \emph{had} the true indefinite Hessian at a saddle.  Decompose the
+Newton step $\dx = -H^{-1} g$ in the eigenbasis:
+\begin{equation*}
+  \dx_i = -\frac{g_i}{\lambda_i}.
+\end{equation*}
+
+For positive $\lambda_i$, $\dx_i$ opposes $g_i$ --- descent.  For
+\emph{negative} $\lambda_i$, $\dx_i$ aligns with $g_i$ --- \textbf{ascent}.
+So Newton with the true Hessian automatically climbs the unstable mode and
+descends the others.  This is eigenvector-following before we even introduce
+RFO.
+
+But two problems remain:
+\begin{enumerate}
+  \item \textbf{Step blows up near singular Hessians.}  Any $\lambda_i \approx 0$
+        makes $|\dx_i| = |g_i / \lambda_i|$ enormous.  We need regularization.
+  \item \textbf{Wrong-mode following.}  Early in the search, the ``naturally''
+        most negative eigenvalue may not be the one we actually want to ascend
+        (multiple soft modes, eigenvalues crossing zero during the search).
+        We need explicit \emph{control} over which mode to follow.
+\end{enumerate}
+
+RFO solves both at once.
+
+\section{The RFO step as shift-invert}
+
+Replace the quadratic energy model with a \textbf{rational function}:
+\begin{equation*}
+  \Delta E(\dx) \approx
+    \frac{g^T \dx + \tfrac{1}{2}\, \dx^T H \dx}{1 + \dx^T \dx}.
+\end{equation*}
+
+Stationary points of this rational function are solutions of the
+\textbf{augmented eigenvalue problem}:
+\begin{equation}\label{eq:augmented}
+  \begin{pmatrix} H & g \\ g^T & 0 \end{pmatrix}
+  \begin{pmatrix} \dx \\ 1 \end{pmatrix}
+  = \mu
+  \begin{pmatrix} \dx \\ 1 \end{pmatrix}.
+\end{equation}
+
+Expanding the first block row gives $H \dx + g = \mu \dx$, so
+\begin{equation}\label{eq:shift-invert}
+  \boxed{\;\dx = -(H - \mu I)^{-1} g.\;}
+\end{equation}
+
+\textbf{That is shift-invert.}  The Hessian gets shifted by $\mu$, inverted,
+applied to $-g$.  The same operator appears in:
+\begin{itemize}
+  \item \textbf{Levenberg-Marquardt} for nonlinear least squares (shift =
+        damping $\alpha$);
+  \item \textbf{Trust-region Newton (Mor\'e-Sorensen)} --- shift chosen to
+        satisfy $\|\dx\| = \text{trust\_radius}$;
+  \item \textbf{Tikhonov regularization} for ill-posed inverse problems;
+  \item \textbf{Inverse power iteration / shift-invert Lanczos} for eigenvalue
+        problems.
+\end{itemize}
+
+What makes RFO distinctive among shift-invert methods is the \textbf{rule for
+picking $\mu$}: it is an eigenvalue of the augmented $(N+1) \times (N+1)$
+matrix in equation~\eqref{eq:augmented}.  Equivalently, substituting $\dx$
+into the second row of \eqref{eq:augmented} gives the \textbf{secular
+equation}:
+\begin{equation}\label{eq:secular}
+  \sum_i \frac{f_i^2}{\mu - \lambda_i} \;=\; \mu,
+\end{equation}
+where $\lambda_i$ are eigenvalues of $H$ and
+$f_i = (\text{eigvec}_i)^T g$.
+
+This scalar equation has $N+1$ roots, interleaved with the $\lambda_i$'s plus
+one below the lowest and one above the highest eigenvalue.  \textbf{Each root
+is a valid shift; each gives a different step type:}
+
+\begin{itemize}
+  \item \textbf{Lowest root} $\mu < \lambda_{\min}$: all $(\lambda_i - \mu) > 0$,
+        so the step descends in every mode.  Minimization RFO.
+  \item \textbf{Largest root} $\mu > \lambda_{\max}$: all $(\lambda_i - \mu) < 0$,
+        so the step ascends in every mode.  Not usually what you want.
+  \item \textbf{Intermediate roots}: mixed --- ascends in some modes, descends
+        in others.
+\end{itemize}
+
+The choice of root encodes the method's intent.
+
+The rational denominator $1 + \|\dx\|^2$ is what gives RFO its \textbf{automatic
+step bounding}.  As $\|g\|$ grows or $H$ becomes singular, $\mu$ grows in
+magnitude so $(\lambda_i - \mu)$ stays bounded away from zero.  The step $\dx$
+cannot blow up by construction --- no trust-region constraint required.  (We
+still impose one as a second safety net in \texttt{prfo.py}, used adaptively
+via the $\rho = \Delta E_{\text{actual}} / \Delta E_{\text{predicted}}$ ratio.)
+
+\section{The partitioning (the ``P'' in P-RFO)}
+
+For transition-state search we want one mode to ascend and the rest to descend.
+\textbf{Use two different shifts.}
+
+\paragraph{Followed (ascent) mode $k$.}  Solve the $2 \times 2$ RFO subproblem
+in mode $k$ alone:
+\begin{equation*}
+  \begin{pmatrix} \lambda_k & f_k \\ f_k & 0 \end{pmatrix}
+  \begin{pmatrix} v \\ 1 \end{pmatrix}
+  = \mu_+ \begin{pmatrix} v \\ 1 \end{pmatrix}.
+\end{equation*}
+Take the \emph{larger} root,
+\begin{equation*}
+  \mu_+ = \tfrac{1}{2}\!\left(\lambda_k + \sqrt{\lambda_k^2 + 4 f_k^2}\right)
+        > \lambda_k.
+\end{equation*}
+Then $\dq_k = -f_k / (\lambda_k - \mu_+)$ ascends along mode $k$.
+
+\paragraph{Descent subspace} (the other $N-1$ modes).  Solve the
+$M \times M$ RFO subproblem on the remaining eigenvalues; take the \emph{lowest}
+root $\mu_- < \min_{j \neq k} \lambda_j$.  Then
+$\dq_j = -f_j / (\lambda_j - \mu_-)$ descends in each remaining mode.
+
+Reassemble $\dq$ in the eigenbasis and rotate back to get $\dx$.  \textbf{One
+ascent mode, all-others descent.}  That is the P in P-RFO.
+
+\paragraph{Mode-following heuristic.}  The choice of which mode $k$ to follow:
+on iteration 1, pick the lowest eigenvalue (most negative if you have one,
+otherwise softest).  Subsequent iterations: pick the eigenvector with maximum
+overlap with the previously-followed eigenvector.  Failure mode: when the
+followed eigenvalue crosses zero or near-degenerate eigenvalues swap, overlap
+can pick the wrong mode and the optimizer briefly walks the wrong way.  Our
+HCN demo's iterations~19--31 show this in action --- the optimizer recovers,
+but it is the main source of fragility in the current \texttt{prfo.py}.
+
+\section{Coordinate systems are orthogonal to RFO}
+
+RFO is just linear algebra on $(H, g)$.  It works in any coordinate system.
+What changes between coordinate systems is the \emph{plumbing around} RFO, not
+RFO itself.
+
+\begin{center}
+\begin{tabular}{l c c l}
+\hline
+Coords & Dim & Zero modes & Back-transform \\
+\hline
+Cartesian + trans/rot projection & $3N$ & $6$ (project out) & none \\
+Non-redundant internals & $3N-6$ & $0$ & iterative Wilson B \\
+Redundant internals (Pulay) & $M > 3N-6$ & $M - (3N-6)$ & Wilson B + pseudoinverse \\
+\hline
+\end{tabular}
+\end{center}
+
+The \textbf{three-axis design space} for any TS optimizer is:
+\begin{quote}
+\begin{tabular}{l l}
+Step generator    & $\{$Newton, trust-region Newton, RFO/P-RFO, dimer rotation$\}$ \\
+Hessian model     & $\{$analytic, Bofill, SR1, PSB, BFGS (minimization only)$\}$ \\
+Coordinate system & $\{$Cartesian + projection, internal, redundant internal$\}$ \\
+\end{tabular}
+\end{quote}
+
+Most published ``methods'' are just specific points in this cube.  Our
+\texttt{prfo.py} is $\{$P-RFO, Bofill, Cartesian + projection$\}$.  Gaussian's
+TS optimizer is $\{$P-RFO, Bofill, redundant internals$\}$.  Sella is roughly
+$\{$trust-region Newton, exact Hessian via finite differences, Cartesian +
+projection$\}$.  Dimer codes are $\{$dimer rotation step, no stored Hessian,
+Cartesian$\}$.
+
+These choices are independent --- you can swap any axis without changing the
+others.
+
+\section{P-RFO finds \emph{points}, not \emph{paths}}
+
+The optimizer's iterates trace a discrete trajectory through configuration
+space, but \textbf{that trajectory has no chemical meaning.}  It depends on
+initial guess, Hessian model, trust radius, mode-following heuristic --- none
+of which are properties of the molecule.  Two runs from different starts can
+take very different optimizer paths to the same saddle.
+
+The ``eigenvector-following'' name refers to following an \emph{eigenvector at
+each iteration}, not to following a \emph{curve through configuration space}.
+These are different objects.
+
+The reaction path is a separate computation, defined intrinsically by the
+PES:
+
+\begin{description}
+  \item[IRC (Intrinsic Reaction Coordinate, Fukui)] From the converged saddle,
+    integrate $\mathrm{d}x/\mathrm{d}t = -g(x)$ in mass-weighted Cartesians,
+    $\pm$ along the unstable mode.  One direction reaches the reactant
+    minimum, the other the product minimum.  This curve is geometry-defined;
+    different optimizers that find the same TS yield the same IRC.
+\end{description}
+
+This cleanly separates concerns:
+
+\begin{center}
+\begin{tabular}{l l l l}
+\hline
+Step & Method & Object computed & Cost \\
+\hline
+1 & P-RFO + Bofill & Saddle point (single geometry) & $\sim$20--100 force calls \\
+2 & IRC (steepest descent $\pm$) & Reaction path (a curve) & $\sim$50--200 force calls \\
+\hline
+\end{tabular}
+\end{center}
+
+Both are needed for a complete reaction characterization.  P-RFO alone gives
+you a saddle that might connect anywhere; IRC without a converged TS has no
+starting point.
+
+\section{A note on gradient extremals (and why we do not build them)}
+
+\textbf{Gradient extremal curves} (Hoffman, Nord, Ruedenberg) are an alternative
+class of methods that \emph{do} try to trace a curve directly from the reactant
+basin.  A gradient extremal is the locus of points where $\nabla E$ is
+parallel to a specific Hessian eigenvector.
+
+There is a connection: the discrete trajectory of P-RFO with mode-following is
+approximately a gradient extremal of the followed mode.  So in a loose sense,
+P-RFO is discretely walking \emph{along} a gradient extremal toward its
+endpoint at the saddle.
+
+Gradient extremal \emph{following} methods (continuous ODE integration of the
+curve, adaptive parametrization, branch tracking) make the \emph{curve itself}
+the object of interest --- you walk from the reactant minimum along the curve,
+through any saddles you encounter, and into the product basin.  This is
+elegant and chemically motivated, but practically harder than the ``find TS
+then IRC'' approach for several reasons:
+
+\begin{itemize}
+  \item Gradient extremals branch and recombine --- choosing the right branch
+        at every bifurcation requires bookkeeping that IRC does not.
+  \item They can leave the chemically relevant region of the PES, especially
+        in high-dimensional systems.
+  \item They do not necessarily pass through every saddle, and a saddle they
+        do not pass through is invisible to the method.
+  \item Numerically: ODE integration with branch tracking is heavier than
+        ``find a stationary point, then steepest-descent.''
+\end{itemize}
+
+\textbf{Our practical choice is the simpler decomposition:}
+\begin{center}
+relaxed reactant
+$\;\to\;$ \texttt{estimate\_lowest\_mode} (Lindh + Lanczos)
+$\;\to\;$ perturb + P-RFO
+$\;\to\;$ IRC.
+\end{center}
+
+The IRC step is cheap enough (gradient descent, $\sim$150 lines of code) that
+we do not gain anything from trying to construct the reaction path directly
+during the saddle search.  The gradient-extremal connection is a real
+mathematical fact, but it does not pay off in code.
+
+\section{Summary}
+
+P-RFO is \textbf{shifted Newton with self-determined shifts}, where the shifts
+come from an augmented eigenvalue problem and partition configuration space
+into one ascent mode and a descent subspace.  The Hessian is approximated by
+Bofill (an indefinite-capable quasi-Newton update --- BFGS does not work here).
+The step is implicitly bounded by the rational-function model's denominator;
+we add an explicit trust radius as a second safety net with adaptive
+shrink/grow.
+
+This finds a single saddle point per run.  To trace the reaction path that
+connects the saddle to its endpoints, run IRC from the converged TS --- a
+separate, cheap, well-defined computation.
+
+For posterity: the three-axis design space (step generator $\times$ Hessian
+model $\times$ coordinate system) is what makes the TS-optimization literature
+navigable.  Once you see it that way, ``method X vs.\ method Y'' is mostly a
+question of which point in the cube each method occupies.
+
+\section{Postscript: minimization vs.\ TS is one root choice}
+
+The cleanest possible statement of what RFO does: \textbf{minimization and
+transition-state search differ only by which root of the same secular equation
+you pick.}  Everything else --- Hessian update, Bofill, trust radius,
+coordinate system --- is shared infrastructure.
+
+Recall the secular equation~\eqref{eq:secular}:
+\begin{equation*}
+  \sum_i \frac{f_i^2}{\mu - \lambda_i} = \mu.
+\end{equation*}
+By the interlacing property of its $N+1$ roots, they sit between the Hessian
+eigenvalues plus one outside on each end:
+\begin{equation*}
+  \mu_0 \;<\; \lambda_1 \;<\; \mu_1 \;<\; \lambda_2 \;<\; \mu_2 \;<\; \lambda_3
+  \;<\; \cdots \;<\; \lambda_N \;<\; \mu_N.
+\end{equation*}
+
+Each choice of root gives a step of the form $\dx = -(H - \mu I)^{-1} g$.
+What changes is the \emph{sign pattern} of $(\lambda_i - \mu)$ across modes:
+
+\begin{center}
+\begin{tabular}{l l l}
+\hline
+Root chosen & Sign pattern of $(\lambda_i - \mu)$ & Step type \\
+\hline
+$\mu_0 < \lambda_1$            & all positive             & minimization \\
+$\mu_1 \in (\lambda_1, \lambda_2)$ & one negative, rest positive  & TS, follow mode 1 \\
+$\mu_2 \in (\lambda_2, \lambda_3)$ & two negative, rest positive  & 2nd-order saddle search \\
+\hline
+\end{tabular}
+\end{center}
+
+So, to answer the practical question: \textbf{starting from a local minimum,
+pick $\mu = \mu_1$ instead of $\mu_0$ and the optimizer automatically pursues
+a transition-state search along the softest mode.}  No fake-negative-eigenvalue
+initialization required, no special-case code, no different update rule.
+Same Hessian, same gradient, same secular equation --- different root.
+
+Two practical caveats:
+
+\begin{enumerate}
+  \item At a true local minimum, $\|g\| = 0$ exactly, so all $f_i = 0$ and
+        the secular equation degenerates: every $\mu_i = \lambda_i$, every step
+        is zero.  You must perturb slightly off the minimum to give the
+        optimizer something to climb (and to break mode degeneracy in
+        symmetric systems).  This is what the demo's
+        \texttt{x\_start = x\_min + kick * u} step does.
+  \item The two-shift formulation in Section~5 ($\mu_+$ from a $2 \times 2$
+        subproblem on the followed mode, $\mu_-$ from an $M \times M$
+        subproblem on the rest) is mathematically equivalent to picking
+        $\mu_1$ here.  The partitioned form is what production codes
+        implement for numerical reasons (smaller eigenproblems, cleaner
+        mode-following control), but the underlying mathematical content is
+        ``pick the secular root that sits above the eigenvalue you want to
+        ascend.''
+\end{enumerate}
+
+This is the unifying picture: P-RFO and ordinary RFO minimization are the
+\emph{same algorithm} running on the \emph{same data structure}, choosing a
+different root of the same scalar equation.  When you see it that way, the
+whole machinery of TS search collapses into a one-line modification of an
+ordinary minimizer.
+
+\section*{References}
+
+\begin{description}
+\item[Schlegel,] \emph{WIREs Comput.\ Mol.\ Sci.} \textbf{1}, 790 (2011).
+      Best tutorial review.
+\item[Banerjee, Adams, Simons, Shepard,] \emph{J.\ Phys.\ Chem.} \textbf{89},
+      52 (1985).  The original P-RFO paper.
+\item[Baker,] \emph{J.\ Comput.\ Chem.} \textbf{7}, 385 (1986).  The
+      practical recipe (mode following by max overlap) most QC codes follow.
+\item[Bofill,] \emph{J.\ Comput.\ Chem.} \textbf{15}, 1 (1994).  The Bofill
+      update.
+\item[Besal\'u \& Bofill,] \emph{Theor.\ Chem.\ Acc.} \textbf{100}, 265
+      (1998).  Proper trust-radius treatment for RFO.
+\item[Wales,] \emph{Energy Landscapes} (Cambridge, 2003), ch.\ 6--7.
+      Wide-angle view connecting RFO to dimer, GAD, and gradient extremals.
+\item[Hoffman, Nord, Ruedenberg,] \emph{Theor.\ Chim.\ Acta} \textbf{69}, 265
+      (1986).  Gradient extremal curves (for reference; we do not implement
+      these).
+\end{description}
+
+\end{document}
