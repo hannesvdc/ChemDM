@@ -105,20 +105,76 @@ RFO solves both at once.
 
 Replace the quadratic energy model with a \textbf{rational function}:
 \begin{equation*}
-  \Delta E(\dx) \approx
-    \frac{g^T \dx + \tfrac{1}{2}\, \dx^T H \dx}{1 + \dx^T \dx}.
+  \Delta E(\dx) \;\approx\;
+    \frac{g^T \dx + \tfrac{1}{2}\, \dx^T H \dx}{1 + \dx^T \dx}
+  \;=\; \frac{N(\dx)}{D(\dx)}.
 \end{equation*}
 
-Stationary points of this rational function are solutions of the
-\textbf{augmented eigenvalue problem}:
+\paragraph{Stationarity by direct differentiation.}
+Setting $\nabla_{\dx}(N/D) = 0$ gives $\nabla N \cdot D = N \cdot \nabla D$,
+i.e.\ $\nabla N = (N/D)\, \nabla D$.  With $\nabla N = g + H\dx$ and
+$\nabla D = 2\dx$:
+\begin{equation*}
+  g + H\dx \;=\; \frac{N(\dx)}{D(\dx)} \cdot 2\dx.
+\end{equation*}
+The right-hand side carries a scalar that \emph{depends on $\dx$} --- the
+value of the model at the stationary point.  Defining
+\begin{equation}\label{eq:mu-def}
+  \mu \;:=\; 2\, E_{\text{model}}(\dx^\star) \;=\; \frac{2 N(\dx^\star)}{D(\dx^\star)}
+\end{equation}
+at any stationary point $\dx^\star$, this collapses to
+\begin{equation}\label{eq:topblock}
+  (H - \mu I)\, \dx \;=\; -g.
+\end{equation}
+
+This is $N$ scalar equations.  But the system now has $N+1$ unknowns: the
+$N$ components of $\dx$ plus the scalar $\mu$.  The missing equation is
+\eqref{eq:mu-def} itself --- the implicit definition of $\mu$.
+
+\paragraph{The implicit definition simplifies to a clean linear constraint.}
+Rewrite \eqref{eq:mu-def} as
+$\mu(1 + \dx^T\dx) = 2 g^T\dx + \dx^T H \dx$, then use \eqref{eq:topblock}
+multiplied by $\dx^T$ from the left, $\dx^T H \dx + g^T \dx = \mu\, \dx^T \dx$,
+to eliminate the quadratic term:
+\begin{equation*}
+  \mu + \mu\, \dx^T \dx \;=\; 2 g^T \dx + (\mu\, \dx^T \dx - g^T \dx)
+  \;\Longrightarrow\;
+  \mu \;=\; g^T \dx.
+\end{equation*}
+So the $(N{+}1)$-th equation, once cleaned up, is
+\begin{equation}\label{eq:bottomblock}
+  g^T \dx \;=\; \mu.
+\end{equation}
+
+\paragraph{Packaging both equations in one $(N{+}1) \times (N{+}1)$ matrix.}
+Equations \eqref{eq:topblock} and \eqref{eq:bottomblock} together form
+exactly the \textbf{augmented eigenvalue problem}:
 \begin{equation}\label{eq:augmented}
   \begin{pmatrix} H & g \\ g^T & 0 \end{pmatrix}
   \begin{pmatrix} \dx \\ 1 \end{pmatrix}
-  = \mu
+  \;=\; \mu
   \begin{pmatrix} \dx \\ 1 \end{pmatrix}.
 \end{equation}
+The top $N$ rows reproduce \eqref{eq:topblock}; the bottom row reproduces
+\eqref{eq:bottomblock}.  Neither row is imposed as a separate constraint ---
+both come from the same stationarity of the rational function, with the
+bottom row being the simplified form of $\mu$'s implicit definition once
+the top row already holds.
 
-Expanding the first block row gives $H \dx + g = \mu \dx$, so
+\paragraph{Why this packaging is useful.}
+Eigenvalue problems for symmetric matrices have very clean spectral
+structure (real eigenvalues, orthogonal eigenvectors, interlacing).  A
+single \texttt{eigh} call on the $(N{+}1) \times (N{+}1)$ augmented matrix
+solves both \eqref{eq:topblock} and \eqref{eq:bottomblock} simultaneously,
+returning all $N+1$ valid $(\mu, \dx)$ pairs at once.  Solving ``$N$
+nonlinear gradient equations plus an implicit scalar definition'' is much
+messier generically --- the augmented formulation buys a clean numerical
+recipe at the cost of one extra row.
+
+\paragraph{Reading off the step.}
+Once an eigenvalue $\mu$ and corresponding eigenvector $(v, v_{N+1})$ are
+obtained, normalise so $v_{N+1} = 1$ and read $\dx$ from the first $N$
+components.  Equivalently, from \eqref{eq:topblock} directly:
 \begin{equation}\label{eq:shift-invert}
   \boxed{\;\dx = -(H - \mu I)^{-1} g.\;}
 \end{equation}
@@ -137,14 +193,70 @@ applied to $-g$.  The same operator appears in:
 
 What makes RFO distinctive among shift-invert methods is the \textbf{rule for
 picking $\mu$}: it is an eigenvalue of the augmented $(N+1) \times (N+1)$
-matrix in equation~\eqref{eq:augmented}.  Equivalently, substituting $\dx$
-into the second row of \eqref{eq:augmented} gives the \textbf{secular
-equation}:
+matrix in equation~\eqref{eq:augmented}.  Equivalently, the same $\mu$ is a
+root of the scalar \textbf{secular equation} derived below.
+
+\paragraph{Deriving the secular equation.}
+Substitute \eqref{eq:shift-invert} into the bottom-row relation
+\eqref{eq:bottomblock}:
+\begin{equation*}
+  g^T \dx \;=\; \mu
+  \quad\Longrightarrow\quad
+  g^T \, \bigl[-(H - \mu I)^{-1} g\bigr] \;=\; \mu
+  \quad\Longrightarrow\quad
+  -\, g^T (H - \mu I)^{-1} g \;=\; \mu.
+\end{equation*}
+This is already a scalar equation in $\mu$, but it is more useful in the
+\emph{eigenbasis of $H$}.  Diagonalise $H = U \Lambda U^T$, where
+$\Lambda = \operatorname{diag}(\lambda_1, \dots, \lambda_N)$ and the columns
+of $U$ are the orthonormal eigenvectors.  Define
+\begin{equation*}
+  f \;:=\; U^T g, \qquad
+  f_i = (\text{eigvec}_i)^T g
+  \quad\text{(the gradient's component along mode $i$)}.
+\end{equation*}
+Then the shifted Hessian inverts diagonally:
+\begin{equation*}
+  (H - \mu I)^{-1}
+  \;=\; U (\Lambda - \mu I)^{-1} U^T
+  \;=\; U \,\operatorname{diag}\!\Bigl(\tfrac{1}{\lambda_i - \mu}\Bigr)\, U^T,
+\end{equation*}
+and the quadratic form becomes a plain sum over modes:
+\begin{equation*}
+  g^T (H - \mu I)^{-1} g
+  \;=\; (U^T g)^T \operatorname{diag}\!\Bigl(\tfrac{1}{\lambda_i - \mu}\Bigr) (U^T g)
+  \;=\; \sum_i \frac{f_i^2}{\lambda_i - \mu}.
+\end{equation*}
+Substituting back into the scalar equation:
+\begin{equation*}
+  -\,\sum_i \frac{f_i^2}{\lambda_i - \mu} \;=\; \mu
+  \quad\Longleftrightarrow\quad
+  \sum_i \frac{f_i^2}{\mu - \lambda_i} \;=\; \mu.
+\end{equation*}
+That is the \textbf{secular equation}:
 \begin{equation}\label{eq:secular}
-  \sum_i \frac{f_i^2}{\mu - \lambda_i} \;=\; \mu,
+  \boxed{\;\sum_i \frac{f_i^2}{\mu - \lambda_i} \;=\; \mu.\;}
 \end{equation}
-where $\lambda_i$ are eigenvalues of $H$ and
-$f_i = (\text{eigvec}_i)^T g$.
+
+\paragraph{Why interlacing.}
+The left-hand side is a sum of simple poles at each $\lambda_i$ with positive
+residue $f_i^2$.  Between any two consecutive eigenvalues
+$\lambda_i < \lambda_{i+1}$, the function jumps from $+\infty$ (as
+$\mu \to \lambda_i^+$) to $-\infty$ (as $\mu \to \lambda_{i+1}^-$),
+strictly decreasing in between.  The right-hand side $\mu$ is just a line.
+A monotone-decreasing function crossing a line on a bounded interval gives
+exactly one intersection per gap.  Plus one extra root below $\lambda_{\min}$
+(LHS $\to 0^-$ from below at $-\infty$, line at $-\infty$, so they cross
+once) and one above $\lambda_{\max}$ (analogous).  Total: $N+1$ roots,
+\emph{interleaved} with the $\lambda_i$:
+\begin{equation*}
+  \mu_0 \;<\; \lambda_1 \;<\; \mu_1 \;<\; \lambda_2 \;<\; \cdots
+  \;<\; \lambda_N \;<\; \mu_N.
+\end{equation*}
+These are precisely the $N+1$ eigenvalues of the augmented matrix
+in~\eqref{eq:augmented} (which has dimension $N+1$, so $N+1$ eigenvalues).
+The two descriptions --- ``eigenvalue of the augmented matrix'' and ``root of
+the secular equation'' --- are the same set of numbers.
 
 This scalar equation has $N+1$ roots, interleaved with the $\lambda_i$'s plus
 one below the lowest and one above the highest eigenvalue.  \textbf{Each root
@@ -171,38 +283,184 @@ via the $\rho = \Delta E_{\text{actual}} / \Delta E_{\text{predicted}}$ ratio.)
 \section{The partitioning (the ``P'' in P-RFO)}
 
 For transition-state search we want one mode to ascend and the rest to descend.
-\textbf{Use two different shifts.}
 
-\paragraph{Followed (ascent) mode $k$.}  Solve the $2 \times 2$ RFO subproblem
-in mode $k$ alone:
-\begin{equation*}
+\paragraph{Where the subproblems come from.}
+Rewrite the augmented eigenvalue problem~\eqref{eq:augmented} in the
+\emph{eigenbasis of $H$}.  Let $H = U \Lambda U^T$ with eigenvalues
+$\lambda_i$, and let $\dq = U^T \dx$ be the step in the eigenbasis,
+$f_i = (U^T g)_i$ the gradient component along mode $i$.  Conjugating by
+$U$ (i.e.\ multiplying on each side by $\operatorname{diag}(U, 1)$) diagonalises
+the upper block of the augmented matrix:
+\begin{equation}\label{eq:augmented-eigbasis}
+  \underbrace{\begin{pmatrix}
+    \lambda_1 &        &              & f_1   \\
+              & \ddots &              & \vdots\\
+              &        & \lambda_N    & f_N   \\
+    f_1       & \cdots & f_N          & 0
+  \end{pmatrix}}_{(N+1) \times (N+1)}
+  \begin{pmatrix} \dq \\ 1 \end{pmatrix}
+  \;=\; \mu \begin{pmatrix} \dq \\ 1 \end{pmatrix}.
+\end{equation}
+The same eigenvalues, same eigenvectors --- just rotated into a basis where
+the coupling structure is transparent.  Now look at any single row $i$ in
+the top block:
+\begin{equation}\label{eq:per-mode-step}
+  (\lambda_i - \mu)\, \dq_i \;=\; -f_i,
+  \quad\text{i.e.}\quad
+  \dq_i \;=\; -\frac{f_i}{\lambda_i - \mu}.
+\end{equation}
+\textbf{Each mode's step depends only on its own $(\lambda_i, f_i)$ and the
+shared scalar $\mu$.}  The modes do not couple to each other; they couple
+only through the common shift.
+
+For minimization, one chooses $\mu = \mu_0 < \lambda_{\min}$ in the full
+secular equation~\eqref{eq:secular} so $(\lambda_i - \mu_0) > 0$ for every
+$i$ --- every mode descends.  But for transition-state search, we want
+\emph{different signs for different modes}: ascent in the chosen mode $k$,
+descent in all others.  No single root of \eqref{eq:secular} can do that
+unless mode $k$ happens to be the softest.  The partitioning trick is to
+\textbf{use a different shift on each subspace}, computed from a smaller
+augmented eigenvalue problem on the modes of that subspace alone.
+
+\paragraph{Followed (ascent) mode $k$.}  Restrict to mode $k$ only: just one
+$\lambda$, one $f$.  The augmented eigenvalue problem~\eqref{eq:augmented-eigbasis}
+collapses to a $2 \times 2$ block:
+\begin{equation}\label{eq:rfo-2x2}
   \begin{pmatrix} \lambda_k & f_k \\ f_k & 0 \end{pmatrix}
   \begin{pmatrix} v \\ 1 \end{pmatrix}
-  = \mu_+ \begin{pmatrix} v \\ 1 \end{pmatrix}.
-\end{equation*}
-Take the \emph{larger} root,
+  \;=\; \mu_+ \begin{pmatrix} v \\ 1 \end{pmatrix}.
+\end{equation}
+Its characteristic polynomial is $(\lambda_k - \mu)(- \mu) - f_k^2 = 0$,
+i.e.\ $\mu^2 - \lambda_k\, \mu - f_k^2 = 0$, with two roots:
 \begin{equation*}
-  \mu_+ = \tfrac{1}{2}\!\left(\lambda_k + \sqrt{\lambda_k^2 + 4 f_k^2}\right)
-        > \lambda_k.
+  \mu_\pm \;=\; \tfrac{1}{2}\!\left(\lambda_k \pm \sqrt{\lambda_k^2 + 4 f_k^2}\right).
 \end{equation*}
-Then $\dq_k = -f_k / (\lambda_k - \mu_+)$ ascends along mode $k$.
+Since $\sqrt{\lambda_k^2 + 4 f_k^2} > |\lambda_k|$, we have $\mu_+ > \lambda_k$
+and $\mu_- < 0$.  Take $\mu_+$.  Then $(\lambda_k - \mu_+) < 0$, so
+\begin{equation*}
+  \dq_k \;=\; -\frac{f_k}{\lambda_k - \mu_+} \;=\; \frac{f_k}{\mu_+ - \lambda_k}
+\end{equation*}
+points along $+f_k$ --- \emph{the same direction as the gradient component in
+mode $k$, i.e.\ uphill}.  That is the ascent step.
 
-\paragraph{Descent subspace} (the other $N-1$ modes).  Solve the
-$M \times M$ RFO subproblem on the remaining eigenvalues; take the \emph{lowest}
-root $\mu_- < \min_{j \neq k} \lambda_j$.  Then
-$\dq_j = -f_j / (\lambda_j - \mu_-)$ descends in each remaining mode.
+\paragraph{Descent subspace} (the other $N-1$ modes).  Restrict to those
+modes: drop row $k$ and column $k$ from~\eqref{eq:augmented-eigbasis}
+(leaving an $M \times M$ block with $M = N-1$ active modes, plus the bottom
+row and last column of $f$'s).  The result is an $(M+1) \times (M+1)$
+augmented eigenvalue problem on the descent subspace.  Its smallest root
+$\mu_-$ lies below $\min_{j \neq k} \lambda_j$, so $(\lambda_j - \mu_-) > 0$
+for every remaining mode and the step
+$\dq_j = -f_j / (\lambda_j - \mu_-)$ descends in each.
+
+\paragraph{Why the partitioning is mathematically clean.}  Both subproblems
+are themselves \emph{exact RFO problems on subspaces of $H$}.  They inherit
+every property of the full augmented eigenvalue problem (interlacing roots,
+shift-invert structure, implicit step bound from the rational-function
+model), just applied to a smaller piece.  The trick is that the eigenbasis
+decouples the modes' step formulas~\eqref{eq:per-mode-step}, so a sub-RFO
+on mode $k$ alone gives a self-consistent shift for that mode, independent
+of what shift the rest of the modes use.  Two RFO subproblems on
+complementary subspaces of $H$, each generating its own shift, are
+\textbf{not an approximation} --- they are an exact reformulation that
+allows independent ascent/descent choices.
 
 Reassemble $\dq$ in the eigenbasis and rotate back to get $\dx$.  \textbf{One
 ascent mode, all-others descent.}  That is the P in P-RFO.
 
-\paragraph{Mode-following heuristic.}  The choice of which mode $k$ to follow:
-on iteration 1, pick the lowest eigenvalue (most negative if you have one,
-otherwise softest).  Subsequent iterations: pick the eigenvector with maximum
-overlap with the previously-followed eigenvector.  Failure mode: when the
-followed eigenvalue crosses zero or near-degenerate eigenvalues swap, overlap
-can pick the wrong mode and the optimizer briefly walks the wrong way.  Our
-HCN demo's iterations~19--31 show this in action --- the optimizer recovers,
-but it is the main source of fragility in the current \texttt{prfo.py}.
+\subsection*{Which mode $k$ to follow}
+
+The partitioning above assumes we have already \emph{chosen} a mode $k$ to
+ascend.  In practice, mode choice is decided iteration-by-iteration based on
+where you are in configuration space.  Three regimes show up.
+
+\paragraph{Iteration 1: at or near a minimum.}
+Every eigenvalue $\lambda_i$ is positive (or close to it).  There is no
+``unstable mode'' yet --- you have to \emph{create} one for P-RFO to climb.
+Standard recipes, in increasing order of effort and quality:
+\begin{itemize}
+  \item \textbf{Lowest eigenvalue (Cerjan-Miller ``gentlest ascent'').}
+        Pick $k = \arg\min_i \lambda_i$.  Assumes the softest mode at the
+        minimum leads to the chemically relevant saddle --- usually true for
+        simple bond-rotation or bond-breaking reactions in floppy molecules,
+        but \emph{not} guaranteed.  When a minimum has several saddles
+        adjacent to it, the softest mode points toward one of them, not
+        necessarily the one of interest.
+  \item \textbf{Chemical intuition.}  Hand-supply a direction $u$ pointing
+        along the expected reaction coordinate (e.g.\ ``the H atom should
+        bend out of the molecular axis'').  P-RFO follows the eigenmode
+        with maximum overlap to $u$.  This is what \texttt{init\_mode}
+        does in \texttt{prfo.py} --- it adds a rank-1 correction
+        $-2 u u^T$ to the initial Hessian so the eigendecomposition has
+        $u$ as a negative-curvature mode from step~1.
+  \item \textbf{Lindh-seeded Lanczos (\texttt{estimate\_lowest\_mode}).}
+        Best automatic choice when you have no chemical hint.  Lindh's
+        empirical model Hessian seeds Lanczos iteration, which extracts
+        the true lowest mode of the actual Hessian by finite-difference
+        gradient probes --- no $u$ guess required.
+\end{itemize}
+
+\paragraph{Subsequent iterations: mode following by maximum overlap.}
+Once mode $k$ has been picked at iteration 1, at every later iteration the
+Hessian has changed slightly (Bofill update from new gradient information),
+so its eigenvectors $v_1^{(t)}, \dots, v_N^{(t)}$ have rotated.  Re-picking
+``the lowest eigenvalue'' at every iteration would risk hopping to a
+\emph{different} mode mid-climb.  Baker's 1986 fix: at iteration $t$, pick
+\begin{equation*}
+  k^{(t)} \;=\; \arg\max_i\;\bigl| (v_i^{(t)})^T\, u^{(t-1)} \bigr|,
+\end{equation*}
+where $u^{(t-1)}$ is the eigenvector followed at iteration $t-1$.
+\textbf{The followed mode is the one most parallel to last step's followed
+mode.}  Justification: as the optimizer moves through configuration space,
+the true unstable eigenvector varies continuously, so consecutive iterations
+should track the same physical mode by overlap.
+
+\paragraph{Approaching the saddle.}
+Near the saddle, the followed eigenvalue $\lambda_k$ approaches zero from
+above and crosses to negative.  The eigenvector stabilises.  By the time the
+optimizer converges, $\lambda_k$ is the saddle's true unstable eigenvalue
+(one negative number), and the eigenvector is the saddle's unstable mode ---
+exactly the seed for an IRC computation.
+
+\paragraph{When mode-following breaks.}  Three failure modes worth knowing:
+\begin{itemize}
+  \item \textbf{Eigenvalue crossings.}  When $\lambda_k$ and $\lambda_{k+1}$
+        nearly cross between iterations, both eigenvectors can rotate
+        rapidly, and maximum-overlap can swap modes.  The HCN demo's
+        iterations~19--31 show exactly this: $\lambda_{\text{followed}}$
+        crossed zero, overlap with the previous followed vector dropped
+        below 0.5, and the optimizer briefly tracked a different mode
+        before re-aligning.
+  \item \textbf{True degeneracies (symmetry).}  If $\lambda_k = \lambda_j$
+        for some $j \neq k$ at a symmetry point, the eigenvectors are not
+        unique --- \texttt{eigh} returns an arbitrary basis of the
+        two-dimensional eigenspace.  Overlap-matching becomes ill-defined.
+        HCN's bend at the linear minimum is doubly degenerate (bend-in-$y$
+        and bend-in-$z$ have the same eigenvalue), which is why our
+        Lanczos-seeded \texttt{init\_mode} returned a superposition rather
+        than aligned with the eventual TS plane.
+  \item \textbf{Wrong starting choice.}  If you followed the wrong mode
+        at iteration 1, you converge to a different saddle than intended
+        --- or to a higher-order saddle, or wander off.  IRC verification
+        catches this: if the endpoints don't match the expected
+        reactant/product, the saddle is real but unrelated.
+\end{itemize}
+
+\paragraph{Robustness improvements (not in current \texttt{prfo.py}).}
+\begin{itemize}
+  \item \textbf{Require monotone eigenvalue} when mode-following.
+        Refuse mode switches that swap to an eigenvector with very
+        different $\lambda$ from the previous followed one.  Catches the
+        iter-27 jump in the HCN demo.
+  \item \textbf{Recompute the lowest mode by Lanczos at each step.}
+        Drops the dependence on Bofill's Hessian estimate for mode
+        identity.  This is what \emph{ART-nouveau} does.  Cost: $\sim 5$
+        extra gradient calls per step; benefit: the algorithm cannot lose
+        the unstable mode by accident.
+  \item \textbf{Track multiple candidate modes.}  Run several P-RFO
+        threads in parallel, each following a different initial mode;
+        IRC-verify each at convergence and keep the chemically meaningful
+        one.  This is the saddle-enumeration approach.
+\end{itemize}
 
 \section{Coordinate systems are orthogonal to RFO}
 
