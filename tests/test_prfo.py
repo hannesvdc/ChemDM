@@ -125,7 +125,7 @@ def test_bofill_can_introduce_negative_eigenvalue():
 # Lindh model Hessian
 # ============================================================
 
-def _directed(edges: list[tuple[int, int]]) -> pt.Tensor:
+def _directed( edges: list[tuple[int, int]] ) -> pt.Tensor:
     out = []
     for i, j in edges:
         out.append((i, j)); out.append((j, i))
@@ -149,7 +149,7 @@ def test_lindh_hessian_shape_and_symmetry():
 
 def test_lindh_hessian_psd_and_zero_modes():
     mol = _hcn_molecule()
-    H = lindh_model_hessian(mol)
+    H = lindh_model_hessian( mol )
     eigvals = np.linalg.eigvalsh(H)
     # PSD up to roundoff
     assert eigvals.min() > -1e-8
@@ -179,10 +179,11 @@ def test_lindh_hessian_bond_stiffness_along_axis():
 
 class _QuadraticPotential:
     """E(x) = 0.5 (x - x0)^T H (x - x0)."""
-    def __init__(self, H_true: np.ndarray, x0: np.ndarray):
+    def __init__( self, H_true: np.ndarray, x0: np.ndarray ):
         self.H = H_true
         self.x0 = x0.flatten()
-    def energy_forces(self, x: np.ndarray):
+
+    def energy_forces( self, x: np.ndarray ):
         dx = x.flatten() - self.x0
         E = 0.5 * float(dx @ self.H @ dx)
         g = self.H @ dx
@@ -197,12 +198,13 @@ def test_dimer_rotation_finds_lowest_mode_of_quadratic():
     # Build a true Hessian: identity in physical subspace + a soft mode along
     # a known internal direction.
     V = _trans_rot_basis(x)  # (12, 6)
+
     # An "internal" direction: take a random vector, project trans/rot out.
     u_true = rng.standard_normal(12)
     u_true = u_true - V @ (V.T @ u_true)
     u_true /= np.linalg.norm(u_true)
     H_phys = np.eye(12) - V @ V.T  # I on physical, 0 on trans/rot
-    H_true = 1.5 * H_phys - 1.0 * np.outer(u_true, u_true)  # soft mode lam = 0.5
+    H_true = 1.5 * H_phys - 1.0 * np.outer( u_true, u_true )  # soft mode lam = 0.5
 
     mol = MoleculeGraph(
         Z=pt.tensor([1, 1, 1, 1]),
@@ -211,9 +213,8 @@ def test_dimer_rotation_finds_lowest_mode_of_quadratic():
     )
     potential = _QuadraticPotential(H_true, x)
 
-    u_est, lam_est = estimate_lowest_mode(
-        potential, mol, max_iter=20, eps=1e-3, tol=1e-6,
-    )
+    u_est, lam_est = estimate_lowest_mode( potential, mol, max_iter=20, eps=1e-3, tol=1e-6 )
+
     # Same direction (or its negative).
     overlap = abs(float(u_est @ u_true))
     assert overlap > 0.999, f"overlap={overlap}, lam_est={lam_est}"
@@ -236,9 +237,7 @@ def test_prfo_optimizer_accepts_moleculegraph():
     opt = PRFOOptimizer(_Dummy(), mol, init_mode=None)
     assert opt.molecule is mol
     assert opt._shape == (3, 3)
-    np.testing.assert_allclose(opt.x.reshape(3, 3),
-                               _to_numpy_helper(mol.x), atol=1e-12)
-
+    np.testing.assert_allclose(opt.x.reshape(3, 3),  _to_numpy_helper(mol.x), atol=1e-12)
 
 def _to_numpy_helper(t):
     return t.detach().cpu().numpy()
