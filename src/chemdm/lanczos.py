@@ -90,6 +90,17 @@ def lanczos_lowest( matvec: Callable[[np.ndarray], np.ndarray],
         V_project = np.asarray( V_project, dtype=np.float64 )
         if V_project.ndim != 2 or V_project.shape[0] != dim:
             raise ValueError( f"V_project must have shape ({dim}, k); got {V_project.shape}." )
+        # Orthonormality is essential for correctness: the "projector"
+        # v - V V^T v is only a true orthogonal projector when V's columns
+        # are orthonormal. A non-orthonormal V would silently shift the
+        # returned eigenvalues. Cheap O(k²) check, ~µs at typical k.
+        k_proj = V_project.shape[1]
+        gram = V_project.T @ V_project
+        if not np.allclose( gram, np.eye(k_proj), atol=1e-8 ):
+            raise ValueError(
+                "V_project columns must be orthonormal (V_project.T @ V_project != I). "
+                "Pass an explicitly orthonormalised basis (e.g. via np.linalg.qr)."
+            )
 
     def proj( v: np.ndarray ) -> np.ndarray:
         if V_project is None:
@@ -146,7 +157,7 @@ def lanczos_lowest( matvec: Callable[[np.ndarray], np.ndarray],
     # When the loop completes max_iter iterations without breaking, Q ends up
     # with k_dim + 1 vectors (one extra appended at the end of the last iter
     # before we'd check β at the top of iteration k_dim). Use only the first
-    # k_dim vectors, matching the dimensions of the tridiagonal T.
+    # k_dim vectors, matching the size of the Lanczos tridiagonal (k_dim × k_dim).
     Q_mat = np.stack( Q[:k_dim], axis=1 )
     u = Q_mat @ ritz_vecs[:, 0]
     u = proj(u)

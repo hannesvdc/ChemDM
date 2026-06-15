@@ -317,7 +317,7 @@ def estimate_lowest_mode( evaluator: EnergyForceEvaluator,
 
     Seeds the Lanczos iteration from `lindh_model_hessian(molecule)`'s lowest
     eigenmode (or from `init_u` if provided). Each Lanczos step costs one
-    extra force call (forward-difference `Hv ≈ (g(x+εv) − g₀)/ε`).
+    extra force call (forward-difference `Hv ≈ (g(x+εv) - g₀)/ε`).
 
     Returns
     -------
@@ -342,9 +342,9 @@ def estimate_lowest_mode( evaluator: EnergyForceEvaluator,
         return (g_plus - g0) / eps
 
     if init_u is None:
-        H_model = lindh_model_hessian(molecule)
-        H_act = _project_mat(H_model, V)
-        eigvals, eigvecs = np.linalg.eigh(H_act)
+        H_model = lindh_model_hessian( molecule )
+        H_act = _project_mat( H_model, V )
+        eigvals, eigvecs = np.linalg.eigh( H_act )
         scale = max(abs(eigvals).max(), 1e-6)
         nonzero = np.abs(eigvals) > 1e-6 * scale
         if nonzero.any():
@@ -352,7 +352,9 @@ def estimate_lowest_mode( evaluator: EnergyForceEvaluator,
         else:
             u0 = np.random.default_rng(0).standard_normal(dim)
     else:
-        u0 = np.asarray(init_u, dtype=float).reshape(-1)
+        # Start from the initial ascent direction provided by the user.
+        # Should not really happen often.
+        u0 = np.asarray( init_u, dtype=float ).reshape(-1)
 
     return lanczos_lowest(
         Hv_fd, u0,
@@ -427,7 +429,7 @@ class PRFOOptimizer:
         # sometimes fragile.
         self.H = np.eye( self.dim )
         if init_mode == "lanczos":
-            u, _ = estimate_lowest_mode(evaluator, molecule)
+            u, _ = estimate_lowest_mode( evaluator, molecule )
             # `estimate_lowest_mode` already projected u onto the trans/rot-free
             # subspace and normalised it.
             self.H = self.H - 2.0 * np.outer(u, u)
