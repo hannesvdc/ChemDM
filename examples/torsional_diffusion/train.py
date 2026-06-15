@@ -142,10 +142,10 @@ def main( exp_name: str ) -> None:
     with open( "./data_config.json", "r" ) as f:
         data_config = json.load( f )
 
-    qm9_dir     = Path( data_config["data_folder"] )
-    parsed_dir  = qm9_dir.parent / "parsed"
-    store_root  = data_config.get( "store_root", "./checkpoints" )
-    ckpt_dir    = Path( store_root ) / exp_name
+    qm9_dir = Path( data_config["data_folder"] )
+    data_dir = qm9_dir.parent / "conformer_matching"
+    store_root = data_config.get( "store_root", "./checkpoints" )
+    ckpt_dir = Path( store_root ) / exp_name
     ckpt_dir.mkdir( parents=True, exist_ok=True )
 
     device_str  = data_config.get( "device", os.environ.get("DEVICE", "mps") )
@@ -157,8 +157,8 @@ def main( exp_name: str ) -> None:
     print(f"checkpoints: {ckpt_dir}")
 
     # Data
-    train_ds = TorsionalDataset( parsed_dir / "train.pt" )
-    val_ds = TorsionalDataset( parsed_dir / "val.pt" )
+    train_ds = TorsionalDataset( data_dir / "train.pt" )
+    val_ds = TorsionalDataset( data_dir / "val.pt" )
     print(f"train: {len(train_ds):,} conformers   val: {len(val_ds):,} conformers")
 
     train_loader = DataLoader(
