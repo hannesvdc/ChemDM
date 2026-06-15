@@ -118,7 +118,7 @@ def lanczos_lowest( matvec: Callable[[np.ndarray], np.ndarray],
     v = proj(v)
     nv = np.linalg.norm(v)
     if nv < 1e-12:
-        raise ValueError("seed vector vanishes after projection; cannot start Lanczos.")
+        raise ValueError( "Seed vector vanishes after projection; cannot start Lanczos." )
     v /= nv
 
     # Krylov vectors and Lanczos orthogonolization coeffiencts 

@@ -15,9 +15,7 @@ from chemdm.lanczos import lanczos_lowest
 
 # ---------- helpers ----------
 
-def make_symmetric_with_spectrum(
-    eigvals: np.ndarray, seed: int = 0
-) -> tuple[np.ndarray, np.ndarray]:
+def make_symmetric_with_spectrum( eigvals: np.ndarray, seed: int = 0 ) -> tuple[np.ndarray, np.ndarray]:
     """Return (H, U) such that H = U diag(eigvals) U.T with U random orthogonal."""
     rng = np.random.default_rng(seed)
     n = eigvals.size
@@ -27,8 +25,7 @@ def make_symmetric_with_spectrum(
     H = 0.5 * (H + H.T)                    # symmetrise against roundoff
     return H, Q
 
-
-def matvec_from_matrix(H: np.ndarray):
+def matvec_from_matrix( H: np.ndarray ):
     return lambda v: H @ v
 
 
@@ -250,10 +247,7 @@ def test_early_break_when_seed_supported_on_3_eigenvectors():
     v0 = np.zeros(n)
     v0[:3] = 1.0    # only the first 3 eigenvectors are reachable
 
-    u, lam = lanczos_lowest(
-        matvec_from_matrix(A), v0,
-        max_iter=10, tol=1e-12,    # max_iter way larger than 3 → must break early
-    )
+    u, lam = lanczos_lowest( matvec_from_matrix(A), v0, max_iter=10, tol=1e-12 )    # max_iter way larger than 3 → must break early
 
     # Smallest eigvalue of A restricted to span{e_0, e_1, e_2} is 1.0.
     assert abs(lam - 1.0) < 1e-12
@@ -291,10 +285,7 @@ def test_early_break_produces_no_nans():
     v0 = np.zeros(n)
     v0[:2] = [1.0, 1.0]   # 2-dim invariant subspace, exhausts after 2 iters
 
-    u, lam = lanczos_lowest(
-        matvec_from_matrix(A), v0,
-        max_iter=20, tol=1e-12,
-    )
+    u, lam = lanczos_lowest( matvec_from_matrix(A), v0,  max_iter=20, tol=1e-12 )
 
     assert np.isfinite(lam)
     assert np.all(np.isfinite(u))
@@ -314,16 +305,174 @@ def test_early_break_with_projection_combined():
     v0 = np.zeros(n)
     v0[1:4] = [1.0, 1.0, 1.0]
 
-    u, lam = lanczos_lowest(
-        matvec_from_matrix(A), v0,
-        max_iter=10, tol=1e-12, V_project=e0,
-    )
+    u, lam = lanczos_lowest( matvec_from_matrix(A), v0, max_iter=10, tol=1e-12, V_project=e0 )
 
     # A's smallest eigval in span{e_1, e_2, e_3} after projecting out e_0 is 2.0
     # (eigvec e_1).
     assert abs(lam - 2.0) < 1e-10
     assert abs(abs(u[1]) - 1.0) < 1e-8
     assert abs(u[0]) < 1e-10                  # deflated component
+
+
+# ============================================================
+# Large-N test cases with analytically known eigenvalues / eigenvectors
+# ============================================================
+#
+# Tridiagonal Toeplitz matrix T_N(a, b) — diagonal a, off-diagonal b — has
+# closed-form spectrum:
+#     λ_k = a + 2b cos(k π / (N+1)),       k = 1..N
+#     v_k[j] = sqrt(2/(N+1)) sin(j k π / (N+1)),  j = 1..N
+# These tests verify Lanczos on this classical family at N=100, where eigvals
+# and eigvecs aren't synthesised via random rotation but are mathematically
+# pinned to the matrix structure.
+
+def _toeplitz_tridiag(N: int, a: float, b: float) -> np.ndarray:
+    H = np.zeros((N, N))
+    np.fill_diagonal(H, a)
+    for i in range(N - 1):
+        H[i, i + 1] = b
+        H[i + 1, i] = b
+    return H
+
+
+def _toeplitz_eigval(N: int, a: float, b: float, k: int) -> float:
+    """The k-th eigenvalue (k = 1..N) of tridiagonal Toeplitz T_N(a, b)."""
+    return a + 2.0 * b * np.cos(k * np.pi / (N + 1))
+
+
+def _toeplitz_eigvec(N: int, k: int) -> np.ndarray:
+    """The k-th eigenvector (k = 1..N), already unit-normalised."""
+    j = np.arange(1, N + 1)
+    return np.sqrt(2.0 / (N + 1)) * np.sin(j * k * np.pi / (N + 1))
+
+
+def test_lanczos_100x100_discrete_laplacian():
+    # Tridiagonal Toeplitz with a=2, b=-1 — the discrete 1D Laplacian.
+    # Positive definite, smallest eigval λ_1 = 2 - 2 cos(π/101) ≈ 9.67e-4.
+    # Eigenvalues at the bottom are densely clustered (gap ~3·(π/N)²), so
+    # convergence to the smallest eigval is the slowest Lanczos regime. We
+    # set max_iter > N which forces Krylov-subspace exhaustion (β → 0 at
+    # iter N) and the eigval is then recovered exactly up to roundoff.
+    N = 100
+    a, b = 2.0, -1.0
+    H = _toeplitz_tridiag(N, a, b)
+    expected_min = _toeplitz_eigval(N, a, b, k=1)
+    expected_eigvec = _toeplitz_eigvec(N, k=1)
+
+    rng = np.random.default_rng(42)
+    v0 = rng.standard_normal(N)
+
+    u, lam = lanczos_lowest( matvec_from_matrix(H), v0, max_iter=110, tol=1e-12, seed_noise=0.0 )
+
+    # With max_iter > N, the Krylov basis spans all of R^N (provided v0 has
+    # nonzero overlap with every eigenvector, which a random Gaussian does
+    # with probability 1). Eigenvalues recovered to machine precision.
+    assert abs(lam - expected_min) < 1e-9, f"expected {expected_min:.6e}, got {lam:.6e}"
+    overlap = abs(u @ expected_eigvec)
+    assert overlap > 1.0 - 1e-6, f"eigvec overlap with true v_1 is only {overlap:.10f}"
+
+
+def test_lanczos_100x100_indefinite_toeplitz():
+    # Tridiagonal Toeplitz with a=0, b=1 — eigenvalues span [-2, 2]. Smallest
+    # is the most negative (k=N), eigval = 2 cos(N π / (N+1)) = -2 cos(π/(N+1))
+    # ≈ -1.9995. Eigvec is the high-frequency sine vector v_N. Tests Lanczos at
+    # scale on an indefinite operator with the target at the negative extreme.
+    # As in the Laplacian case the spectrum is clustered at both ends; we use
+    # max_iter > N to recover the eigval exactly.
+    N = 100
+    a, b = 0.0, 1.0
+    H = _toeplitz_tridiag(N, a, b)
+    expected_min = _toeplitz_eigval(N, a, b, k=N)
+    expected_eigvec = _toeplitz_eigvec(N, k=N)
+
+    rng = np.random.default_rng(7)
+    v0 = rng.standard_normal(N)
+
+    u, lam = lanczos_lowest( matvec_from_matrix(H), v0, max_iter=110, tol=1e-12, seed_noise=0.0 )
+
+    assert abs(lam - expected_min) < 1e-9, f"expected {expected_min:.6f}, got {lam:.6f}"
+    overlap = abs(u @ expected_eigvec)
+    assert overlap > 1.0 - 1e-6, f"eigvec overlap with true v_N is only {overlap:.10f}"
+
+
+def test_lanczos_100x100_2d_discrete_laplacian():
+    # 2D 5-point discrete Laplacian on a 10x10 grid → 100x100 matrix.
+    # Sparse but *non-tridiagonal*: each interior row has nonzeros at columns
+    # k-N, k-1, k, k+1, k+N (where N=10 is the row-stride). Exercises Lanczos
+    # on a different sparsity / spectrum structure than the 1D Toeplitz cases.
+    #
+    # Eigenvalues are sums of 1D eigvals:
+    #     λ_{j,k} = (2 - 2cos(j π / 11)) + (2 - 2cos(k π / 11))   j, k = 1..10
+    # Eigenvectors are tensor products of 1D sines:
+    #     v_{j,k}(i, ℓ) ∝ sin(i j π / 11) sin(ℓ k π / 11)
+    # Smallest: λ_{1,1} = 2 · (2 - 2cos(π/11)) ≈ 0.163, eigvec is the outer
+    # product of the two 1D ground-state sines (a single arch in each axis).
+    M = N = 10
+    n_dim = M * N
+
+    # Build the matrix via the 5-point stencil.
+    H = np.zeros((n_dim, n_dim))
+    for i in range(M):
+        for j in range(N):
+            k = i * N + j
+            H[k, k] = 4.0
+            if j + 1 < N: H[k, k + 1] = -1.0       # right neighbour (off-diag ±1)
+            if j > 0:     H[k, k - 1] = -1.0       # left neighbour
+            if i + 1 < M: H[k, k + N] = -1.0       # down neighbour (off-diag ±N)
+            if i > 0:     H[k, k - N] = -1.0       # up neighbour
+    # Sanity-check the non-tridiagonal sparsity pattern is what we expect.
+    assert H[0, N] == -1.0 and H[N, 0] == -1.0, "expected coupling at off-diag ±N"
+
+    lam_1d = 2.0 - 2.0 * np.cos(np.pi / (M + 1))
+    expected_min = 2.0 * lam_1d                    # (j, k) = (1, 1)
+    # Smallest eigenvector: outer product of the two 1D ground-state sines.
+    v_1d = np.sin(np.arange(1, M + 1) * np.pi / (M + 1))
+    expected_eigvec = np.outer(v_1d, v_1d).reshape(-1)
+    expected_eigvec /= np.linalg.norm(expected_eigvec)
+
+    rng = np.random.default_rng(13)
+    v0 = rng.standard_normal(n_dim)
+
+    u, lam = lanczos_lowest(
+        matvec_from_matrix(H), v0,
+        max_iter=110, tol=1e-12, seed_noise=0.0,
+    )
+
+    assert abs(lam - expected_min) < 1e-9, f"expected {expected_min:.6e}, got {lam:.6e}"
+    overlap = abs(u @ expected_eigvec)
+    assert overlap > 1.0 - 1e-6, f"eigvec overlap with true v_(1,1) is only {overlap:.10f}"
+
+
+def test_lanczos_100x100_with_deflation():
+    # Combines the 100x100 case with V_project deflation. Discrete Laplacian,
+    # deflate out the lowest TWO eigenvectors → Lanczos should return the
+    # third-smallest eigval (k=3). max_iter > N forces exact convergence.
+    N = 100
+    a, b = 2.0, -1.0
+    H = _toeplitz_tridiag(N, a, b)
+
+    # First two eigenvectors as orthonormal V_project columns.
+    # _toeplitz_eigvec returns unit-norm vectors; sine-eigvecs of distinct k
+    # are exactly orthogonal, so V is orthonormal by construction.
+    V = np.column_stack([_toeplitz_eigvec(N, k=1), _toeplitz_eigvec(N, k=2)])
+
+    expected_min = _toeplitz_eigval(N, a, b, k=3)
+    expected_eigvec = _toeplitz_eigvec(N, k=3)
+
+    rng = np.random.default_rng(99)
+    v0 = rng.standard_normal(N)
+
+    u, lam = lanczos_lowest(
+        matvec_from_matrix(H), v0,
+        max_iter=110, tol=1e-12, V_project=V,
+    )
+
+    assert abs(lam - expected_min) < 1e-9, f"expected {expected_min:.6e}, got {lam:.6e}"
+    overlap = abs(u @ expected_eigvec)
+    assert overlap > 1.0 - 1e-6, f"eigvec overlap with true v_3 is only {overlap:.10f}"
+    # Returned vector must be orthogonal to the deflated subspace.
+    assert abs(u @ V[:, 0]) < 1e-8
+    assert abs(u @ V[:, 1]) < 1e-8
 
 
 def test_early_break_at_iteration_1_returns_eigenvector_as_is():
