@@ -25,35 +25,35 @@ from chemdm.prfo import (
 
 def test_trans_rot_basis_shape_generic():
     rng = np.random.default_rng(0)
-    x = rng.standard_normal((6, 3))
+    x = rng.standard_normal( (6, 3) )
     V = _trans_rot_basis(x)
     assert V.shape == (18, 6)
-    np.testing.assert_allclose(V.T @ V, np.eye(6), atol=1e-12)
+    np.testing.assert_allclose( V.T @ V, np.eye(6), atol=1e-12 )
 
 
 def test_trans_rot_basis_drops_linear_redundant_axis():
     # Atoms strictly along z: rotations about z are degenerate -> 5 modes survive.
-    x = np.zeros((4, 3))
+    x = np.zeros( (4, 3) )
     x[:, 2] = np.arange(4, dtype=float)
-    V = _trans_rot_basis(x)
+    V = _trans_rot_basis( x )
     assert V.shape[1] == 5
 
 
 def test_project_kills_pure_translation_and_rotation():
     rng = np.random.default_rng(1)
-    x = rng.standard_normal((5, 3))
-    V = _trans_rot_basis(x)
+    x = rng.standard_normal( (5, 3) )
+    V = _trans_rot_basis( x )
 
     # Pure x-translation.
     trans = np.zeros_like(x)
     trans[:, 0] = 0.37
-    assert np.linalg.norm(_project_vec(trans.reshape(-1), V)) < 1e-10
+    assert np.linalg.norm( _project_vec(trans.reshape(-1), V) ) < 1e-10
 
     # Infinitesimal rotation about z, applied to centered coords.
-    c = x.mean(axis=0)
+    c = x.mean( axis=0 )
     r = x - c
-    rot = np.cross(np.array([0.0, 0.0, 1.0]), r)
-    assert np.linalg.norm(_project_vec(rot.reshape(-1), V)) < 1e-10
+    rot = np.cross( np.array([0.0, 0.0, 1.0]), r ) # the first is the z-unit vector
+    assert np.linalg.norm( _project_vec(rot.reshape(-1), V) ) < 1e-10
 
 
 def test_project_preserves_internal_direction():
@@ -65,16 +65,29 @@ def test_project_preserves_internal_direction():
     stretch = np.array([[-1.0, 0.0, 0.0],
                         [+1.0, 0.0, 0.0],
                         [ 0.0, 0.0, 0.0]]).reshape(-1)
-    projected = _project_vec(stretch, V)
-    # Most of the stretch should remain.
-    assert np.linalg.norm(projected) > 0.5 * np.linalg.norm(stretch)
+    projected = _project_vec( stretch, V )
+
+    # For this symmetric configuration the stretch is *exactly* orthogonal to
+    # every trans/rot mode:
+    #   - x-trans (1,0,0, 1,0,0, 1,0,0) · stretch = -1 + 1 + 0 = 0.
+    #   - y/z-trans live in y/z slots; stretch is all-x.
+    #   - z-rotation about centroid (0, 1/3, 0) sends atoms 0 and 1 with
+    #     EQUAL x-components (each +1/3), cancelling against stretch's
+    #     opposite signs.
+    #   - x/y-rotations only generate z-displacements for atoms in this
+    #     xy-plane configuration, trivially orthogonal to the all-x stretch.
+    # So (I - V V^T) @ stretch must equal stretch to machine precision. A real
+    # bug in the projector (e.g. `P = V V^T` instead of `I - V V^T`, missing
+    # rotation generator, wrong centroid) would fail this immediately.
+    np.testing.assert_allclose( projected, stretch, atol=1e-12 )
+    np.testing.assert_allclose( np.linalg.norm(projected), np.linalg.norm(stretch), rtol=1e-12 )
 
 
 def test_project_mat_idempotent_on_projected_subspace():
     rng = np.random.default_rng(2)
-    x = rng.standard_normal((4, 3))
+    x = rng.standard_normal( (4, 3) )
     V = _trans_rot_basis(x)
-    M = rng.standard_normal((12, 12))
+    M = rng.standard_normal( (12, 12) )
     M = 0.5 * (M + M.T)
     Mp = _project_mat(M, V)
     Mpp = _project_mat(Mp, V)
@@ -118,7 +131,7 @@ def test_bofill_can_introduce_negative_eigenvalue():
     dx = np.zeros(n); dx[0] = 0.1
     dg = np.zeros(n); dg[0] = -0.2  # implies curvature -2 along x_0
     H_new = _bofill_update(H, dx, dg)
-    assert np.min(np.linalg.eigvalsh(H_new)) < 0.0
+    assert np.min( np.linalg.eigvalsh(H_new) ) < 0.0
 
 
 # ============================================================
@@ -166,7 +179,7 @@ def test_lindh_hessian_bond_stiffness_along_axis():
     # atom 1 moves +x" (asymmetric stretch).
     mol = _hcn_molecule()
     H = lindh_model_hessian(mol)
-    u = np.zeros(9)
+    u = np.zeros(9) # translation vector
     u[0] = -1.0   # H moves -x
     u[3] = +1.0   # C moves +x (atoms 0 and 1)
     u /= np.linalg.norm(u)
@@ -193,7 +206,7 @@ class _QuadraticPotential:
 def test_dimer_rotation_finds_lowest_mode_of_quadratic():
     # 4 atoms in a tetrahedron-ish arrangement so trans/rot basis is 6.
     rng = np.random.default_rng(7)
-    x = rng.standard_normal((4, 3))
+    x = rng.standard_normal( (4, 3) )
 
     # Build a true Hessian: identity in physical subspace + a soft mode along
     # a known internal direction.
@@ -201,8 +214,8 @@ def test_dimer_rotation_finds_lowest_mode_of_quadratic():
 
     # An "internal" direction: take a random vector, project trans/rot out.
     u_true = rng.standard_normal(12)
-    u_true = u_true - V @ (V.T @ u_true)
-    u_true /= np.linalg.norm(u_true)
+    u_true = _project_vec( u_true, V ) 
+    u_true /= np.linalg.norm( u_true )
     H_phys = np.eye(12) - V @ V.T  # I on physical, 0 on trans/rot
     H_true = 1.5 * H_phys - 1.0 * np.outer( u_true, u_true )  # soft mode lam = 0.5
 
@@ -237,7 +250,7 @@ def test_prfo_optimizer_accepts_moleculegraph():
     opt = PRFOOptimizer(_Dummy(), mol, init_mode=None)
     assert opt.molecule is mol
     assert opt._shape == (3, 3)
-    np.testing.assert_allclose(opt.x.reshape(3, 3),  _to_numpy_helper(mol.x), atol=1e-12)
+    np.testing.assert_allclose( opt.x.reshape(3, 3),  _to_numpy_helper(mol.x), atol=1e-12 )
 
 def _to_numpy_helper(t):
     return t.detach().cpu().numpy()

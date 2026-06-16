@@ -52,7 +52,7 @@ def _trans_rot_basis( x: np.ndarray ) -> np.ndarray:
     n = x.shape[0]
     r = x - x.mean(axis=0)
 
-    # Translational basis vectors
+    # Translational basis vectors. Shift the whole molecule
     cols = []
     for i in range(3):
         v = np.zeros((n, 3))
