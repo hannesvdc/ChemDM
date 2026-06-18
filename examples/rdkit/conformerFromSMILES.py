@@ -1,8 +1,7 @@
 import math
 import numpy as np
 
-import py3Dmol
-from conformerViewer import make_page, launch_html_viewer
+from chemviewer import view_movie
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdchem
 from rdkit.Geometry import Point3D
@@ -232,14 +231,9 @@ def alanine():
 
     # Create RDKit Conformer objects
     conformers_mol_objects = [ mol_with_new_positions(mol_with_h, optimal_conformers[ii]) for ii in range(len(optimal_conformers)) ]
-    def mol_to_py3dmol_html(mol) -> str:
-        mol_block = Chem.MolToMolBlock(mol)
-        viewer = py3Dmol.view(width=500, height=400)
-        viewer.addModel(mol_block, "mol")
-        viewer.setStyle({"stick": {}, "sphere": {"scale": 0.25}})
-        viewer.zoomTo()
-        return viewer._make_html()
-    molecule_html_blocks = [ mol_to_py3dmol_html(mol) for mol in conformers_mol_objects ]
+
+    # Bond graph (0-indexed edge list) shared by every conformer.
+    bonds = [ (b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in mol_with_h.GetBonds() ]
     phi_values = []
     psi_values = []
     energy_values = []
@@ -270,8 +264,9 @@ def alanine():
 
     plt.show( block=False )
 
-    html = make_page(molecule_html_blocks, phi_values, psi_values, energies)
-    launch_html_viewer( html, title="Alanine Dipeptide Conformers", width=1500, height=900, use_temp_file=True )
+    # Display the unique stable conformers as a scrubable / playable movie.
+    movie = [ (Z, conf, bonds) for conf in optimal_conformers ]
+    view_movie( movie, title="Alanine Dipeptide Conformers", width=1500, height=900 )
 
     def write_conformers_mol_files(conformer_mols, prefix: str = "conformer"):
         for i, mol in enumerate(conformer_mols):
