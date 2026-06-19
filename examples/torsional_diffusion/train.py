@@ -216,19 +216,48 @@ def main( exp_name: str ) -> None:
     with open( ckpt_dir / "config.json", "w" ) as f:
         json.dump( experiment_config, f, indent=2 )
 
+    # Resume from the always-last-epoch checkpoint (latest.pt) if one exists. It
+    # is rewritten every epoch with model + optimizer + scheduler + epoch +
+    # best_val_loss + global_step, so we continue exactly where we stopped.
+    start_epoch   = 1
+    best_val_loss = float("inf")
+    global_step   = 0
+    latest_ckpt = ckpt_dir / "latest.pt"
+    if latest_ckpt.exists():
+        ckpt = pt.load( latest_ckpt, map_location=device )
+        model.load_state_dict( ckpt["model"] )
+        optimizer.load_state_dict( ckpt["optimizer"] )
+        start_epoch   = ckpt["epoch"] + 1
+        best_val_loss = ckpt.get( "best_val_loss", float("inf") )
+        global_step   = ckpt.get( "global_step", 0 )
+        if "scheduler" in ckpt:
+            scheduler.load_state_dict( ckpt["scheduler"] )
+        else:
+            # Legacy checkpoint predating scheduler-state saving: replay the
+            # per-epoch steps to recover the LR position.
+            for _ in range( ckpt["epoch"] ):
+                scheduler.step()
+        print(f"resuming from {latest_ckpt}: continuing at epoch {start_epoch} / {N_EPOCHS}")
+
+    # Weights & Biases. On a resume we re-attach to the SAME run by persisting
+    # its id in the checkpoint dir, so metrics append to the original run's
+    # history (and the dashboard marks it resumed) instead of opening a new run.
     run = None
     if setup_wandb:
+        wandb_id_file = ckpt_dir / "wandb_run_id"
+        resuming = start_epoch > 1 and wandb_id_file.exists()
         run = wandb.init(
             entity  = WANDB_ENTITY,
             project = WANDB_PROJECT,
             name    = exp_name,
             config  = experiment_config,
+            id      = wandb_id_file.read_text().strip() if resuming else None,
+            resume  = "allow" if resuming else None,
         )
+        wandb_id_file.write_text( run.id )
 
     # Training
-    best_val_loss = float("inf")
-    global_step   = 0
-    for epoch in range(1, N_EPOCHS + 1):
+    for epoch in range(start_epoch, N_EPOCHS + 1):
         model.train()
 
         epoch_t0 = time.time()
@@ -277,24 +306,30 @@ def main( exp_name: str ) -> None:
             f"({epoch_dt:.1f}s)"
         )
 
-        # Checkpointing. `latest.pt` is overwritten every epoch and carries
-        # enough state to resume (model + optimizer + epoch). `best.pt`
-        # tracks the best validation loss seen so far and stores just the
-        # model state_dict — that's the one to load for sampling.
-        pt.save(
-            {
-                "model":     model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "epoch":     epoch,
-                "train_loss": train_loss,
-                "val_loss":  val_loss,
-            },
-            ckpt_dir / "latest.pt",
-        )
+        # Checkpointing. `best.pt` tracks the best validation loss and stores
+        # just the model state_dict (the one to load for sampling); we update it
+        # first so the `latest.pt` snapshot below records the current
+        # best_val_loss. `latest.pt` is overwritten every epoch and carries
+        # enough state to resume (model + optimizer + scheduler + epoch +
+        # best_val_loss).
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             pt.save( model.state_dict(), ckpt_dir / "best.pt" )
             print( f"  -> new best val_loss ({val_loss:.4f}); saved best.pt" )
+
+        pt.save(
+            {
+                "model":         model.state_dict(),
+                "optimizer":     optimizer.state_dict(),
+                "scheduler":     scheduler.state_dict(),
+                "epoch":         epoch,
+                "best_val_loss": best_val_loss,
+                "global_step":   global_step,
+                "train_loss":    train_loss,
+                "val_loss":      val_loss,
+            },
+            ckpt_dir / "latest.pt",
+        )
 
         if setup_wandb and run is not None:
             run.log({
