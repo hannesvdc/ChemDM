@@ -14,7 +14,17 @@ paired-difference distribution, a Wilcoxon signed-rank test, the per-reaction
 win rate, per-layer convergence, an RMSD-vs-arclength profile, and a
 reaction-feature breakdown of which architecture wins where.
 
-Configure the run by editing SPLITS below; inference always runs fresh.
+For the splits listed in NEB_FORCE_SPLITS it additionally evaluates, with xTB,
+the max perpendicular force to each predicted path (the "weak" / NEB-readiness
+error, vs RMSD's "strong" / pathwise error) and the reduction factor over the
+naive linear-interpolation NEB start, F_perp(linear) / F_perp(model). It reports
+reduction-factor statistics, the attention-vs-convolution paired force win, and
+the correlation between the RMSD gap and the force gap. xTB single-points are
+expensive (~40 per reaction), so this is gated to its own split list — running
+it on train (~9.4k reactions) would take hours.
+
+Configure the run by editing SPLITS / NEB_FORCE_SPLITS below; inference always
+runs fresh.
 
 Note on leakage: the attention checkpoint was trained on processed_unique, but
 the convolution checkpoint was (per its data_config) trained on `processed`.
@@ -33,7 +43,9 @@ import torch as pt
 import matplotlib.pyplot as plt
 from chemdm.NewtonE3NN import NewtonE3NN
 from EquivariantTransformer import EquivariantTransformer
-from scipy.stats import wilcoxon
+from chemdm.xtbSetup import XTBPotential
+from chemdm.nebXtbDirect import evaluate_path, neb_force
+from scipy.stats import wilcoxon, spearmanr
 
 EXAMPLES = Path( __file__ ).resolve().parent.parent
 sys.path.append( str(EXAMPLES) )
@@ -49,6 +61,12 @@ from chemdm.util import formula_from_Z
 # including it makes the run noticeably longer on CPU.
 SPLITS = [ "train", "val", "test" ]
 
+# Splits that additionally get the xTB perpendicular-force / reduction-factor
+# analysis. ~40 xTB single-points per reaction; running all three splits
+# (~9.9k reactions) is hours of xTB on CPU. Empty list disables forces entirely.
+NEB_FORCE_SPLITS = [ "train", "val", "test" ]
+SPRING_K = 0.0   # F_perp is independent of the spring constant
+
 # Common arclength grid for the RMSD-vs-path profile (endpoints included).
 PROFILE_GRID = np.linspace(0.0, 1.0, 21)
 
@@ -62,23 +80,37 @@ def _per_image_rmsd( final_state: pt.Tensor, x_ref: pt.Tensor ) -> np.ndarray:
     return pt.sqrt( mse ).cpu().numpy()
 
 
-def evaluate_pair( att_model : EquivariantTransformer, 
-                   conv_model : NewtonE3NN, 
-                   dataset, 
-                   device : pt.device, 
-                   n_layers : int):
+def _max_perp_force( xtb, path: np.ndarray ) -> float:
+    """Max per-atom perpendicular (NEB) force over interior images, kJ/mol/A."""
+    if len(path) < 3:
+        return float("nan")   # need >=3 images to define interior tangents
+    E, F = evaluate_path( xtb, path )            # kJ/mol, kJ/mol/A
+    _, F_perp = neb_force( path, E, F, SPRING_K )   # (M-2, n_atoms, 3)
+    return float( np.linalg.norm(F_perp, axis=-1).max() )
+
+
+def evaluate_pair( att_model : EquivariantTransformer,
+                   conv_model : NewtonE3NN,
+                   dataset,
+                   device : pt.device,
+                   n_layers : int,
+                   compute_forces : bool = False ):
     """
     Run both models over every reaction in `dataset`, once.
 
     Returns
       err_att, err_conv : (n_reactions, n_layers) per-layer MSE matrices
       prof_att, prof_conv : (len(PROFILE_GRID),) mean final-layer RMSD vs arclength
+      forces : dict of (n_reactions,) max-perp-force arrays for the linear-interp
+               baseline, attention, convolution and reference paths, or None.
     """
     n = len( dataset )
     err_att = np.zeros( (n, n_layers) )
     err_conv = np.zeros( (n, n_layers) )
     prof_att_acc = np.zeros_like(PROFILE_GRID)
     prof_conv_acc = np.zeros_like(PROFILE_GRID)
+    forces = ( {k: np.zeros(n) for k in ("lin", "att", "conv", "ref")}
+               if compute_forces else None )
 
     for i in range(n):
         if i % 100 == 0:
@@ -94,8 +126,8 @@ def evaluate_pair( att_model : EquivariantTransformer,
         x_ref = traj.x.to(device=device, dtype=pt.float32)
 
         # Evalute both models using the same function. Jeuj!
-        _, states_a = evaluateML( att_model, s, Z, xA, xB, Ga, Gb ) # type: ignore
-        _, states_c = evaluateML( conv_model, s, Z, xA, xB, Ga, Gb )
+        x_a, states_a = evaluateML( att_model, s, Z, xA, xB, Ga, Gb ) # type: ignore
+        x_c, states_c = evaluateML( conv_model, s, Z, xA, xB, Ga, Gb )
 
         # Also re-use, Jeuj!
         err_att[i, :] = evaluateMoleculeErrors( states_a, x_ref )
@@ -109,7 +141,17 @@ def evaluate_pair( att_model : EquivariantTransformer,
         prof_att_acc += np.interp( PROFILE_GRID, s_sorted, _per_image_rmsd(states_a[-1], x_ref)[order] )
         prof_conv_acc += np.interp( PROFILE_GRID, s_sorted, _per_image_rmsd(states_c[-1], x_ref)[order] )
 
-    return err_att, err_conv, prof_att_acc / n, prof_conv_acc / n
+        if compute_forces:
+            Z_np = traj.Z.cpu().numpy().astype(int)
+            xtb = XTBPotential( Z=Z_np )            # one calculator, reused for all 4 paths
+            s_col = s.reshape(-1, 1, 1)
+            x_lin = ( (1.0 - s_col) * xA[None] + s_col * xB[None] ).cpu().numpy()
+            forces["lin"][i]  = _max_perp_force( xtb, x_lin )
+            forces["att"][i]  = _max_perp_force( xtb, x_a.cpu().numpy() )
+            forces["conv"][i] = _max_perp_force( xtb, x_c.cpu().numpy() )
+            forces["ref"][i]  = _max_perp_force( xtb, x_ref.cpu().numpy() )
+
+    return err_att, err_conv, prof_att_acc / n, prof_conv_acc / n, forces
 
 
 def paired_report( rmsd_att : np.ndarray, 
@@ -172,6 +214,97 @@ def feature_breakdown(rmsd_att : np.ndarray,
             win = 100 * np.mean(ra < rc)
             print(f"  {feat:<22s} {v_str:>6s} {mask.sum():>5d} "
                   f"{np.median(ra):>8.3f} {np.median(rc):>8.3f} {win:>7.1f}%")
+
+
+def _geomean( r : np.ndarray ) -> float:
+    """Geometric mean — the right central tendency for multiplicative ratios."""
+    return float( np.exp( np.mean( np.log( np.maximum(r, 1e-12) ) ) ) )
+
+
+def force_report( forces : dict ):
+    """Perpendicular-force magnitudes, reduction factors, and the paired force win."""
+    f_lin, f_att, f_conv, f_ref = forces["lin"], forces["att"], forces["conv"], forces["ref"]
+
+    print("\n=== Max perpendicular force to the path (kJ/mol/A) ===")
+    for name, f in (("linear-interp", f_lin), ("attention", f_att),
+                    ("convolution", f_conv), ("reference", f_ref)):
+        p = np.percentile(f, [50, 90, 95])
+        print(f"  {name:<14s} n={len(f):>5d}  mean={f.mean():8.1f}  median={p[0]:8.1f}  "
+              f"p90={p[1]:8.1f}  p95={p[2]:8.1f}  max={f.max():8.1f}")
+
+    # Reduction factor over the naive linear-interpolation NEB start.
+    print("\n=== Reduction factor over linear interpolation "
+          "(F_lin / F_model; >1 = model lowers the initial NEB force) ===")
+    for name, r in (("attention", f_lin / f_att), ("convolution", f_lin / f_conv)):
+        p = np.percentile(r, [25, 50, 75])
+        print(f"  {name:<12s} geomean={_geomean(r):5.2f}x  median={p[1]:5.2f}x  "
+              f"IQR=[{p[0]:.2f}, {p[2]:.2f}]x  helps(>1)={100*np.mean(r>1):4.1f}%  max={r.max():5.2f}x")
+
+    # How far each model still sits above the (xTB) reference-path force floor.
+    print("\n=== Gap above reference floor (F_model / F_reference; 1 = at the floor) ===")
+    for name, g in (("attention", f_att / f_ref), ("convolution", f_conv / f_ref)):
+        print(f"  {name:<12s} geomean={_geomean(g):5.2f}x  median={np.median(g):5.2f}x")
+
+    # Paired: does attention reduce the force more than convolution?
+    try:
+        _, pval = wilcoxon(f_att, f_conv)
+    except ValueError:
+        pval = float("nan")
+    print("\n=== Paired force comparison (attention vs convolution) ===")
+    print(f"  attention lower force: {100*np.mean(f_att < f_conv):4.1f}%   "
+          f"geomean(F_conv / F_att)={_geomean(f_conv / f_att):5.2f}x   Wilcoxon p={pval:.2e}")
+
+
+def weak_vs_strong( forces : dict, rmsd_att : np.ndarray, rmsd_conv : np.ndarray ):
+    """Do the weak (force) and strong (RMSD) errors agree on which model wins?"""
+    d_rmsd = rmsd_att - rmsd_conv
+    d_force = forces["att"] - forces["conv"]
+    rho, p = spearmanr(d_rmsd, d_force)
+    agree = 100 * np.mean(np.sign(d_rmsd) == np.sign(d_force))
+    print("\n=== Weak (perp force) vs strong (RMSD) error ===")
+    print(f"  Spearman corr of dRMSD vs dForce: rho={rho:+.3f}  (p={p:.2e})")
+    print(f"  both metrics pick the same winner: {agree:4.1f}% of reactions")
+    print("  (rho near 0 or low agreement => RMSD-to-reference is a poor proxy for NEB readiness)")
+
+
+def make_force_plots( forces : dict, rmsd_att, rmsd_conv, split ):
+    f_att, f_conv = forces["att"], forces["conv"]
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    # (a) Reduction-factor distributions (log x, line at 1 = no help).
+    ax = axes[0]
+    bins = np.logspace(np.log10(0.2), np.log10(max((forces["lin"]/f_att).max(),
+                                                   (forces["lin"]/f_conv).max())), 50)
+    ax.hist(forces["lin"]/f_conv, bins=bins, alpha=0.55, label="convolution", color="tab:orange")
+    ax.hist(forces["lin"]/f_att, bins=bins, alpha=0.55, label="attention", color="tab:blue")
+    ax.axvline(1.0, color="black", lw=1)
+    ax.set_xscale("log")
+    ax.set_xlabel("reduction factor  F_lin / F_model")
+    ax.set_ylabel("# reactions"); ax.set_title("Reduction over linear-interp NEB start")
+    ax.legend(); ax.grid(axis="y", alpha=0.3)
+
+    # (b) Paired force scatter (log-log, y=x).
+    ax = axes[1]
+    hi = max(f_att.max(), f_conv.max()); lo = max(min(f_att.min(), f_conv.min()), 1e-3)
+    ax.scatter(f_conv, f_att, s=6, alpha=0.3)
+    ax.plot([lo, hi], [lo, hi], "k--", lw=1)
+    ax.set_xscale("log"); ax.set_yscale("log")
+    ax.set_xlabel("convolution max perp force [kJ/mol/A]")
+    ax.set_ylabel("attention max perp force [kJ/mol/A]")
+    ax.set_title("Per-reaction perp force (below line: attention lower)")
+    ax.grid(alpha=0.3)
+
+    # (c) Weak vs strong: does the RMSD gap track the force gap?
+    ax = axes[2]
+    ax.scatter(rmsd_att - rmsd_conv, f_att - f_conv, s=6, alpha=0.3)
+    ax.axhline(0.0, color="black", lw=1); ax.axvline(0.0, color="black", lw=1)
+    ax.set_xlabel("dRMSD (attention - convolution) [A]")
+    ax.set_ylabel("dForce (attention - convolution) [kJ/mol/A]")
+    ax.set_title("Weak vs strong error (bottom-left quadrant: attention wins both)")
+    ax.grid(alpha=0.3)
+
+    fig.suptitle(f"Perpendicular-force comparison — {split} split (n={len(f_att)})")
+    fig.tight_layout()
 
 
 def make_plots( rmsd_att, rmsd_conv, err_att, err_conv, prof_att, prof_conv, split ):
@@ -256,8 +389,11 @@ def main():
         print( f"\n################  {split}  ################" )
         dataset = TransitionPathDataset(split, data_directory)
 
-        err_att, err_conv, prof_att, prof_conv = evaluate_pair(
-            att_model, conv_model, dataset, device, n_layers
+        compute_forces = split in NEB_FORCE_SPLITS
+        if compute_forces:
+            print(f"  (computing xTB perpendicular forces for {len(dataset)} reactions — slow)")
+        err_att, err_conv, prof_att, prof_conv, forces = evaluate_pair(
+            att_model, conv_model, dataset, device, n_layers, compute_forces
         )
 
         # MSE is mean over (image, atom) of summed-squared-xyz, so sqrt is the
@@ -281,6 +417,14 @@ def main():
                   f"file={dataset.file_names[int(idx)]}")
 
         make_plots(rmsd_att, rmsd_conv, err_att, err_conv, prof_att, prof_conv, split)
+
+        if forces is not None:
+            # Drop reactions with too few images to define a perp force.
+            m = np.all([np.isfinite(forces[k]) for k in forces], axis=0)
+            fr = {k: v[m] for k, v in forces.items()}
+            force_report(fr)
+            weak_vs_strong(fr, rmsd_att[m], rmsd_conv[m])
+            make_force_plots(fr, rmsd_att[m], rmsd_conv[m], split)
 
     plt.show()
 
