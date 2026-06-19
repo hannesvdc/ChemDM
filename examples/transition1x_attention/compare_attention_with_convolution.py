@@ -142,14 +142,24 @@ def evaluate_pair( att_model : EquivariantTransformer,
         prof_conv_acc += np.interp( PROFILE_GRID, s_sorted, _per_image_rmsd(states_c[-1], x_ref)[order] )
 
         if compute_forces:
-            Z_np = traj.Z.cpu().numpy().astype(int)
-            xtb = XTBPotential( Z=Z_np )            # one calculator, reused for all 4 paths
-            s_col = s.reshape(-1, 1, 1)
-            x_lin = ( (1.0 - s_col) * xA[None] + s_col * xB[None] ).cpu().numpy()
-            forces["lin"][i]  = _max_perp_force( xtb, x_lin )
-            forces["att"][i]  = _max_perp_force( xtb, x_a.cpu().numpy() )
-            forces["conv"][i] = _max_perp_force( xtb, x_c.cpu().numpy() )
-            forces["ref"][i]  = _max_perp_force( xtb, x_ref.cpu().numpy() )
+            # xTB occasionally fails to converge on a geometry; isolate that to
+            # this reaction (set its forces to NaN, dropped downstream) instead
+            # of crashing the whole multi-hour run.
+            try:
+                Z_np = traj.Z.cpu().numpy().astype(int)
+                xtb = XTBPotential( Z=Z_np )            # one calculator, reused for all 4 paths
+                s_col = s.reshape(-1, 1, 1)
+                x_lin = ( (1.0 - s_col) * xA[None] + s_col * xB[None] ).cpu().numpy()
+                forces["lin"][i]  = _max_perp_force( xtb, x_lin )
+                forces["att"][i]  = _max_perp_force( xtb, x_a.cpu().numpy() )
+                forces["conv"][i] = _max_perp_force( xtb, x_c.cpu().numpy() )
+                forces["ref"][i]  = _max_perp_force( xtb, x_ref.cpu().numpy() )
+            except Exception as e:
+                for k in forces:
+                    forces[k][i] = np.nan
+                fname = getattr(dataset, "file_names", [None] * len(dataset))[i]
+                print(f"  xTB failed on reaction {i} ({fname}): {type(e).__name__}: {e}; "
+                      f"forces set to NaN")
 
     return err_att, err_conv, prof_att_acc / n, prof_conv_acc / n, forces
 
@@ -419,12 +429,19 @@ def main():
         make_plots(rmsd_att, rmsd_conv, err_att, err_conv, prof_att, prof_conv, split)
 
         if forces is not None:
-            # Drop reactions with too few images to define a perp force.
+            # Drop reactions with too few images or an xTB failure (NaN forces).
             m = np.all([np.isfinite(forces[k]) for k in forces], axis=0)
-            fr = {k: v[m] for k, v in forces.items()}
-            force_report(fr)
-            weak_vs_strong(fr, rmsd_att[m], rmsd_conv[m])
-            make_force_plots(fr, rmsd_att[m], rmsd_conv[m], split)
+            n_drop = int((~m).sum())
+            if n_drop:
+                print(f"  ({n_drop} / {len(m)} reactions dropped from force stats: "
+                      f"too few images or xTB failure)")
+            if m.sum() == 0:
+                print("  no reactions with valid forces — skipping force report")
+            else:
+                fr = {k: v[m] for k, v in forces.items()}
+                force_report(fr)
+                weak_vs_strong(fr, rmsd_att[m], rmsd_conv[m])
+                make_force_plots(fr, rmsd_att[m], rmsd_conv[m], split)
 
     plt.show()
 
