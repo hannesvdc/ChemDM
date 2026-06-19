@@ -2,8 +2,8 @@ import torch as pt
 from pathlib import Path
 
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.NewtonE3NN import NewtonE3NN
-from chemdm.ResidualDiffusionE3NN import ResidualDiffusionE3NN
+from examples.transition1x_newton.NewtonE3NN import NewtonE3NN
+from examples.transition1x_newton.ResidualDiffusionE3NN import ResidualDiffusionE3NN
 
 def loadNewtonModel( store_root : str, device : pt.device, dtype : pt.dtype) -> NewtonE3NN:
     newton_weights = pt.load( Path(store_root) / 'best_gnn.pth', map_location=device, weights_only=True )

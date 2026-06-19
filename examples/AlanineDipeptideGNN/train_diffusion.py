@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from chemdm.MoleculeGraph import BatchedMoleculeGraph, MoleculeGraph, batchMolecules
 from chemdm.Trajectory import Trajectory, alignToReactant
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.TransitionPathDiffusionNetwork import TransitionPathDiffusionGNN
+from examples.transition1x_diffusion.TransitionPathDiffusionNetwork import TransitionPathDiffusionGNN
 from chemdm.DDPMSchedule import DDPMSchedule
 from chemdm.util import getGradientNorm, perCoordinateRMSE
 from TrajectoryDataset import TrajectoryDataset

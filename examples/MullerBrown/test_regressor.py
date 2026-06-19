@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from generateTrainingData import inverseHessianAt
 from MullerBrown import get_fixed_points, plotHelper
 
-from chemdm.RegressionNetwork import RegressionNetwork
+from RegressionNetwork import RegressionNetwork
 from chemdm.TrajectoryDataset import TrajectoryDataset
 
 # Set global device and dtype, except for the dataloader

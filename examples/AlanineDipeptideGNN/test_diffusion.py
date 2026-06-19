@@ -11,7 +11,7 @@ from pathlib import Path
 
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, BatchedMoleculeGraph, Molecule
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.TransitionPathDiffusionNetwork import TransitionPathDiffusionGNN
+from examples.transition1x_diffusion.TransitionPathDiffusionNetwork import TransitionPathDiffusionGNN
 from chemdm.DDPMSchedule import DDPMSchedule
 from chemdm.Trajectory import Trajectory
 from TrajectoryDataset import TrajectoryDataset

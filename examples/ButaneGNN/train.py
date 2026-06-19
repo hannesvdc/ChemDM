@@ -12,7 +12,7 @@ from chemdm.MoleculeGraph import BatchedMoleculeGraph, MoleculeGraph, batchMolec
 from TrajectoryDataset import TrajectoryDataset
 from chemdm.Trajectory import Trajectory
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.TransitionPathNetwork import TransitionPathGNN
+from examples.transition1x.TransitionPathNetwork import TransitionPathGNN
 from chemdm.util import getGradientNorm
 
 from typing import List, Tuple

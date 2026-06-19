@@ -10,7 +10,7 @@ from pathlib import Path
 
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, BatchedMoleculeGraph, Molecule
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.TransitionPathNetwork import TransitionPathGNN
+from examples.transition1x.TransitionPathNetwork import TransitionPathGNN
 from chemdm.Trajectory import Trajectory
 from TrajectoryDataset import TrajectoryDataset
 from system import compute_phi_psi_from_xyz

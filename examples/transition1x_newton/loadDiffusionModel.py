@@ -2,7 +2,7 @@ import torch as pt
 from pathlib import Path
 
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.ResidualDiffusionE3NN import ResidualDiffusionE3NN
+from examples.transition1x_newton.ResidualDiffusionE3NN import ResidualDiffusionE3NN
 
 def loadDiffusionModel( store_root : str, 
                         device : pt.device, 

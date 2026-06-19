@@ -13,7 +13,7 @@ from chemdm.MoleculeGraph import BatchedMoleculeGraph, MoleculeGraph, batchMolec
 from TrajectoryDataset import TrajectoryDataset
 from chemdm.Trajectory import Trajectory, alignToReactant
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.FiLMTransitionPathGNN import FiLMTransitionPathGNN
+from FiLMTransitionPathGNN import FiLMTransitionPathGNN
 from chemdm.util import getGradientNorm, perCoordinateRMSE
 
 from typing import List, Tuple

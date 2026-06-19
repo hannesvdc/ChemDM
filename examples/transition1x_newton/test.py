@@ -7,7 +7,7 @@ import json
 
 from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
-from chemdm.NewtonE3NN import NewtonE3NN
+from examples.transition1x_newton.NewtonE3NN import NewtonE3NN
 
 from loadNewtonModel import loadNewtonModel
 

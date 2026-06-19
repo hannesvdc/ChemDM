@@ -5,7 +5,7 @@ import openmm as mm
 from chemdm.xtbSetup import create_xtb_context
 from chemdm.nebXtb import run_neb_xtb, normalized_arclengths
 
-from chemdm.NewtonE3NN import NewtonE3NN
+from examples.transition1x_newton.NewtonE3NN import NewtonE3NN
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
 

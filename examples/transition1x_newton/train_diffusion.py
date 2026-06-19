@@ -16,7 +16,7 @@ import traceback
 from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.ResidualDiffusionE3NN import ResidualDiffusionE3NN
+from examples.transition1x_newton.ResidualDiffusionE3NN import ResidualDiffusionE3NN
 from chemdm.util import getGradientNorm, collate_molecules
 
 from loadNewtonModel import loadNewtonModel

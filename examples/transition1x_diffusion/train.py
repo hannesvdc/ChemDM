@@ -14,7 +14,7 @@ from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, BatchedMoleculeG
 from chemdm.Trajectory import Trajectory, enforceCOM, alignToReactant
 from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.TransitionPathDiffusionNetwork import TransitionPathDiffusionGNN
+from examples.transition1x_diffusion.TransitionPathDiffusionNetwork import TransitionPathDiffusionGNN
 from chemdm.DDPMSchedule import DDPMSchedule
 from chemdm.util import getGradientNorm, perCoordinateRMSE
 

@@ -8,7 +8,7 @@ from chemdm.MLP import MultiLayerPerceptron
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.embedding import ArcLengthEmbedding
 from chemdm.MoleculeGraph import Molecule, recenterMolecule
-from chemdm.TransitionPathE3NNLayer import TransitionPathE3NNLayer, E3State
+from examples.transition1x_e3nn.TransitionPathE3NNLayer import TransitionPathE3NNLayer, E3State
 
 class TransitionPathE3NN(nn.Module):
     """

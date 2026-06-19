@@ -20,7 +20,7 @@ import numpy as np
 import torch as pt
 
 from chemdm.Constants import *
-from chemdm.NewtonE3NN import NewtonE3NN
+from examples.transition1x_newton.NewtonE3NN import NewtonE3NN
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
 from chemdm.xtbSetup import XTBPotential

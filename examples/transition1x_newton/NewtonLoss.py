@@ -1,7 +1,7 @@
 import torch as pt
 import torch.nn as nn
 
-from chemdm.NewtonE3NNLayer import E3State
+from examples.transition1x_newton.NewtonE3NNLayer import E3State
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
 
 

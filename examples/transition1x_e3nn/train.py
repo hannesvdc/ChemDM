@@ -15,7 +15,7 @@ import traceback
 from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.TransitionPathE3NN import TransitionPathE3NN
+from examples.transition1x_e3nn.TransitionPathE3NN import TransitionPathE3NN
 from chemdm.util import getGradientNorm, perCoordinateRMSE, collate_molecules
 
 from typing import Tuple

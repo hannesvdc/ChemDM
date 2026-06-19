@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 from chemdm.MoleculeGraph import MoleculeGraph
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
-from chemdm.TransitionPathNetwork import TransitionPathGNN
+from examples.transition1x.TransitionPathNetwork import TransitionPathGNN
 
 from Butane import internalToCartesian, cartesianToInternal
 from generateTrainingData import generateRandomMolecules

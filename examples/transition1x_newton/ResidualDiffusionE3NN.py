@@ -7,7 +7,7 @@ from chemdm.AtomicOnlyInformation import AtomicInformation
 from chemdm.MLP import MultiLayerPerceptron
 from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
 from chemdm.MoleculeGraph import Molecule, findAllDistanceNeighbors
-from chemdm.NewtonE3NNLayer import NewtonE3NNLayer, E3State
+from examples.transition1x_newton.NewtonE3NNLayer import NewtonE3NNLayer, E3State
 from chemdm.embedding import SinusoidalEmbedding
 
 class ResidualDiffusionE3NN(nn.Module):

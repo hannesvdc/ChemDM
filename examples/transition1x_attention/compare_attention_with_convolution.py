@@ -16,12 +16,13 @@ reaction-feature breakdown of which architecture wins where.
 
 For the splits listed in NEB_FORCE_SPLITS it additionally evaluates, with xTB,
 the max perpendicular force to each predicted path (the "weak" / NEB-readiness
-error, vs RMSD's "strong" / pathwise error) and the reduction factor over the
-naive linear-interpolation NEB start, F_perp(linear) / F_perp(model). It reports
-reduction-factor statistics, the attention-vs-convolution paired force win, and
-the correlation between the RMSD gap and the force gap. xTB single-points are
-expensive (~40 per reaction), so this is gated to its own split list — running
-it on train (~9.4k reactions) would take hours.
+error, vs RMSD's "strong" / pathwise error) and the per-reaction reduction
+factor of attention over convolution, F_perp(convolution) / F_perp(attention)
+(>1 = attention sits closer to a force-balanced path). It reports
+reduction-factor statistics, each model's gap above the reference-path force
+floor, and the correlation between the RMSD gap and the force gap. xTB
+single-points are expensive (~30 per reaction), so this is gated to its own
+split list — running it on train (~9.4k reactions) would take hours.
 
 Configure the run by editing SPLITS / NEB_FORCE_SPLITS below; inference always
 runs fresh.
@@ -41,7 +42,7 @@ from pathlib import Path
 import numpy as np
 import torch as pt
 import matplotlib.pyplot as plt
-from chemdm.NewtonE3NN import NewtonE3NN
+from examples.transition1x_newton.NewtonE3NN import NewtonE3NN
 from EquivariantTransformer import EquivariantTransformer
 from chemdm.xtbSetup import XTBPotential
 from chemdm.nebXtbDirect import evaluate_path, neb_force
@@ -109,7 +110,7 @@ def evaluate_pair( att_model : EquivariantTransformer,
     err_conv = np.zeros( (n, n_layers) )
     prof_att_acc = np.zeros_like(PROFILE_GRID)
     prof_conv_acc = np.zeros_like(PROFILE_GRID)
-    forces = ( {k: np.zeros(n) for k in ("lin", "att", "conv", "ref")}
+    forces = ( {k: np.zeros(n) for k in ("att", "conv", "ref")}
                if compute_forces else None )
 
     for i in range(n):
@@ -147,10 +148,7 @@ def evaluate_pair( att_model : EquivariantTransformer,
             # of crashing the whole multi-hour run.
             try:
                 Z_np = traj.Z.cpu().numpy().astype(int)
-                xtb = XTBPotential( Z=Z_np )            # one calculator, reused for all 4 paths
-                s_col = s.reshape(-1, 1, 1)
-                x_lin = ( (1.0 - s_col) * xA[None] + s_col * xB[None] ).cpu().numpy()
-                forces["lin"][i]  = _max_perp_force( xtb, x_lin )
+                xtb = XTBPotential( Z=Z_np )            # one calculator, reused for all paths
                 forces["att"][i]  = _max_perp_force( xtb, x_a.cpu().numpy() )
                 forces["conv"][i] = _max_perp_force( xtb, x_c.cpu().numpy() )
                 forces["ref"][i]  = _max_perp_force( xtb, x_ref.cpu().numpy() )
@@ -232,37 +230,33 @@ def _geomean( r : np.ndarray ) -> float:
 
 
 def force_report( forces : dict ):
-    """Perpendicular-force magnitudes, reduction factors, and the paired force win."""
-    f_lin, f_att, f_conv, f_ref = forces["lin"], forces["att"], forces["conv"], forces["ref"]
+    """Perpendicular-force magnitudes and how much attention reduces them over convolution."""
+    f_att, f_conv, f_ref = forces["att"], forces["conv"], forces["ref"]
 
     print("\n=== Max perpendicular force to the path (kJ/mol/A) ===")
-    for name, f in (("linear-interp", f_lin), ("attention", f_att),
-                    ("convolution", f_conv), ("reference", f_ref)):
+    for name, f in (("attention", f_att), ("convolution", f_conv), ("reference", f_ref)):
         p = np.percentile(f, [50, 90, 95])
         print(f"  {name:<14s} n={len(f):>5d}  mean={f.mean():8.1f}  median={p[0]:8.1f}  "
               f"p90={p[1]:8.1f}  p95={p[2]:8.1f}  max={f.max():8.1f}")
 
-    # Reduction factor over the naive linear-interpolation NEB start.
-    print("\n=== Reduction factor over linear interpolation "
-          "(F_lin / F_model; >1 = model lowers the initial NEB force) ===")
-    for name, r in (("attention", f_lin / f_att), ("convolution", f_lin / f_conv)):
-        p = np.percentile(r, [25, 50, 75])
-        print(f"  {name:<12s} geomean={_geomean(r):5.2f}x  median={p[1]:5.2f}x  "
-              f"IQR=[{p[0]:.2f}, {p[2]:.2f}]x  helps(>1)={100*np.mean(r>1):4.1f}%  max={r.max():5.2f}x")
+    # Headline: per-reaction reduction of attention over convolution.
+    # r = F_conv / F_att; >1 means attention has the lower perpendicular force.
+    r = f_conv / f_att
+    p = np.percentile(r, [25, 50, 75])
+    try:
+        _, pval = wilcoxon(f_att, f_conv)
+    except ValueError:
+        pval = float("nan")
+    print("\n=== Reduction of attention over convolution "
+          "(F_conv / F_att; >1 = attention lowers the perp force) ===")
+    print(f"  geomean={_geomean(r):5.2f}x  median={p[1]:5.2f}x  IQR=[{p[0]:.2f}, {p[2]:.2f}]x  "
+          f"attention lower={100*np.mean(f_att < f_conv):4.1f}%  max={r.max():5.2f}x  "
+          f"Wilcoxon p={pval:.2e}")
 
     # How far each model still sits above the (xTB) reference-path force floor.
     print("\n=== Gap above reference floor (F_model / F_reference; 1 = at the floor) ===")
     for name, g in (("attention", f_att / f_ref), ("convolution", f_conv / f_ref)):
         print(f"  {name:<12s} geomean={_geomean(g):5.2f}x  median={np.median(g):5.2f}x")
-
-    # Paired: does attention reduce the force more than convolution?
-    try:
-        _, pval = wilcoxon(f_att, f_conv)
-    except ValueError:
-        pval = float("nan")
-    print("\n=== Paired force comparison (attention vs convolution) ===")
-    print(f"  attention lower force: {100*np.mean(f_att < f_conv):4.1f}%   "
-          f"geomean(F_conv / F_att)={_geomean(f_conv / f_att):5.2f}x   Wilcoxon p={pval:.2e}")
 
 
 def weak_vs_strong( forces : dict, rmsd_att : np.ndarray, rmsd_conv : np.ndarray ):
@@ -281,17 +275,17 @@ def make_force_plots( forces : dict, rmsd_att, rmsd_conv, split ):
     f_att, f_conv = forces["att"], forces["conv"]
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    # (a) Reduction-factor distributions (log x, line at 1 = no help).
+    # (a) Reduction of attention over convolution, F_conv / F_att (log x, line at 1).
     ax = axes[0]
-    bins = np.logspace(np.log10(0.2), np.log10(max((forces["lin"]/f_att).max(),
-                                                   (forces["lin"]/f_conv).max())), 50)
-    ax.hist(forces["lin"]/f_conv, bins=bins, alpha=0.55, label="convolution", color="tab:orange")
-    ax.hist(forces["lin"]/f_att, bins=bins, alpha=0.55, label="attention", color="tab:blue")
+    r = f_conv / f_att
+    ax.hist(r, bins=np.logspace(np.log10(max(r.min(), 1e-3)), np.log10(r.max()), 50),
+            color="tab:blue", alpha=0.8)
     ax.axvline(1.0, color="black", lw=1)
     ax.set_xscale("log")
-    ax.set_xlabel("reduction factor  F_lin / F_model")
-    ax.set_ylabel("# reactions"); ax.set_title("Reduction over linear-interp NEB start")
-    ax.legend(); ax.grid(axis="y", alpha=0.3)
+    ax.set_xlabel("reduction factor  F_conv / F_att  (>1: attention lower)")
+    ax.set_ylabel("# reactions")
+    ax.set_title("Attention's perp-force reduction over convolution")
+    ax.grid(axis="y", alpha=0.3)
 
     # (b) Paired force scatter (log-log, y=x).
     ax = axes[1]

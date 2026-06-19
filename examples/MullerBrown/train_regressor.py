@@ -6,7 +6,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 
 from chemdm.TrajectoryDataset import TrajectoryDataset
-from chemdm.RegressionNetwork import RegressionNetwork
+from RegressionNetwork import RegressionNetwork
 from chemdm.util import getGradientNorm
 
 # Set global device and dtype, except for the dataloader
