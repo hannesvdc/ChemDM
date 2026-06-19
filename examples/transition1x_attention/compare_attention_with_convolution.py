@@ -35,26 +35,13 @@ from chemdm.NewtonE3NN import NewtonE3NN
 from EquivariantTransformer import EquivariantTransformer
 from scipy.stats import wilcoxon
 
-# --- Folder wiring -----------------------------------------------------------
-# This script lives in examples/transition1x_attention/. The convolution model
-# and its loader live in the sibling example directory; *append* it to the path
-# so `loadNewtonModel` resolves. We must append, not insert(0): both example
-# dirs contain a `test.py`, and the local one (already first on sys.path) holds
-# the helpers we import below. `chemdm` is an installed package, so its imports
-# work from anywhere.
 EXAMPLES = Path( __file__ ).resolve().parent.parent
 sys.path.append( str(EXAMPLES) )
-
-# Checkpoints: each model's best weights live in its own experiments/best_gnn.pth.
 ATTENTION_STORE = EXAMPLES / "transition1x_attention" / "experiments"
 CONVOLUTION_STORE = EXAMPLES / "transition1x_newton" / "experiments"
 
-# test.py is __main__-guarded, so importing its helpers does not run the eval.
-# evaluateML / evaluateMoleculeErrors are model-agnostic (the two networks share
-# a forward API), so we reuse them for both models.
-from transition1x_newton.test import evaluateML, evaluateMoleculeErrors
-from transition1x_attention.test import loadAttentionModel, _reaction_features
-from transition1x_newton.loadNewtonModel import loadNewtonModel 
+from transition1x_attention.test import loadAttentionModel, evaluateML, evaluateMoleculeErrors, _reaction_features
+from transition1x_newton.loadNewtonModel import loadNewtonModel
 from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.util import formula_from_Z
 
