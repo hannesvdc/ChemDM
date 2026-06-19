@@ -52,7 +52,7 @@ CONVOLUTION_STORE = EXAMPLES / "transition1x_newton" / "experiments"
 # test.py is __main__-guarded, so importing its helpers does not run the eval.
 # evaluateML / evaluateMoleculeErrors are model-agnostic (the two networks share
 # a forward API), so we reuse them for both models.
-from transition1x_newton.test import loadNewtonModel, evaluateML, evaluateMoleculeErrors
+from transition1x_newton.test import evaluateML, evaluateMoleculeErrors
 from transition1x_attention.test import loadAttentionModel, _reaction_features
 from transition1x_newton.loadNewtonModel import loadNewtonModel 
 from chemdm.TransitionPathDataset import TransitionPathDataset
