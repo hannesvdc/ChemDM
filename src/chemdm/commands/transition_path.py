@@ -17,6 +17,8 @@ if str(_XTB_DIR) not in sys.path:
     sys.path.insert(0, str(_XTB_DIR))
 
 import numpy as np
+import scipy.sparse as sp
+import scipy.linalg as la
 import torch as pt
 
 from chemdm.Constants import *
@@ -29,30 +31,6 @@ from chemdm.geometry import kabsch_align_numpy, normalize, perpendicular_basis, 
 from chemdm.progress import ProgressCallback
 from chemdm.graph.algorithms import neighbors_from_graph
 
-# def load_transition_path_model() -> NewtonE3NN:
-#     d_cutoff = 5.0
-#     n_rbf = 10
-
-#     xA_embedding = MolecularEmbeddingGNN(64, 64, 5, d_cutoff)
-#     xB_embedding = MolecularEmbeddingGNN(64, 64, 5, d_cutoff)
-
-#     n_refinement_steps = 7
-#     model = NewtonE3NN( xA_embedding_network=xA_embedding,
-#                         xB_embedding_network=xB_embedding,
-#                         irreps_node_str="48x0e + 16x1o + 16x1e + 8x2e",
-#                         n_refinement_steps=n_refinement_steps,
-#                         d_cutoff=d_cutoff,
-#                         n_freq=8,
-#                         n_rbf=n_rbf,
-#                         )
-
-#     model_path = os.environ.get( "CHEMDM_TRANSITION_PATH_MODEL", str(_REPO_ROOT / "models" / "newton_reaction_trajectory_model.pth"), )
-#     state_dict = pt.load(model_path, map_location=pt.device("cpu"), weights_only=True)
-#     model.load_state_dict(state_dict)
-#     model.to(dtype=pt.float32)
-#     model.eval()
-
-#     return model
 
 def load_attention_model( ) -> EquivariantTransformer:
     # Global molecular information
@@ -131,11 +109,12 @@ def run( input_data: dict,
     print( f"[runner] keys={list(input_data.keys())}", flush=True, file=sys.stderr ) 
     print( f"[runner] {input_data['n_images']}", flush=True, file=sys.stderr )
 
-    n_images = int( input_data.get("n_images", 10) )
+    n_images = int( input_data.get("n_images", 20) )
     theory = input_data.get( "force_field", "xtb" ) 
     relax_endpoints = bool( input_data.get("endpoint_relaxation", False) )
     force_tol = float( input_data.get("accuracy", 0.1) )                                                                                          
-    n_steps = int( input_data.get("max_iterations", 2500) )    
+    n_steps = int( input_data.get("max_iterations", 2500) )
+    alpha_smooth = 1.0
                                                                                                                                                      
     reactant = input_data["reactant_molecule_json"]
     product = input_data["product_molecule_json"]                                                                                                      
@@ -169,7 +148,9 @@ def run( input_data: dict,
     # For example, butane is fully relient on methyl rotation.
     if np.sum( (Z != 1) ) > 6:
         path0 = cleanupPath( Z, path0, s0, GA, GB )
+    path0 = smooth_path_penalized_least_squares( path0, alpha_smooth )
 
+    # Now do physics-based NEB refinement.
     lr = 1e-2
     max_step_A = 0.02
     k = 1.0 * KJ_MOL_PER_EV   # kJ/mol/Å², equivalent to 1 eV/Å²
@@ -181,8 +162,10 @@ def run( input_data: dict,
     on_progress( "fine_tune_path", "Fine-tuning", fraction=0.50 )
     progress_so_far = on_progress.getTotalProgress()
     path_opt, E_opt_kjm, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, callback=callback, max_workers=max_workers)
-    s = normalized_arclengths(path_opt)
+    s = normalized_arclengths( path_opt )
+    print(s, file=sys.stderr)
     E_opt_kjm -= E_opt_kjm[0]
+    print(E_opt_kjm, file=sys.stderr)
 
     # Send back to the server as a dict.
     on_progress( "path_done", "Calculations Finished", fraction=1.0 )
@@ -348,3 +331,88 @@ def _build_methyl_hydrogens(A, C, phi, r_CH=1.09, ideal_angle_deg=109.5):
     dirs = normalize( dirs, axis=2 )
 
     return C[:, None, :] + r_CH * dirs
+
+
+def smooth_path_penalized_least_squares( Y: np.ndarray,  # (n_images, n_atoms, 3)
+                                         alpha: float = 1.0,
+                                        ) -> np.ndarray:
+    """
+    Smooth a path using penalized least squares:
+
+        min_X  0.5 ||X - Y||^2 + 0.5 alpha ||D2 X||^2
+
+    with fixed endpoints.
+
+    Parameters
+    ----------
+    Y:
+        Array of shape (n_images, n_atoms, 3), or generally (n_images, ...).
+    alpha:
+        Smoothing strength. Larger means smoother.
+
+    Returns
+    -------
+    X:
+        Smoothed path with the same shape as Y.
+    """
+    Y = np.asarray(Y, dtype=float)
+
+    if alpha < 0.0:
+        raise ValueError( "alpha must be non-negative." )
+    sqrt_alpha = np.sqrt( alpha )
+
+    n_images = Y.shape[0]
+    if n_images <= 2 or alpha == 0.0:
+        return Y.copy()
+    original_shape = Y.shape
+    Y_flat = Y.reshape(n_images, -1)
+    n_internal = n_images - 2
+
+    # Unknowns are X[1:-1].
+    #
+    # D2 rows are:
+    #
+    #   X[0] - 2 X[1] + X[2]
+    #   X[1] - 2 X[2] + X[3]
+    #   ...
+    #   X[-3] - 2 X[-2] + X[-1]
+    #
+    # After eliminating fixed endpoints:
+    #
+    #   D2 X_full = A X_internal + b
+    #
+    # A has shape (n_images - 2, n_images - 2).
+    #
+    # For internal unknowns, the stencil is [1, -2, 1], but the first
+    # and last rows are missing one contribution because those are endpoints.
+    A = -2.0 * np.eye(n_internal, dtype=np.float64)
+    if n_internal > 1:
+        idx = np.arange(n_internal - 1)
+        A[idx, idx + 1] = 1.0
+        A[idx + 1, idx] = 1.0
+
+    # Endpoint contribution b.
+    # Only first and last second-difference rows involve fixed endpoints.
+    b = np.zeros_like( Y_flat[1:-1] )
+    b[0] += Y_flat[0]
+    b[-1] += Y_flat[-1]
+
+    # Direct augmented least-squares form:
+    #
+    #   min || [I; sqrt(alpha) A] X_internal - [Y_internal; -sqrt(alpha) b] ||^2
+    G = np.vstack( [ np.eye(n_internal), sqrt_alpha * A ] )
+    rhs = np.vstack( [ Y_flat[1:-1], -sqrt_alpha * b ] )
+    try:
+        lstsq_result = la.lstsq(G, rhs, lapack_driver="gelsy")
+        X_internal = np.asarray( lstsq_result[0], dtype=np.float64 ) # type: ignore
+    except Exception:
+        print( "Smoothing solver did not converge, continuing with unfiltered ML path", file=sys.stderr )
+        return Y
+    
+    # Put in the original shape and return
+    X_flat = Y_flat.copy()
+    X_flat[1:-1] = X_internal
+    X_flat[0] = Y_flat[0]
+    X_flat[-1] = Y_flat[-1]
+
+    return X_flat.reshape( original_shape )
