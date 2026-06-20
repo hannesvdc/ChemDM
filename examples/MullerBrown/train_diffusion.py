@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 from chemdm.TrajectoryDataset import TrajectoryDataset
 from chemdm.ScoreNetwork import ScoreNetwork
-from chemdm.ScoreLoss import ScoreLoss
+from ScoreLoss import ScoreLoss
 from chemdm.util import getGradientNorm
 
 # Set global device and dtype, except for the dataloader
