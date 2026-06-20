@@ -14,7 +14,7 @@ import traceback
 
 from chemdm.TransitionPathDataset import TransitionPathDataset
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
-from EquivariantTransformer import EquivariantTransformer
+from chemdm.EquivariantTransformer import EquivariantTransformer
 from examples.transition1x_newton.NewtonLoss import NewtonLoss
 from chemdm.util import getGradientNorm, perCoordinateRMSE, collate_trajectories
 

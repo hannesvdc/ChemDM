@@ -8,7 +8,7 @@ from pathlib import Path
 import json
 
 from chemdm.TransitionPathDataset import TransitionPathDataset
-from EquivariantTransformer import EquivariantTransformer
+from chemdm.EquivariantTransformer import EquivariantTransformer
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, Molecule
 from chemdm.util import formula_from_Z
 
