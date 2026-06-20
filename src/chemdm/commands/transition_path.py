@@ -20,8 +20,7 @@ import numpy as np
 import torch as pt
 
 from chemdm.Constants import *
-from examples.transition1x_newton.NewtonE3NN import NewtonE3NN
-from chemdm.MolecularEmbeddingNetwork import MolecularEmbeddingGNN
+from chemdm.EquivariantTransformer import EquivariantTransformer
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
 from chemdm.xtbSetup import XTBPotential
 from chemdm.nebXtbDirect import run_neb_xtb, normalized_arclengths
@@ -30,34 +29,69 @@ from chemdm.geometry import kabsch_align_numpy, normalize, perpendicular_basis, 
 from chemdm.progress import ProgressCallback
 from chemdm.graph.algorithms import neighbors_from_graph
 
-def load_transition_path_model() -> NewtonE3NN:
+# def load_transition_path_model() -> NewtonE3NN:
+#     d_cutoff = 5.0
+#     n_rbf = 10
+
+#     xA_embedding = MolecularEmbeddingGNN(64, 64, 5, d_cutoff)
+#     xB_embedding = MolecularEmbeddingGNN(64, 64, 5, d_cutoff)
+
+#     n_refinement_steps = 7
+#     model = NewtonE3NN( xA_embedding_network=xA_embedding,
+#                         xB_embedding_network=xB_embedding,
+#                         irreps_node_str="48x0e + 16x1o + 16x1e + 8x2e",
+#                         n_refinement_steps=n_refinement_steps,
+#                         d_cutoff=d_cutoff,
+#                         n_freq=8,
+#                         n_rbf=n_rbf,
+#                         )
+
+#     model_path = os.environ.get( "CHEMDM_TRANSITION_PATH_MODEL", str(_REPO_ROOT / "models" / "newton_reaction_trajectory_model.pth"), )
+#     state_dict = pt.load(model_path, map_location=pt.device("cpu"), weights_only=True)
+#     model.load_state_dict(state_dict)
+#     model.to(dtype=pt.float32)
+#     model.eval()
+
+#     return model
+
+def load_attention_model( ) -> EquivariantTransformer:
+    # Global molecular information
     d_cutoff = 5.0
     n_rbf = 10
 
-    xA_embedding = MolecularEmbeddingGNN(64, 64, 5, d_cutoff)
-    xB_embedding = MolecularEmbeddingGNN(64, 64, 5, d_cutoff)
-
+    # E3NN transition-path network
+    irreps_node_str = "48x0e + 16x1o + 16x1e + 8x2e"
+    irreps_qk_str = "16x0e + 8x1o + 4x1e"
     n_refinement_steps = 7
-    model = NewtonE3NN( xA_embedding_network=xA_embedding,
-                        xB_embedding_network=xB_embedding,
-                        irreps_node_str="48x0e + 16x1o + 16x1e + 8x2e",
-                        n_refinement_steps=n_refinement_steps,
-                        d_cutoff=d_cutoff,
-                        n_freq=8,
-                        n_rbf=n_rbf,
-                        )
+    tp_embedding_dim = 64
+    tp_embedding_hidden_dim = 128
+    tp_embedding_hidden_layers = 2
 
-    model_path = os.environ.get( "CHEMDM_TRANSITION_PATH_MODEL", str(_REPO_ROOT / "models" / "newton_reaction_trajectory_model.pth"), )
-    state_dict = pt.load(model_path, map_location=pt.device("cpu"), weights_only=True)
-    model.load_state_dict(state_dict)
-    model.to(dtype=pt.float32)
-    model.eval()
+    # Compute the neighbor graph once per forward pass from xA + xB (union of
+    # bonds and endpoint distance neighbors) instead of rebuilding per layer.
+    use_fixed_neighbors = True
+    tp_network = EquivariantTransformer( irreps_node_str=irreps_node_str,
+                                         irreps_qk_str=irreps_qk_str,
+                                         n_refinement_steps=n_refinement_steps,
+                                         d_cutoff=d_cutoff,
+                                         n_freq=8,
+                                         n_rbf=n_rbf,
+                                         tp_embedding_dim=tp_embedding_dim,
+                                         tp_embedding_hidden_dim=tp_embedding_hidden_dim,
+                                         tp_embedding_hidden_layers=tp_embedding_hidden_layers,
+                                         use_fixed_neighbors=use_fixed_neighbors )
+    
+    model_path = os.environ.get( "CHEMDM_TRANSITION_PATH_MODEL", str(_REPO_ROOT / "models" / "attention_reaction_trajectory_model.pth"), )
+    state_dict = pt.load( model_path, map_location=pt.device("cpu"), weights_only=True )
+    tp_network.load_state_dict( state_dict )
+    tp_network.to( dtype=pt.float32 )
+    tp_network.eval()
 
-    return model
+    return tp_network
 
 def run( input_data: dict, 
          on_progress : ProgressCallback, 
-         tp_network : Optional[NewtonE3NN] ) -> dict:
+         tp_network : Optional[EquivariantTransformer] ) -> dict:
     """Compute a NEB-refined transition path.
 
     Arguments:
@@ -94,8 +128,8 @@ def run( input_data: dict,
         diagnostics:
             Algorithm settings used for this run.
     """
-    print(f"[runner] keys={list(input_data.keys())}", flush=True, file=sys.stderr) 
-    print(f"[runner] {input_data['n_images']}", flush=True, file=sys.stderr)
+    print( f"[runner] keys={list(input_data.keys())}", flush=True, file=sys.stderr ) 
+    print( f"[runner] {input_data['n_images']}", flush=True, file=sys.stderr )
 
     n_images = int( input_data.get("n_images", 10) )
     theory = input_data.get( "force_field", "xtb" ) 
@@ -128,7 +162,7 @@ def run( input_data: dict,
     # Evaluate the Newton model for a good initial guess.
     on_progress("generate_path", "Generating initial guess for the path", fraction=0.15)
     if tp_network is None:
-        tp_network = load_transition_path_model( )
+        tp_network = load_attention_model( ) #load_transition_path_model( )
     path0, s0 = _ml_initial_guess( tp_network, Z, xA, xB, GA, GB, n_images ) # type: ignore
 
     # Make the path chemically feasible. Only do it if the moleulce is large enough.
@@ -154,7 +188,7 @@ def run( input_data: dict,
     on_progress( "path_done", "Calculations Finished", fraction=1.0 )
     output_data = {
         "Z": Z.tolist(),
-        "xA": xA.tolist(),                                                                                                                             
+        "xA": xA.tolist(), # type: ignore                                                                                                                        
         "xB": xB.tolist(),
         "x": path_opt.tolist(),                                                                                                                        
         "s": s.tolist(),
@@ -164,7 +198,7 @@ def run( input_data: dict,
     return output_data
 
 
-def _ml_initial_guess( tp_network : NewtonE3NN,
+def _ml_initial_guess( tp_network : EquivariantTransformer,
                        Z : np.ndarray, 
                       xA : np.ndarray, 
                       xB : np.ndarray, 
@@ -175,18 +209,19 @@ def _ml_initial_guess( tp_network : NewtonE3NN,
     mol_size = len(Z)
 
     # Evaluate the network at equidistant points along the trajectory.
-    s_t = pt.linspace(0.0, 1.0, n_images)
+    s_t = pt.linspace( 0.0, 1.0, n_images )
     xa_batched, xb_batched, s_values = [], [], []
     for n in range(n_images):
-        xa_batched.append(MoleculeGraph(pt.tensor(Z, dtype=pt.int), pt.tensor(xA, dtype=pt.float32), pt.tensor(GA)))
-        xb_batched.append(MoleculeGraph(pt.tensor(Z, dtype=pt.int), pt.tensor(xB, dtype=pt.float32), pt.tensor(GB)))
-        s_values.append(s_t[n] * pt.ones(mol_size, dtype=pt.float32))
-    xa_mol = batchMolecules(xa_batched)
-    xb_mol = batchMolecules(xb_batched)
+        xa_batched.append( MoleculeGraph(pt.tensor(Z, dtype=pt.int), pt.tensor(xA, dtype=pt.float32), pt.tensor(GA)) )
+        xb_batched.append( MoleculeGraph(pt.tensor(Z, dtype=pt.int), pt.tensor(xB, dtype=pt.float32), pt.tensor(GB)) )
+        s_values.append( s_t[n] * pt.ones(mol_size, dtype=pt.float32) )
+    xa_mol = batchMolecules( xa_batched )
+    xb_mol = batchMolecules( xb_batched )
     s_cat = pt.cat(s_values)
 
-    molecule_path, _ = tp_network(xa_mol, xb_mol, s_cat)
-    x = molecule_path.x.detach().numpy().reshape(n_images, mol_size, 3)
+    with pt.no_grad():
+        molecule_path, _ = tp_network( xa_mol, xb_mol, s_cat )
+    x = molecule_path.x.detach().numpy().reshape( n_images, mol_size, 3 )
     return x, s_t.detach().cpu().numpy()
 
 def cleanupPath( Z : np.ndarray,
@@ -204,7 +239,6 @@ def cleanupPath( Z : np.ndarray,
     This function places each methyl H at distance 1.09 Å from the methyl carbon
     """
     Z = Z.astype( dtype=int )
-    n_images = path.shape[0]
 
     # Find the bonded neighbors in the reactants and products.
     carbon_indices = np.where(Z == 6)[0]
@@ -250,7 +284,6 @@ def cleanupPath( Z : np.ndarray,
         dphi = _wrap_to_interval(phi1 - phi0, period=period)
 
         phi_path = phi0 + s * dphi  # (M,)
-        #phi_path = np.zeros(n_images)
         H_new = _build_methyl_hydrogens( A=A_path, C=C_path, phi=phi_path )  # (M, 3, 3)
         path[:, H_neighbors, :] = H_new
 

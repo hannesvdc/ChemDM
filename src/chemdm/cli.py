@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Sequence
 
 
-_SUBCOMMANDS: dict[str, str] = {
+_SUBCOMMANDS: dict[str, str] = { 
     "transition-path": "chemdm.commands.transition_path",
 }
 
@@ -85,7 +85,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_data = module.run(input_data)
 
     # Write the output file.
-    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.parent.mkdir( parents=True, exist_ok=True )
     try:
         with open(args.output, "w") as f:
             json.dump(output_data, f, cls=_NumpyEncoder)

@@ -8,7 +8,7 @@ import traceback
 from typing import Any
 
 from chemdm.commands.transition_path import run as run_transition_path
-from chemdm.commands.transition_path import load_transition_path_model
+from chemdm.commands.transition_path import load_attention_model
 from chemdm.commands.stable_conformer import run as run_stabilize_conformer
 from chemdm.commands.generate_conformers import run as run_generate_conformers
 
@@ -56,14 +56,14 @@ class WorkerState:
     def __init__(self) -> None:
         self.transition_path_model = None
 
-    def warm_up(self) -> None:
+    def warm_up( self ) -> None:
         """
         Load heavy resources once.
 
         For the first version, this can be empty. Later you can move your
         Newton model loading here so it is not repeated per job.
         """
-        self.transition_path_model = load_transition_path_model()
+        self.transition_path_model = load_attention_model( )
 
 
 def run_worker() -> int:
