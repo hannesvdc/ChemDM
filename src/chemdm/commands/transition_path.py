@@ -17,8 +17,6 @@ if str(_XTB_DIR) not in sys.path:
     sys.path.insert(0, str(_XTB_DIR))
 
 import numpy as np
-import scipy.sparse as sp
-import scipy.linalg as la
 import torch as pt
 
 from chemdm.Constants import *
@@ -68,7 +66,7 @@ def load_attention_model( ) -> EquivariantTransformer:
 
     return tp_network
 
-def run( input_data: dict, 
+def run( input_data: dict,
          on_progress : ProgressCallback, 
          tp_network : Optional[EquivariantTransformer] ) -> dict:
     """Compute a NEB-refined transition path.
@@ -112,10 +110,9 @@ def run( input_data: dict,
 
     n_images = int( input_data.get("n_images", 20) )
     theory = input_data.get( "force_field", "xtb" ) 
-    relax_endpoints = bool( input_data.get("endpoint_relaxation", False) )
+    relax_endpoints = bool( input_data.get( "endpoint_relaxation", True) )
     force_tol = float( input_data.get("accuracy", 0.1) )                                                                                          
     n_steps = int( input_data.get("max_iterations", 2500) )
-    alpha_smooth = 1.0
                                                                                                                                                      
     reactant = input_data["reactant_molecule_json"]
     product = input_data["product_molecule_json"]                                                                                                      
@@ -133,8 +130,8 @@ def run( input_data: dict,
     # Align the end points for stability. Relax endpoints if desired.
     if relax_endpoints:
         on_progress("relax", "Relaxinging reactants and products", fraction=0.02)
-        xA = relaxMolecule( xtb, xA, minimizer="Adam", returnOptimizationHistory=False )
-        xB = relaxMolecule( xtb, xB, minimizer="Adam", returnOptimizationHistory=False )
+        xA = relaxMolecule( xtb, xA, minimizer="LBFGS", returnOptimizationHistory=False )
+        xB = relaxMolecule( xtb, xB, minimizer="LBFGS", returnOptimizationHistory=False )
 
     on_progress("align", "Aligning endpoints", fraction=0.10)
     xB = kabsch_align_numpy( xB, xA, Z ) # type: ignore
@@ -149,12 +146,13 @@ def run( input_data: dict,
     # For example, butane is fully relient on methyl rotation.
     if np.sum( (Z != 1) ) > 6:
         path0 = cleanupPath( Z, path0, s0, GA, GB )
+    alpha_smooth = 0.02 # stay close to the ML path but avoid sterical clashes
     path0 = smooth_path_penalized_least_squares( path0, alpha_smooth )
 
     # Now do physics-based NEB refinement.
     lr = 1e-2
     max_step_A = 0.02
-    k = 1.0 * KJ_MOL_PER_EV   # kJ/mol/Å², equivalent to 1 eV/Å²
+    k = 10.0 * KJ_MOL_PER_EV   # kJ/mol/Å², equivalent to 1 eV/Å²
     max_threads = 12
     max_workers = min( n_images, max_threads )
     def callback( iter : int, maxF : float ) -> None:
@@ -162,13 +160,17 @@ def run( input_data: dict,
                      fraction = progress_so_far + (1.0 - progress_so_far) * iter / n_steps )
     on_progress( "fine_tune_path", "Fine-tuning", fraction=0.50 )
     progress_so_far = on_progress.getTotalProgress()
-    path_opt, E_opt_kjm, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, callback=callback, max_workers=max_workers)
+    path_opt, E_opt_kjm, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, callback=callback, max_workers=max_workers, climb=True )
+    labels = [ f"Image {img_count} / {n_images}" for img_count in range(n_images) ]
+    labels[0] = "Reactant"
+    labels[-1] = "Product"
+    labels[ np.argmax(E_opt_kjm) ] = "Transition State"
+
     s = normalized_arclengths( path_opt )
-    print(s, file=sys.stderr)
     E_opt_kjm -= E_opt_kjm[0]
-    print(E_opt_kjm, file=sys.stderr)
 
     # Send back to the server as a dict.
+    print( f"labels = {labels}", file=sys.stderr )
     on_progress( "path_done", "Calculations Finished", fraction=1.0 )
     output_data = {
         "Z": Z.tolist(),
@@ -177,7 +179,8 @@ def run( input_data: dict,
         "x": path_opt.tolist(),                                                                                                                        
         "s": s.tolist(),
         "E_opt_eV": E_opt_kjm.tolist(),
-        "best_force": float(best_force),                                                                                                               
+        "best_force": float(best_force),      
+        "labels": labels                                                                                                         
     }
     return output_data
 

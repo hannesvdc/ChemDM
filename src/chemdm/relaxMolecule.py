@@ -4,6 +4,7 @@ import numpy as np
 import torch as pt
 
 from chemdm.Constants import *
+
 from chemdm.xtbSetup import XTBPotential
 from chemdm.diagnostics import *
 
@@ -38,6 +39,8 @@ def relaxMolecule( xtb : XTBPotential,
     """ General entry point for all relaxation codes"""
     if minimizer.lower() == "adam":
         x_opt, info = minimize_with_adam( xtb, x0, force_tol, max_steps, verbose=verbose )
+    elif minimizer.lower() == "lbfgs":
+        x_opt, info = minimize_with_lbfgs( xtb, x0, force_tol, max_steps, verbose=verbose )
     else:
         raise ValueError( f"Minimizer of type {minimizer} is not supported." )
 
@@ -100,7 +103,13 @@ def minimize_with_adam( xtb : XTBPotential,
         # Torch minimizes using grad = dE/dR.
         # xTB gives force = -dE/dR.
         grad_kJ_mol_A = -forces_kJ_mol_A
-        R.grad = pt.tensor( grad_kJ_mol_A, dtype=R.dtype )
+        grad = pt.tensor( grad_kJ_mol_A, dtype=R.dtype )
+
+        # Clip per-atom gradient norm so one atom can't dominate the step.
+        max_grad_kJ_mol_A = 1.0                                     # per-atom cap, kJ/mol/Å
+        norms = pt.linalg.norm( grad, dim=1, keepdim=True )          # (n_atoms, 1)
+        grad = grad * ( max_grad_kJ_mol_A / norms ).clamp( max=1.0 ) # scale down only over-cap atoms
+        R.grad = grad
 
         old_R = R.detach().clone()
         optimizer.step()
@@ -152,5 +161,96 @@ def minimize_with_adam( xtb : XTBPotential,
 
     # Re-evaluate final geometry, because the last logged energy/force was
     # before the final Adam coordinate update.
-    R_final_A = R.detach().cpu().numpy()    
+    R_final_A = R.detach().cpu().numpy()
     return R_final_A, history
+
+
+def minimize_with_lbfgs( xtb : XTBPotential,
+                         positions_A: np.ndarray,
+                         force_tolerance_kJ_mol_A: float,
+                         max_steps: int = 1000,
+                         history_size: int = 20,
+                         verbose : bool = False, ) -> tuple[np.ndarray, list]:
+    """
+    L-BFGS minimizer with a strong-Wolfe line search, using xTB forces.
+
+    Unlike Adam, the line search rejects any step that does not decrease the
+    energy, so there is no initial energy jump, and the step shrinks to zero as
+    the forces vanish, so the geometry settles at the minimum instead of
+    drifting. The line search is the trust mechanism, so there is no learning
+    rate schedule, gradient clip, or per-step displacement cap.
+
+    Internal Torch coordinate units:
+        positions: Angstrom
+        gradients: kJ/mol/Angstrom
+        energy: kJ/mol
+
+    Returns
+    -------
+    R_final_A : (n_atoms, 3) optimized coordinates, Angstrom.
+    history : list of per-step dicts (same fields as minimize_with_adam).
+    """
+    R = pt.nn.Parameter( pt.tensor(positions_A, dtype=pt.float64) )
+    optimizer = pt.optim.LBFGS( [R],
+                                lr=1.0,
+                                max_iter=1,            # one L-BFGS iteration per outer step, so we can log and test convergence between steps
+                                history_size=history_size,
+                                line_search_fn="strong_wolfe", )
+
+    # The line search calls the closure many times; cache the latest energy and
+    # forces it computed. strong_wolfe leaves the parameters exactly at the point
+    # of its last closure evaluation, so this cache holds the values at the
+    # current geometry R -- logging reuses it instead of re-evaluating xTB.
+    last = {}
+    def closure():
+        optimizer.zero_grad( set_to_none=True )
+        E, F = evaluateEnergyAndForces( xtb, R.detach().cpu().numpy() )
+        last["E"], last["F"] = E, F
+        R.grad = pt.tensor( -F, dtype=R.dtype )    # LBFGS reads R.grad; grad = dE/dR = -F
+        return pt.tensor( E, dtype=R.dtype ) # Always return the energy ('loss')
+
+    history = []
+    prev_R = R.detach().clone()
+
+    def log_step( step_count : int ) -> float:
+        """Append a history row from the cached energy/forces, return max force."""
+        E, F = last["E"], last["F"]
+        R_np = R.detach().cpu().numpy()
+        force_norms = np.linalg.norm( F, axis=1 )
+        max_force = float( force_norms.max() )
+        max_step = float( np.linalg.norm( R_np - prev_R.cpu().numpy(), axis=1 ).max() )
+        rmsd = np.sqrt( float( np.mean( np.sum( (R_np - positions_A)**2, axis=1 ) ) ) )
+
+        history.append( { "step": step_count,
+                          "max_force_rms": max_force,
+                          "mean_force_rms": float( force_norms.mean() ),
+                          "energy_kJ_mol": E,
+                          "rmsd": rmsd,
+                          "max_step_A": max_step, } )
+        if verbose:
+            print( f"{step_count:5d},  {E: .10f} [kJ/mol],  {max_force: .8f} [kJ/(mol A)],  {max_step: .6f} [A]", file=sys.stderr )
+        return max_force
+
+    # Evaluate the initial geometry once to seed the cache, log step 0, and stop
+    # early if it is already relaxed.
+    closure()
+    if log_step( 0 ) < force_tolerance_kJ_mol_A:
+        return R.detach().cpu().numpy(), history
+
+    for step_count in range( 1, max_steps + 1 ):
+        try:
+            optimizer.step( closure )
+        except Exception as exc:
+            print( f"xTB failed at step {step_count}: {exc}", file=sys.stderr )
+            with pt.no_grad():
+                R.copy_( prev_R )
+            break
+
+        max_force = log_step( step_count )
+        prev_R = R.detach().clone()
+        if max_force < force_tolerance_kJ_mol_A:
+            if verbose:
+                print( "Converged.", file=sys.stderr )
+            break
+
+    return R.detach().cpu().numpy(), history
