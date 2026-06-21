@@ -127,8 +127,8 @@ def evaluate_pair( att_model : EquivariantTransformer,
         x_ref = traj.x.to(device=device, dtype=pt.float32)
 
         # Evalute both models using the same function. Jeuj!
-        x_a, states_a = evaluateML( att_model, s, Z, xA, xB, Ga, Gb ) # type: ignore
-        x_c, states_c = evaluateML( conv_model, s, Z, xA, xB, Ga, Gb )
+        x_a, states_a = evaluateML( att_model, s, Z, xA, xB, Ga, Gb )
+        x_c, states_c = evaluateML( conv_model, s, Z, xA, xB, Ga, Gb ) # type: ignore
 
         # Also re-use, Jeuj!
         err_att[i, :] = evaluateMoleculeErrors( states_a, x_ref )
