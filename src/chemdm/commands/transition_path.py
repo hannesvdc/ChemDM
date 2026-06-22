@@ -209,8 +209,6 @@ def run( input_data: dict,
     # Return the three curves, each in the standard single-path output format.
     on_progress( "path_done", "Calculations Finished", fraction=1.0 )
     return {
-        "raw_nn":      _curve_dict( Z, xA, xB, path_raw, E_raw, force_raw ),
-        "smoothed_nn": _curve_dict( Z, xA, xB, path_smoothed, E_smoothed, force_smoothed ),
         "neb":         _curve_dict( Z, xA, xB, path_opt, E_neb, best_force ),
     }
 
