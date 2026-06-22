@@ -23,7 +23,7 @@ from chemdm.Constants import *
 from chemdm.EquivariantTransformer import EquivariantTransformer
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
 from chemdm.xtbSetup import XTBPotential
-from chemdm.nebXtbDirect import run_neb_xtb, normalized_arclengths
+from chemdm.nebXtbDirect import run_neb_xtb, normalized_arclengths, evaluate_path, neb_force
 from chemdm.path_smoothing import smooth_path_penalized_least_squares
 from chemdm.relaxMolecule import relaxMolecule
 from chemdm.geometry import kabsch_align_numpy, normalize, perpendicular_basis, perpendicular_basis_continuous
@@ -66,8 +66,46 @@ def load_attention_model( ) -> EquivariantTransformer:
 
     return tp_network
 
+def _curve_dict( Z : np.ndarray,
+                 xA : np.ndarray,
+                 xB : np.ndarray,
+                 path : np.ndarray,
+                 energies_kJ_mol : np.ndarray,
+                 best_force : float ) -> dict:
+    """Package one path (raw NN / smoothed NN / NEB) into the standard output
+    dict: energies relative to the reactant, normalized arclengths, and a
+    Reactant / Transition State / Product labelling (the TS is the highest-energy
+    image of that path)."""
+    path = np.asarray( path )
+    E_rel = np.asarray( energies_kJ_mol, dtype=float )
+    E_rel = E_rel - E_rel[0]
+    n = len(path)
+    labels = [ f"Image {i} / {n}" for i in range(n) ]
+    labels[0] = "Reactant"
+    labels[-1] = "Product"
+    labels[ int(np.argmax(E_rel)) ] = "Transition State"
+    return {
+        "Z": Z.tolist(),
+        "xA": xA.tolist(),
+        "xB": xB.tolist(),
+        "x": path.tolist(),
+        "s": normalized_arclengths( path ).tolist(),
+        "E_opt_eV": E_rel.tolist(),
+        "best_force": float(best_force),
+        "labels": labels,
+    }
+
+def _score_path( xtb : XTBPotential, path : np.ndarray, k : float ) -> tuple[np.ndarray, float]:
+    """xTB energies (kJ/mol) and the max per-image perpendicular NEB force
+    (kJ/mol/A) along a path. The force is the same metric run_neb_xtb reports, so
+    the three curves' `best_force` values are directly comparable."""
+    E, F = evaluate_path( xtb, path )
+    _, F_conv = neb_force( path, E, F, k )
+    max_force = float( np.sqrt( np.mean( F_conv**2, axis=(-2, -1) ) ).max() )
+    return E, max_force
+
 def run( input_data: dict,
-         on_progress : ProgressCallback, 
+         on_progress : ProgressCallback,
          tp_network : Optional[EquivariantTransformer] ) -> dict:
     """Compute a NEB-refined transition path.
 
@@ -125,11 +163,11 @@ def run( input_data: dict,
 
     # Construct the XTB force field
     if theory.lower() == "xtb":
-        xtb = XTBPotential(Z)
+        xtb = XTBPotential( Z )
 
     # Align the end points for stability. Relax endpoints if desired.
     if relax_endpoints:
-        on_progress("relax", "Relaxinging reactants and products", fraction=0.02)
+        on_progress( "relax", "Relaxinging reactants and products", fraction=0.02 )
         xA = relaxMolecule( xtb, xA, minimizer="LBFGS", returnOptimizationHistory=False )
         xB = relaxMolecule( xtb, xB, minimizer="LBFGS", returnOptimizationHistory=False )
 
@@ -141,48 +179,40 @@ def run( input_data: dict,
     if tp_network is None:
         tp_network = load_attention_model( ) #load_transition_path_model( )
     path0, s0 = _ml_initial_guess( tp_network, Z, xA, xB, GA, GB, n_images ) # type: ignore
+    path_raw = path0.copy()   # keep the untouched NN output; cleanupPath mutates in place
 
     # Make the path chemically feasible. Only do it if the moleulce is large enough.
     # For example, butane is fully relient on methyl rotation.
     if np.sum( (Z != 1) ) > 6:
         path0 = cleanupPath( Z, path0, s0, GA, GB )
     alpha_smooth = 0.02 # stay close to the ML path but avoid sterical clashes
-    path0 = smooth_path_penalized_least_squares( path0, alpha_smooth )
+    path_smoothed = smooth_path_penalized_least_squares( path0, alpha_smooth )
 
-    # Now do physics-based NEB refinement.
-    lr = 1e-2
+    # Now do physics-based NEB refinement of the smoothed guess.
     max_step_A = 0.02
     k = 10.0 * KJ_MOL_PER_EV   # kJ/mol/Å², equivalent to 1 eV/Å²
     max_threads = 12
     max_workers = min( n_images, max_threads )
     def callback( iter : int, maxF : float ) -> None:
-        on_progress( "fine_tune_path", f"(Step {iter}/{n_steps}) Max. Perpendicular Force: {maxF:.2f} [kJ / (mol A)]", 
+        on_progress( "fine_tune_path", f"(Step {iter}/{n_steps}) Max. Perpendicular Force: {maxF:.2f} [kJ / (mol A)]",
                      fraction = progress_so_far + (1.0 - progress_so_far) * iter / n_steps )
     on_progress( "fine_tune_path", "Fine-tuning", fraction=0.50 )
     progress_so_far = on_progress.getTotalProgress()
-    path_opt, E_opt_kjm, best_force = run_neb_xtb( Z, path0, n_steps, lr, k, max_step_A, force_tol, callback=callback, max_workers=max_workers, climb=True )
-    labels = [ f"Image {img_count} / {n_images}" for img_count in range(n_images) ]
-    labels[0] = "Reactant"
-    labels[-1] = "Product"
-    labels[ np.argmax(E_opt_kjm) ] = "Transition State"
+    path_opt, E_neb, best_force = run_neb_xtb( Z, path_smoothed, n_steps, k, max_step_A, force_tol, callback=callback, max_workers=max_workers, climb=True )
 
-    s = normalized_arclengths( path_opt )
-    E_opt_kjm -= E_opt_kjm[0]
+    # Score the two pre-NEB guesses with xTB so all three curves carry an energy
+    # profile and a comparable force metric.
+    on_progress( "score_guesses", "Scoring initial-guess energies", fraction=0.96 )
+    E_raw, force_raw = _score_path( xtb, path_raw, k )
+    E_smoothed, force_smoothed = _score_path( xtb, path_smoothed, k )
 
-    # Send back to the server as a dict.
-    print( f"labels = {labels}", file=sys.stderr )
+    # Return the three curves, each in the standard single-path output format.
     on_progress( "path_done", "Calculations Finished", fraction=1.0 )
-    output_data = {
-        "Z": Z.tolist(),
-        "xA": xA.tolist(), # type: ignore                                                                                                                        
-        "xB": xB.tolist(),
-        "x": path_opt.tolist(),                                                                                                                        
-        "s": s.tolist(),
-        "E_opt_eV": E_opt_kjm.tolist(),
-        "best_force": float(best_force),      
-        "labels": labels                                                                                                         
+    return {
+        "raw_nn":      _curve_dict( Z, xA, xB, path_raw, E_raw, force_raw ),
+        "smoothed_nn": _curve_dict( Z, xA, xB, path_smoothed, E_smoothed, force_smoothed ),
+        "neb":         _curve_dict( Z, xA, xB, path_opt, E_neb, best_force ),
     }
-    return output_data
 
 
 def _ml_initial_guess( tp_network : EquivariantTransformer,
