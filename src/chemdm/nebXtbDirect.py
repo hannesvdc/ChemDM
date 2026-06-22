@@ -487,9 +487,15 @@ def neb_fire( neb_energy_and_force: Callable,
     # Stall safeguard: the global F.v reset can miss local overshoot when the band
     # as a whole keeps descending, leaving stiff images in an undamped limit cycle.
     # If the best force has not improved for STALL steps, hard-reset (zero velocity,
-    # restore timestep + steering) to re-inject damping and break the cycle.
+    # restore timestep + steering) to re-inject damping. After MAX_STALLS reset
+    # attempts that still produce no new best, the band is at its force floor (it
+    # cannot be driven lower with this dt/mass) -- stop and return the best band
+    # rather than burn the rest of the step budget orbiting. Counters reset on any
+    # genuine improvement, so MAX_STALLS counts *consecutive* fruitless resets.
     STALL = 4 * N_MIN
+    MAX_STALLS = 3
     steps_since_improve = 0
+    n_stalls = 0
 
     # Climbing starts only once the band is partly converged (see neb_adam).
     climbing = False
@@ -517,6 +523,7 @@ def neb_fire( neb_energy_and_force: Callable,
         if maxF < best_force:
             best_force, best_x = maxF, np.copy(path)
             steps_since_improve = 0
+            n_stalls = 0
         else:
             steps_since_improve += 1
 
@@ -537,10 +544,15 @@ def neb_fire( neb_energy_and_force: Callable,
         # 12x faster than C. The whole molecule must move at once.
         if steps_since_improve >= STALL:
             # Limit cycle the global F.v reset missed: restart damped from rest.
+            n_stalls += 1
+            if n_stalls >= MAX_STALLS:
+                status = "stalled"
+                print( f'[neb] stalled at force floor {best_force:.4g} kJ/mol/A after {n_stalls} resets', file=sys.stderr )
+                break
             v[:] = 0.0
             dt, alpha, n_pos = dt_init, A_START, 0
             steps_since_improve = 0
-            print( '[neb] stall reset', file=sys.stderr )
+            print( f'[neb] stall reset ({n_stalls}/{MAX_STALLS})', file=sys.stderr )
         else:
             P = float( np.sum( F_neb * v ) )
             if P > 0.0:
@@ -642,7 +654,7 @@ def run_neb_xtb( Z : np.ndarray,
         print("[neb-xtb] using serial evaluator", file=sys.stderr, flush=True)
         
         from chemdm.xtbSetup import XTBPotential
-        xtb = XTBPotential(Z=Z)
+        xtb = XTBPotential( Z=Z )
 
         neb_energy_and_force = lambda path_A: evaluate_path(xtb, path_A)
         return run_with_evaluator( neb_energy_and_force )

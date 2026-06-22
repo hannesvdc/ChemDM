@@ -30,7 +30,7 @@ from chemdm.commands.transition_path import load_attention_model, _ml_initial_gu
 
 ALPHA = 0.02
 K = 10.0 * KJ_MOL_PER_EV
-FORCE_TOL = 1.0       # kJ/mol/A
+FORCE_TOL = 0.1       # kJ/mol/A
 N_STEPS = 2000
 LR = 1e-2             # Adam only; run_neb_xtb (FIRE) takes no learning rate
 MAX_WORKERS = 8
@@ -94,8 +94,8 @@ def run_optimizer( opt, Z, path0 ):
 
 
 if __name__ == "__main__":
-    Z, xA, GA = load_mol(CONF_DIR / "conformer_2.mol")
-    _, xB, GB = load_mol(CONF_DIR / "conformer_1.mol")
+    Z, xA, GA = load_mol(CONF_DIR / "conformer_0.mol")
+    _, xB, GB = load_mol(CONF_DIR / "conformer_2.mol")
     xB = kabsch_align_numpy(xB, xA, Z)
 
     model = load_attention_model()
