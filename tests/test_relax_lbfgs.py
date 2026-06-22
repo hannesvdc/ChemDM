@@ -27,7 +27,7 @@ class LennardJones:
     def r_min(self):
         return 2.0 ** (1.0 / 6.0) * self.sigma
 
-    def energy_forces(self, x):
+    def energy_forces( self, x : np.ndarray ) -> tuple[float, np.ndarray]:
         x = np.asarray(x, dtype=float)
         n = len(x)
         E = 0.0
@@ -35,7 +35,7 @@ class LennardJones:
         for i in range(n):
             for j in range(i + 1, n):
                 rij = x[i] - x[j]
-                r = np.linalg.norm(rij)
+                r = float( np.linalg.norm(rij) )
                 sr6 = (self.sigma / r) ** 6
                 sr12 = sr6 * sr6
                 E += 4.0 * self.eps * (sr12 - sr6)
@@ -51,7 +51,7 @@ class MorseBond:
     def __init__(self, D=0.1, a=1.5, r0=1.4):
         self.D, self.a, self.r0 = D, a, r0
 
-    def energy_forces(self, x):
+    def energy_forces( self, x : np.ndarray ) -> tuple[float, np.ndarray]:
         x = np.asarray(x, dtype=float)
         rij = x[0] - x[1]
         r = np.linalg.norm(rij)
@@ -71,7 +71,7 @@ class AnisotropicHarmonic:
         self.target = np.asarray(target, dtype=float)
         self.k = np.asarray(k, dtype=float)[:, None]   # (n,1) broadcast over xyz
 
-    def energy_forces(self, x):
+    def energy_forces( self, x : np.ndarray ) -> tuple[float, np.ndarray]:
         x = np.asarray(x, dtype=float)
         d = x - self.target
         E = 0.5 * float(np.sum(self.k * d * d))

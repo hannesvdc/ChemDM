@@ -5,11 +5,11 @@ import torch as pt
 
 from chemdm.Constants import *
 
-from chemdm.xtbSetup import XTBPotential
+from chemdm.opt import EnergyForceEvaluator
 from chemdm.diagnostics import *
 
 
-def evaluateEnergyAndForces( xtb: XTBPotential, 
+def evaluateEnergyAndForces( potential: EnergyForceEvaluator, 
                              x: np.ndarray):
     """
     Evaluate the energy and force field in the given positions (in Angstrom). 
@@ -21,7 +21,7 @@ def evaluateEnergyAndForces( xtb: XTBPotential,
         energy_kJ_mol: float
         forces_eV_A: (n_atoms, 3), eV / Angstrom
     """
-    E_eV, F_eV_A = xtb.energy_forces( x )
+    E_eV, F_eV_A = potential.energy_forces( x )
 
     E_kj_mol = E_eV / KJ_MOL_TO_EV
     F_kJ_mol_A = F_eV_A / KJ_MOL_TO_EV
@@ -29,7 +29,7 @@ def evaluateEnergyAndForces( xtb: XTBPotential,
     return E_kj_mol, F_kJ_mol_A
 
 
-def relaxMolecule( xtb : XTBPotential,
+def relaxMolecule( potential : EnergyForceEvaluator,
                    x0 : np.ndarray, 
                    minimizer : str = "Adam",
                    force_tol : float = 0.02 / KJ_MOL_TO_EV,
@@ -38,9 +38,9 @@ def relaxMolecule( xtb : XTBPotential,
                    returnOptimizationHistory : bool = False ) -> np.ndarray | tuple[np.ndarray,list]:
     """ General entry point for all relaxation codes"""
     if minimizer.lower() == "adam":
-        x_opt, info = minimize_with_adam( xtb, x0, force_tol, max_steps, verbose=verbose )
+        x_opt, info = minimize_with_adam( potential, x0, force_tol, max_steps, verbose=verbose )
     elif minimizer.lower() == "lbfgs":
-        x_opt, info = minimize_with_lbfgs( xtb, x0, force_tol, max_steps, verbose=verbose )
+        x_opt, info = minimize_with_lbfgs( potential, x0, force_tol, max_steps, verbose=verbose )
     else:
         raise ValueError( f"Minimizer of type {minimizer} is not supported." )
 
@@ -48,7 +48,7 @@ def relaxMolecule( xtb : XTBPotential,
         return x_opt, info
     return x_opt
 
-def minimize_with_adam( xtb : XTBPotential,
+def minimize_with_adam( potential : EnergyForceEvaluator,
                         positions_A: np.ndarray,
                         force_tolerance_kJ_mol_A: float,
                         max_steps: int = 10_000,
@@ -90,7 +90,7 @@ def minimize_with_adam( xtb : XTBPotential,
         R_np = R.detach().cpu().numpy()
         
         try:
-            energy_kJ_mol, forces_kJ_mol_A = evaluateEnergyAndForces( xtb, R_np )
+            energy_kJ_mol, forces_kJ_mol_A = evaluateEnergyAndForces( potential, R_np )
         except Exception as exc:
             print(f"xTB failed at step {step_count}: {exc}")
             with pt.no_grad():
@@ -165,7 +165,7 @@ def minimize_with_adam( xtb : XTBPotential,
     return R_final_A, history
 
 
-def minimize_with_lbfgs( xtb : XTBPotential,
+def minimize_with_lbfgs( potential : EnergyForceEvaluator,
                          positions_A: np.ndarray,
                          force_tolerance_kJ_mol_A: float,
                          max_steps: int = 1000,
@@ -204,7 +204,7 @@ def minimize_with_lbfgs( xtb : XTBPotential,
     last = {}
     def closure():
         optimizer.zero_grad( set_to_none=True )
-        E, F = evaluateEnergyAndForces( xtb, R.detach().cpu().numpy() )
+        E, F = evaluateEnergyAndForces( potential, R.detach().cpu().numpy() )
         last["E"], last["F"] = E, F
         R.grad = pt.tensor( -F, dtype=R.dtype )    # LBFGS reads R.grad; grad = dE/dR = -F
         return pt.tensor( E, dtype=R.dtype ) # Always return the energy ('loss')
