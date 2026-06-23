@@ -142,8 +142,7 @@ def main( exp_name: str ) -> None:
     with open( "./data_config.json", "r" ) as f:
         data_config = json.load( f )
 
-    qm9_dir = Path( data_config["data_folder"] )
-    data_dir = qm9_dir.parent / "conformer_matching"
+    data_dir = Path( data_config["data_folder"] )
     store_root = data_config.get( "store_root", "./checkpoints" )
     ckpt_dir = Path( store_root ) / exp_name
     ckpt_dir.mkdir( parents=True, exist_ok=True )
