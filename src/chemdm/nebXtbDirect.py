@@ -308,7 +308,7 @@ def neb_adam( neb_energy_and_force: Callable,
     # Climbing starts only once the regular band is partly converged, so the
     # tangent at the top image is meaningful before it begins to climb.
     climbing = False
-    climb_start_tol = 5.0 * force_tol
+    climb_start_tol = max( 5.0 * force_tol, 20.0 )   # kJ/mol/A; climb once the band is roughly shaped. Large + non-critical: the tangent self-refines as the band co-relaxes. 5*tol guards loose tolerances.
 
     best_x = None
     best_force = float("inf")
@@ -499,7 +499,7 @@ def neb_fire( neb_energy_and_force: Callable,
 
     # Climbing starts only once the band is partly converged (see neb_adam).
     climbing = False
-    climb_start_tol = 5.0 * force_tol
+    climb_start_tol = max( 5.0 * force_tol, 20.0 )   # kJ/mol/A; climb once the band is roughly shaped. Large + non-critical: the tangent self-refines as the band co-relaxes. 5*tol guards loose tolerances.
 
     best_x, best_force = None, float("inf")
     history = []

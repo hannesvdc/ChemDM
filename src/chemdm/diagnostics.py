@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def has_plateaued(history, window=6, rel_tol=0.001, grace_steps=5):
+def has_plateaued(history, window=6, rel_tol=0.001, grace_steps=50):
     """
     Returns True if the best max_force_rms over the recent window
     improved by less than rel_tol compared to the best before the window.
@@ -16,7 +16,7 @@ def has_plateaued(history, window=6, rel_tol=0.001, grace_steps=5):
     improvement = (previous_best - recent_best) / max(abs(previous_best), 1e-12)
     return improvement < rel_tol
 
-def has_started_increasing(history, window=6, rel_increase=0.10, grace_steps=5):
+def has_started_increasing(history, window=6, rel_increase=0.10, grace_steps=50):
     """
     Returns True if the last `grace_steps` force values are all significantly
     worse than the best value in the preceding window.
