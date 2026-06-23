@@ -11,7 +11,7 @@ References:
 
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import torch as pt
@@ -20,6 +20,7 @@ from chemdm.MoleculeGraph import Molecule
 from chemdm.MoleculeInformation import _ATOMIC_MASS_TABLE
 from chemdm.Constants import _HARTREE_TO_EV, _HARTREE_PER_BOHR2_TO_EV_PER_ANG2
 from chemdm.lanczos import lanczos_lowest
+from chemdm.opt import EnergyForceEvaluator
 
 
 def _mass_inv_sqrt_dof( Z: np.ndarray ) -> np.ndarray:
@@ -28,7 +29,7 @@ def _mass_inv_sqrt_dof( Z: np.ndarray ) -> np.ndarray:
 
     Used to switch between Cartesian and mass-weighted coordinates:
         y = M^{1/2} x,  H_y = M^{-1/2} H_x M^{-1/2}.
-    With `m_inv_sqrt = 1 / sqrt(m)` replicated 3× per atom, elementwise
+    With `m_inv_sqrt = 1 / sqrt(m)` replicated 3x per atom, elementwise
     multiplication `m_inv_sqrt * v` realises both `M^{-1/2} v` (when `v` is
     a Cartesian quantity becoming mass-weighted) and the conjugate Hessian
     sandwich `M^{-1/2} (H_x (M^{-1/2} v))`.
@@ -45,14 +46,6 @@ def _mass_inv_sqrt_dof( Z: np.ndarray ) -> np.ndarray:
             f"mass-weighting requires every atom to have a tabulated mass."
         )
     return np.repeat( 1.0 / np.sqrt(m), 3 )
-
-
-# Evaluator interface
-class EnergyForceEvaluator(Protocol):
-    # `x` is declared positional-only (the `/`) so that implementers may name
-    # the parameter whatever they like (e.g. XTBPotential uses `x_A`).
-    def energy_forces(self, x: np.ndarray, /) -> Tuple[float, np.ndarray]:
-        ...
 
 
 # ============================================================
@@ -612,6 +605,12 @@ class PRFOOptimizer:
           `_prfo_step.argmin` picks; cheap but the choice is undefined when
           multiple modes share the lowest eigvalue. Use only with mock
           evaluators where determinism isn't critical.
+    init_follow_vec : np.ndarray of shape (3N,), optional
+        Explicit uphill direction to follow at iteration 0 (e.g. a NEB
+        reaction-coordinate tangent at a saddle guess). Projected free of
+        rigid-body translations/rotations and normalized. When given it
+        overrides the `init_mode` seed — use it when the reaction coordinate is
+        known, since it is far more reliable than the geometry-only Lindh seed.
 
         The *base* initial Hessian is always the stretches-only Lindh model
         plus the same isotropic floor (see `__init__` body). The earlier
@@ -670,6 +669,7 @@ class PRFOOptimizer:
     def __init__(self, evaluator: EnergyForceEvaluator,
                  molecule: Molecule, *,
                  init_mode: Optional[str] = "lindh",
+                 init_follow_vec: Optional[np.ndarray] = None,
                  trust_radius: float = 0.3,
                  max_trust: float = 0.5,
                  min_trust: float = 0.01,
@@ -719,6 +719,23 @@ class PRFOOptimizer:
             u = _mass_weighted_lowest_mode_of( self.H, _to_numpy(molecule.x).astype(float), _to_numpy(molecule.Z) )
             self._init_follow_vec = u.copy()
             self._init_follow_seed = u.copy()
+
+        # An explicit follow direction (e.g. a NEB reaction-coordinate tangent at
+        # the saddle guess) overrides the geometry-only Lindh seed: it is the
+        # uphill mode we want P-RFO to climb. Project out rigid-body
+        # translations/rotations and normalize so it lives in the same subspace
+        # as the projected-Hessian eigenvectors it will be matched against.
+        if init_follow_vec is not None:
+            v = np.asarray( init_follow_vec, dtype=float ).reshape(-1)
+            if v.shape != (self.dim,):
+                raise ValueError( f"init_follow_vec must have {self.dim} entries (3N); got shape {v.shape}." )
+            v = _project_vec( v, _trans_rot_basis( x0 ) )
+            nrm = float( np.linalg.norm(v) )
+            if nrm < 1e-10:
+                raise ValueError( "init_follow_vec vanishes after removing translations/rotations." )
+            v = v / nrm
+            self._init_follow_vec = v.copy()
+            self._init_follow_seed = v.copy()
 
         # Outer 'safety' trust-region parameters.
         # Enhances numerical stability a lot.

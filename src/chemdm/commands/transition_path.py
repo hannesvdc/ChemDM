@@ -179,7 +179,6 @@ def run( input_data: dict,
     if tp_network is None:
         tp_network = load_attention_model( ) #load_transition_path_model( )
     path0, s0 = _ml_initial_guess( tp_network, Z, xA, xB, GA, GB, n_images ) # type: ignore
-    path_raw = path0.copy()   # keep the untouched NN output; cleanupPath mutates in place
 
     # Make the path chemically feasible. Only do it if the moleulce is large enough.
     # For example, butane is fully relient on methyl rotation.
@@ -203,13 +202,11 @@ def run( input_data: dict,
     # Score the two pre-NEB guesses with xTB so all three curves carry an energy
     # profile and a comparable force metric.
     on_progress( "score_guesses", "Scoring initial-guess energies", fraction=0.96 )
-    E_raw, force_raw = _score_path( xtb, path_raw, k )
-    E_smoothed, force_smoothed = _score_path( xtb, path_smoothed, k )
 
     # Return the three curves, each in the standard single-path output format.
     on_progress( "path_done", "Calculations Finished", fraction=1.0 )
     return {
-        "neb":         _curve_dict( Z, xA, xB, path_opt, E_neb, best_force ),
+        "neb":  _curve_dict( Z, xA, xB, path_opt, E_neb, best_force ), # type: ignore
     }
 
 

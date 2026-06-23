@@ -61,9 +61,8 @@ ALPHA_GRID = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
 
 # NEB settings (match chemdm.commands.transition_path.run defaults)
 N_IMAGES = 20      # images along the path, incl. endpoints (production default)
-FORCE_TOL = 5.0    # kJ/mol/A (~0.05 eV/A), meaningful NEB convergence criterion
-N_STEPS = 2500     # hard cap on NEB iterations (production max_iterations)
-LR = 1e-2
+FORCE_TOL = 1.0    # kJ/mol/A (~0.05 eV/A), meaningful NEB convergence criterion
+N_STEPS = 1000     # hard cap on NEB iterations (production max_iterations)
 K_SPRING = 1.0 * KJ_MOL_PER_EV # kJ/mol/A^2  (= 1 eV/A^2)
 MAX_STEP_A = 0.02
 MAX_WORKERS = 12   # parallelize image xTB evals across processes
@@ -112,7 +111,7 @@ def run_neb( Z_np, path0 ):
     rec = _Recorder()
     with _silence_output():
         path_opt, E_opt, best_force = run_neb_xtb(
-            Z_np, path0, N_STEPS, LR, K_SPRING, MAX_STEP_A, FORCE_TOL,
+            Z_np, path0, N_STEPS, K_SPRING, MAX_STEP_A, FORCE_TOL,
             max_workers=MAX_WORKERS, callback=rec,
         )
     return {
