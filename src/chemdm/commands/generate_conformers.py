@@ -10,12 +10,12 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 from chemdm.xtbSetup import XTBPotential
-from chemdm.relaxMolecule import minimize_with_adam
+from chemdm.relaxMolecule import minimize_with_lbfgs
 from chemdm.progress import ProgressCallback
 from chemdm.Cluster import rmsd_clustering, post_relaxation_rmsd_clustering
 
 
-def rdkit_mol_to_bond_list(mol: Chem.Mol) -> np.ndarray:
+def rdkit_mol_to_bond_list( mol: Chem.Mol ) -> np.ndarray:
     """
     Return undirected bonds as an array of shape (n_bonds, 2).
     Atom indices are RDKit atom indices, zero-based.
@@ -62,7 +62,6 @@ def run( input_data: dict,
     print( f"Generated {len(pre_conformers)} possibly distinct conformers ", file=sys.stderr )
 
     # Stabilize all generated conformers.
-    lr0 = 1e-3
     optimal_conformers = []
     energies = []
     force_norms = []
@@ -72,7 +71,7 @@ def run( input_data: dict,
         print( f'\nStabilizing Conformer {conf_id}.', file=sys.stderr )
         on_progress( "Stabilization", f"Stabilizing Conformation {conf_id+1}/{len(pre_conformers)}", 
                     fraction=current_fraction + (conf_id+1)/len(pre_conformers)*remaining_fraction )
-        conf_opt, history = minimize_with_adam( xtb, pre_conformers[conf_id], force_tol, max_optimizer_steps, lr0, verbose=True )
+        conf_opt, history = minimize_with_lbfgs( xtb, pre_conformers[conf_id], force_tol, max_optimizer_steps, verbose=True )
         E_opt = history[-1]["energy_kJ_mol"]
         F_opt = history[-1]["max_force_rms"]
         print( f'Conformer {conf_id} stabilized to E = {E_opt} and |F| = {F_opt}.', file=sys.stderr )
