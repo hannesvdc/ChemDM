@@ -40,7 +40,7 @@ CONF_DIR = Path(__file__).resolve().parents[1] / "rdkit" / "conformers_ad"
 
 
 def load_mol(path):
-    mol = Chem.MolFromMolFile( str(path), removeHs=False )
+    mol = Chem.MolFromMolFile( str(path), removeHs=False ) # type: ignore
     Z = np.array([a.GetAtomicNum() for a in mol.GetAtoms()], dtype=np.int64)
     x = mol.GetConformer().GetPositions().astype(float)
     bonds = [pair for b in mol.GetBonds()
