@@ -20,8 +20,18 @@ def get_fixed_points() -> pt.Tensor:
                       [-0.558223634633024, 1.44172584180467]]) # min
 
 def plotHelper():
+    import numpy as np
     import matplotlib.pyplot as plt
-    fig = plt.figure()
+    from matplotlib.colors import LinearSegmentedColormap
+    def truncate_colormap(cmap_name, minval=0.18, maxval=1.0, n=256):
+        cmap = plt.get_cmap(cmap_name)
+        return LinearSegmentedColormap.from_list(
+            f"{cmap_name}_truncated",
+            cmap(np.linspace(minval, maxval, n))
+        )
+
+    blues_stronger = truncate_colormap("Blues", minval=0.22, maxval=1.0)
+    fig = plt.figure(figsize=(6, 6))
     ax = fig.gca()
 
     # Contour plot of the MB potential.
@@ -37,5 +47,5 @@ def plotHelper():
     Z = potential( XY )
     Z = Z.reshape( (n_plot_points, n_plot_points) )
 
-    ax.contour( X, Y, Z, levels=101 )
+    ax.contour( X, Y, Z, levels=41, cmap=blues_stronger )
     return fig, ax
