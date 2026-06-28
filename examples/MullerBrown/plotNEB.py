@@ -29,10 +29,6 @@ ax.set_ylabel( r"$y$" )
 ax.set_axis_off()
 
 ax.set_aspect("equal", adjustable="box")
-#plt.tight_layout()
-
 fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
-
 fig.savefig( "transition_path.svg", format="svg", transparent=True )
-
 plt.show()

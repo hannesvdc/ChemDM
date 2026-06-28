@@ -59,7 +59,7 @@ RDLogger.DisableLog("rdApp.*")
 
 
 # Config
-N_RDKIT_FACTOR = 2          # generate this × N_CREST RDKit conformers per mol
+N_RDKIT_FACTOR = 500          # generate this × N_CREST RDKit conformers per mol
 SEED = 42                   # ETKDG random seed
 MAX_MOLECULES_PER_SPLIT = None  # set to int for a smoke run
 
@@ -229,7 +229,7 @@ def match_rdkit_to_crest( d: MoleculeData, rdmol: Chem.Mol, n_rdkit_factor: int 
     n_crest = len( d.conformers )
     n_rdkit = n_rdkit_factor * n_crest
 
-    rdkit_positions = generate_rdkit_conformers( rdmol, n_rdkit )
+    rdkit_positions = generate_rdkit_conformers( rdmol, N_RDKIT_FACTOR )
     n_rdkit_actual = len(rdkit_positions)
     if n_rdkit_actual == 0:
         # RDKit produced nothing — no local structure to match onto. Drop the
@@ -237,7 +237,7 @@ def match_rdkit_to_crest( d: MoleculeData, rdmol: Chem.Mol, n_rdkit_factor: int 
         # rdkit_starting_geometry returns None on embed failure), so its CREST
         # conformers would never be sampled and would only reintroduce the
         # shift. The empty list signals process_split to skip it.
-        print( f'Skipping {d.smiles}: RDKit produced no conformers.')
+        print( f'Skipping {d.smiles}: RDKit produced no conformers. {n_crest}')
         return []
     if n_rdkit_actual < n_crest:
         # Fewer distinct RDKit local structures than CREST conformers. Reuse
@@ -302,13 +302,15 @@ def _match_one( task: tuple ):
     with open(pickle_path, "rb") as f:
         rdmol = pickle.load(f)["conformers"][0]["rd_mol"]      # representative Mol
 
-    fallback = False
     try:
         matched = match_rdkit_to_crest( d, rdmol, n_rdkit_factor=n_rdkit_factor )
     except Exception as e:
-        print(f"  match failed for {smiles}: {type(e).__name__}: {e}; using CREST fallback")
-        fallback = True
-        matched = [c["x"].to(pt.float32) for c in d.conformers]
+        # Drop the molecule on match failure rather than falling back to raw
+        # CREST geometries: those are un-matched, full-search structures whose
+        # distribution differs from the RDKit-local-structure-matched training
+        # data and would contaminate it.
+        print(f"  match failed for {smiles}: {type(e).__name__}: {e}; dropping molecule")
+        return None
 
     if len(matched) == 0:
         return None
@@ -316,7 +318,7 @@ def _match_one( task: tuple ):
     return (
         d.smiles, d.Z, d.edge_index, d.rotatable_bonds,
         d.side_atom_idx, d.side_bond_idx,
-        [x.to(pt.float32) for x in matched], fallback,
+        [x.to(pt.float32) for x in matched],
     )
 
 
@@ -342,7 +344,6 @@ def process_split( qm9_dir: Path, smiles_list: list[str], n_rdkit_factor: int ) 
 
     tasks = [ (qm9_dir, smi, n_rdkit_factor) for smi in smiles_list ]
     t0 = time.time()
-    n_fallback = 0
     n_dropped  = 0
 
     # imap_unordered streams results back as worker processes finish. Output
@@ -360,9 +361,7 @@ def process_split( qm9_dir: Path, smiles_list: list[str], n_rdkit_factor: int ) 
                 n_dropped += 1
                 continue
 
-            smiles, Z, edge_index, rot, side_atom, side_bond, matched, fallback = res
-            if fallback:
-                n_fallback += 1
+            smiles, Z, edge_index, rot, side_atom, side_bond, matched = res
 
             mol_idx = len(mol_smiles)   # index this molecule will occupy
             mol_smiles.append( smiles )
@@ -381,10 +380,8 @@ def process_split( qm9_dir: Path, smiles_list: list[str], n_rdkit_factor: int ) 
     dt = time.time() - t0
     print(f"  done: {len(tasks):,} molecules in {dt:.0f}s "
           f"({len(tasks)/max(dt,1e-9):.1f} mol/s on {N_WORKERS} processes)")
-    if n_fallback > 0:
-        print(f"  {n_fallback:,} molecules used CREST fallback")
     if n_dropped > 0:
-        print(f"  {n_dropped:,} molecules dropped (RDKit produced no conformers)")
+        print(f"  {n_dropped:,} molecules dropped (match failure or RDKit produced no conformers)")
 
     return {
         "mol_smiles": mol_smiles,
@@ -401,10 +398,12 @@ def process_split( qm9_dir: Path, smiles_list: list[str], n_rdkit_factor: int ) 
 
 def main() -> None:
     load_dotenv()
-    qm9_dir = Path( os.environ["QM9_FOLDER"] )
+    with open( "./data_config.json", "r" ) as f:
+        data_config = json.load( f )
+    qm9_dir = Path( data_config["qm9_folder"] )
     parsed_dir = qm9_dir.parent / "parsed"
     out_dir = qm9_dir.parent / "conformer_matching"
-    out_dir.mkdir( parents=True, exist_ok=True )
+    print( f"Opening in {parsed_dir} Storing in {out_dir}")
 
     with open( parsed_dir / "splits.json" ) as f:
         splits_data = json.load(f)

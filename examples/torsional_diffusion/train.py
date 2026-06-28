@@ -47,12 +47,12 @@ from chemdm.MoleculeGraph import findAllNeighbors
 # Training setup
 BATCH_SIZE = 128
 N_EPOCHS = 1000
-LR_MAX = 3.0e-4          # peak learning rate (end of warmup)
-LR_MIN = 3.0e-6          # floor learning rate (end of cosine + start of warmup)
-WARMUP_EPOCHS = 10               # linear warmup duration
+LR_MAX = 3.0e-4         # peak learning rate (end of warmup)
+LR_MIN = 3.0e-6         # floor learning rate (end of cosine + start of warmup)
+WARMUP_EPOCHS = 10      # linear warmup duration
 CUTOFF = 5.0
-LOG_EVERY = 10             # steps between train-loss prints
-NUM_WORKERS = 0               # DataLoader workers; >0 needs collator pickle-ability
+LOG_EVERY = 10          # steps between train-loss prints
+NUM_WORKERS = 0         # DataLoader workers; >0 needs collator pickle-ability
 DTYPE = pt.float32      # float dtype for both model and per-batch tensors
 
 # Weights & Biases
@@ -316,6 +316,7 @@ def main( exp_name: str ) -> None:
             pt.save( model.state_dict(), ckpt_dir / "best.pt" )
             print( f"  -> new best val_loss ({val_loss:.4f}); saved best.pt" )
 
+        print( 'lr', optimizer.param_groups[0]["lr"] )
         pt.save(
             {
                 "model":         model.state_dict(),
