@@ -48,20 +48,19 @@ SIGMA_MAX_DEFAULT = math.pi
 
 
 @pt.no_grad()
-def sample_torsional_diffusion(
-    model:         TorsionalScoreNetwork,
-    mol:             Molecule,               # BatchedMoleculeGraph carrying Z, x_init, molecule_id
-    rotatable_bonds: pt.Tensor,              # (m_total, 2)   rotatable bond endpoints (global atom indices)
-    side_atom_idx:   pt.Tensor,              # (P_total,)     atoms on the c-side
-    side_bond_idx:   pt.Tensor,              # (P_total,)     bond index per side-atom
-    bond_batch:      pt.Tensor,              # (m_total,)     molecule index per bond
-    *,
-    n_steps:       int   = 20,
-    sigma_min:     float = SIGMA_MIN_DEFAULT,
-    sigma_max:     float = SIGMA_MAX_DEFAULT,
-    cutoff:        float = 5.0,
-    dtype:         pt.dtype = pt.float32,
-) -> pt.Tensor:
+def sample_torsional_diffusion( model: TorsionalScoreNetwork,
+                                mol: Molecule,               # BatchedMoleculeGraph carrying Z, x_init, molecule_id
+                                rotatable_bonds: pt.Tensor,              # (m_total, 2)   rotatable bond endpoints (global atom indices)
+                                side_atom_idx: pt.Tensor,              # (P_total,)     atoms on the c-side
+                                side_bond_idx: pt.Tensor,              # (P_total,)     bond index per side-atom
+                                bond_batch: pt.Tensor,              # (m_total,)     molecule index per bond
+                                *,
+                                n_steps:       int   = 20,
+                                sigma_min:     float = SIGMA_MIN_DEFAULT,
+                                sigma_max:     float = SIGMA_MAX_DEFAULT,
+                                cutoff:        float = 5.0,
+                                dtype:         pt.dtype = pt.float32,
+    ) -> pt.Tensor:
     """
     Run the reverse SDE and return the sampled atomic positions.
 
@@ -75,15 +74,13 @@ def sample_torsional_diffusion(
     B = int( bond_batch.max().item() ) + 1
     m = rotatable_bonds.shape[0]
 
-    # 1. Uniform-on-torus initialization. Adding Uniform([0, 2π)) to whatever
-    #    torsion the input molecule has gives Uniform([0, 2π)) mod 2π.
+    # Uniform-on-torus initialization. Adding Uniform([0, 2π)) to whatever
+    # torsion the input molecule has gives Uniform([0, 2π)) mod 2π.
     delta_tau_init = pt.rand( m, device=device, dtype=dtype ) * (2.0 * math.pi)
-    x = apply_torsion_update(
-        mol.x, rotatable_bonds, side_atom_idx, side_bond_idx, delta_tau_init,
-    )
+    x = apply_torsion_update( mol.x, rotatable_bonds, side_atom_idx, side_bond_idx, delta_tau_init )
 
-    # 2. Reverse SDE loop. Steps go from t = 1 down to t = 0 in dt = 1/K
-    #    increments. For the geometric noise schedule, g²(t) = 2 σ²(t) log(σmax/σmin).
+    # Reverse SDE loop. Steps go from t = 1 down to t = 0 in dt = 1/K
+    # increments. For the geometric noise schedule, g²(t) = 2 σ²(t) log(σmax/σmin).
     log_sigma_ratio = math.log( sigma_max / sigma_min )
     dt = 1.0 / n_steps
 
@@ -100,11 +97,9 @@ def sample_torsional_diffusion(
         neighbors = neighbors_E2.T.contiguous()
         is_bond = is_bond.to( dtype=dtype )
 
-        score = model(
-            mol=mol_t, t=t_per_mol,
-            neighbors=neighbors, is_bond=is_bond,
-            rotatable_bonds=rotatable_bonds, bond_batch=bond_batch,
-        )
+        score = model( mol=mol_t, t=t_per_mol,
+                       neighbors=neighbors, is_bond=is_bond,
+                       rotatable_bonds=rotatable_bonds, bond_batch=bond_batch )
 
         # Reverse SDE step. Drop the noise on the last step (k == 1) for a
         # deterministic finish — standard score-based-sampling practice.
@@ -115,8 +110,7 @@ def sample_torsional_diffusion(
             noise = pt.zeros( m, device=device, dtype=dtype )
         delta_tau_step = drift + noise
 
-        x = apply_torsion_update(
-            x, rotatable_bonds, side_atom_idx, side_bond_idx, delta_tau_step,
-        )
+        # Apply the torsions for the next step.
+        x = apply_torsion_update( x, rotatable_bonds, side_atom_idx, side_bond_idx, delta_tau_step )
 
     return x

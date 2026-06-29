@@ -1,5 +1,5 @@
 """
-Smoke test for TorsionalScoreNetwork.
+Parity tests for TorsionalScoreNetwork.
 
 Run from this directory so the relative imports in score_network.py resolve:
 
@@ -93,7 +93,7 @@ def build_toy_batch(dtype: pt.dtype) -> dict:
     )
 
 
-def random_rotation(dtype: pt.dtype) -> pt.Tensor:
+def random_rotation( dtype: pt.dtype ) -> pt.Tensor:
     # Rotation around z by 0.7 rad, kept simple for traceability.
     theta = 0.7
     c, s = math.cos(theta), math.sin(theta)
@@ -103,7 +103,7 @@ def random_rotation(dtype: pt.dtype) -> pt.Tensor:
     )
 
 
-def run_checks(dtype: pt.dtype) -> None:
+def run_checks( dtype: pt.dtype ) -> None:
     print(f"\n=== dtype = {dtype} ===")
 
     batch = build_toy_batch(dtype)
