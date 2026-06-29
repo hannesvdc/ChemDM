@@ -101,8 +101,8 @@ def collate_torsional( batch: List[dict] ) -> dict:
     `atom_batch` tensor needed.
     """
     rot_chunks: list[pt.Tensor] = []
-    sa_chunks:  list[pt.Tensor] = []
-    sb_chunks:  list[pt.Tensor] = []
+    sa_chunks: list[pt.Tensor] = []
+    sb_chunks: list[pt.Tensor] = []
     bond_batch: list[pt.Tensor] = []
 
     atom_offset = 0
@@ -112,8 +112,8 @@ def collate_torsional( batch: List[dict] ) -> dict:
         m = int( ex["rotatable_bonds"].shape[0] )
 
         rot_chunks.append( ex["rotatable_bonds"] + atom_offset )
-        sa_chunks.append ( ex["side_atom_idx"]   + atom_offset )
-        sb_chunks.append ( ex["side_bond_idx"]   + bond_offset )
+        sa_chunks.append( ex["side_atom_idx"] + atom_offset )
+        sb_chunks.append( ex["side_bond_idx"] + bond_offset )
         bond_batch.append( pt.full( (m,), i, dtype=pt.long ) )
 
         atom_offset += N
