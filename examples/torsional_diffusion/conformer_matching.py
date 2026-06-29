@@ -294,7 +294,13 @@ def _worker_init() -> None:
 def _match_one( task: tuple ):
     """Per-molecule worker, run in a separate Pool *process*. Loads the molecule,
     runs conformer matching, and returns the packed per-molecule result, or
-    None if the molecule is dropped (RDKit produced no conformers)."""
+    None if the molecule is dropped (RDKit produced no conformers).
+
+    Results are returned as numpy arrays, not torch tensors: importing torch
+    monkeypatches multiprocessing's ForkingPickler so tensors cross the Pool
+    boundary as shared-memory file descriptors, which exhausts the FD limit on
+    long runs ("received 0 items of ancdata"). numpy arrays pickle normally; the
+    parent rebuilds tensors at pack time with `pt.from_numpy` (dtype-preserving)."""
     qm9_dir, smiles, n_rdkit_factor = task
 
     pickle_path = qm9_dir / f"{smiles}.pickle"
@@ -316,9 +322,13 @@ def _match_one( task: tuple ):
         return None
 
     return (
-        d.smiles, d.Z, d.edge_index, d.rotatable_bonds,
-        d.side_atom_idx, d.side_bond_idx,
-        [x.to(pt.float32) for x in matched],
+        d.smiles,
+        d.Z.numpy(),
+        d.edge_index.numpy(),
+        d.rotatable_bonds.numpy(),
+        d.side_atom_idx.numpy(),
+        d.side_bond_idx.numpy(),
+        [x.to(pt.float32).numpy() for x in matched],
     )
 
 
@@ -350,7 +360,8 @@ def process_split( qm9_dir: Path, smiles_list: list[str], n_rdkit_factor: int ) 
     # order is irrelevant (training shuffles) and each molecule is deterministic
     # (fixed SEED), so the dataset content is reproducible. The parent does the
     # packing, so mol_idx / offsets stay consistent regardless of finish order.
-    with mp.Pool( processes=N_WORKERS, initializer=_worker_init ) as pool:
+    ctx = mp.get_context(method="spawn")
+    with ctx.Pool( processes=N_WORKERS, initializer=_worker_init ) as pool:
         for done, res in enumerate( pool.imap_unordered( _match_one, tasks ), start=1 ):
             if done % 100 == 0:
                 dt  = time.time() - t0
@@ -363,17 +374,19 @@ def process_split( qm9_dir: Path, smiles_list: list[str], n_rdkit_factor: int ) 
 
             smiles, Z, edge_index, rot, side_atom, side_bond, matched = res
 
+            # Workers return numpy arrays (see _match_one); rebuild tensors here.
+            # pt.from_numpy preserves dtype (int64->long, float32->float32).
             mol_idx = len(mol_smiles)   # index this molecule will occupy
             mol_smiles.append( smiles )
-            mol_Z.append( Z )
-            mol_edge_index.append( edge_index )
-            mol_rotatable_bonds.append( rot )
-            mol_side_atom.append( side_atom )
-            mol_side_bond.append( side_bond )
+            mol_Z.append( pt.from_numpy( Z ) )
+            mol_edge_index.append( pt.from_numpy( edge_index ) )
+            mol_rotatable_bonds.append( pt.from_numpy( rot ) )
+            mol_side_atom.append( pt.from_numpy( side_atom ) )
+            mol_side_bond.append( pt.from_numpy( side_bond ) )
 
             N = int(Z.shape[0])
             for x_matched in matched:
-                conf_x_chunks.append( x_matched )
+                conf_x_chunks.append( pt.from_numpy( x_matched ) )
                 conf_offsets.append( conf_offsets[-1] + N )
                 mol_id_flat.append( mol_idx )
 
