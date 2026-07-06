@@ -64,16 +64,39 @@ from typing import Callable
 
 dxtb.OutputHandler.verbosity = 0
 
+
+def _available_cpus():
+    """CPUs allocated to THIS job -- NOT the whole node.
+
+    os.cpu_count() returns the node's logical CPU count (e.g. 128), which under
+    SLURM (`--cpus-per-task=N`) is wrong: it would spawn node-many workers on an
+    N-CPU allocation -> oversubscription + a worker pool that OOMs. Prefer SLURM's
+    allocation, then the process CPU affinity (Linux cgroup), then cpu_count.
+    """
+    n = os.environ.get("SLURM_CPUS_PER_TASK")
+    if n:
+        return int(n)
+    try:
+        return len(os.sched_getaffinity(0))   # Linux: respects cgroup / affinity
+    except AttributeError:
+        return os.cpu_count() or 1            # macOS / Windows fallback
+
+
 # Configuration
 METHOD = "GFN2-xTB"                     # the production method (needs libcint)
 # Molecule-size axis: names from molecules.SUITE, small -> large.
-MOLECULES = ["thiophene", "benzene", "caffeine", "cholesterol", "C60-alkane"]
+# C60-alkane (182 atoms) is dropped: its batched-autograd forces OOM at large B on
+# BOTH cpu (fatal SIGKILL) and gpu (caught -> nan), so it yields no usable comparison.
+MOLECULES = ["thiophene", "benzene", "caffeine", "cholesterol"]
 # Batch-size axis. Push high enough to find the crossover; watch GPU memory.
 BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256]
-MAX_WORKERS = os.cpu_count()           # spawned xtb worker processes (ChemDM uses cpu_count)
-# Batched dxtb device(s) with dtype. On the cluster CUDA is the point.
-DXTB_DEVICES = [("cuda:p", pt.float64), ("cpu", pt.float64)]
-RUN_XTB_SEQ = False                    # single-process xtb reference (context)
+MAX_WORKERS = _available_cpus()        # xtb worker processes = CPUs allocated to THIS job
+# Batched dxtb device(s) with dtype: CUDA is the point, CPU is the batched-CPU
+# reference. Both run the same MOLECULES (kept small enough that the batched autograd
+# graph fits in RAM/VRAM). See the C60-alkane note above for why the biggest molecule
+# is excluded rather than special-cased per device.
+DXTB_DEVICES = [("cuda", pt.float64), ("cpu", pt.float64)]
+RUN_XTB_SEQ = True                     # single-process xtb reference (context)
 RUN_DXTB_MP = False                    # non-batched dxtb across CPU procs (context)
 N_REPEAT = 3                           # take the min wall-time over repeats
 SHOW_PLOT = True
@@ -226,9 +249,9 @@ def dxtb_batched( Z : np.ndarray,
         (g,) = pt.autograd.grad( e.sum(), pos )         # dE/dpos (= -forces) for all B at once
         # GPU kernels are launched asynchronously, so wait for them to actually
         # finish before we stop the clock -- otherwise we'd time only the launch.
-        if device == "cuda:0":
+        if str(device).startswith("cuda"):
             pt.cuda.synchronize()
-        elif device == "mps":
+        elif str(device).startswith("mps"):
             pt.mps.synchronize()
         return g
     return _timeit( run )
@@ -287,8 +310,13 @@ def sweep_molecule(name, Z, x0, mp_col, dxtb_mp_col, dxtb_cols, devices,
     # Modes run STRICTLY ONE AT A TIME, freeing resources in between, so each is
     # timed on an otherwise-idle machine (no leftover worker processes or cached GPU
     # memory skewing the comparison). pooled_sweep tears down its pool on exit.
+    # single_thread=True pins each xtb worker to 1 BLAS/OMP thread. Without it the N
+    # workers each spawn OpenMP threads across all cores and thrash -- the pool then
+    # scales ~linearly in B instead of parallelizing (a broken, ~100x-too-slow
+    # baseline). Pinned: N single-threaded workers = N cores, the correct comparison.
     res[mp_col] = pooled_sweep(Z, x0, batches, n_workers, ctx,
-                               _mp_init, _mp_eval, xtb_multiprocess)
+                               _mp_init, _mp_eval, xtb_multiprocess,
+                               single_thread=True)
     _free_resources()
 
     if RUN_DXTB_MP:
@@ -326,8 +354,8 @@ def main():
     devices = []
     for name, dtype in DXTB_DEVICES:
         ok = (name == "cpu"
-              or (name == "cuda" and pt.cuda.is_available())
-              or (name == "mps" and pt.backends.mps.is_available()))
+              or (name.startswith("cuda") and pt.cuda.is_available())
+              or (name.startswith("mps") and pt.backends.mps.is_available()))
         (devices.append((name, dtype)) if ok
          else print(f"# (skipping dxtb device {name!r}: unavailable)"))
 

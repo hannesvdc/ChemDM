@@ -147,12 +147,12 @@ def main( exp_name: str ) -> None:
     ckpt_dir = Path( store_root ) / exp_name
     ckpt_dir.mkdir( parents=True, exist_ok=True )
 
-    device_str  = data_config.get( "device", os.environ.get("DEVICE", "mps") )
-    device      = pt.device( device_str )
+    device_str = data_config.get( "device", os.environ.get("DEVICE", "mps") )
+    device = pt.device( device_str )
     setup_wandb = data_config.get( "setup_wandb", True )
 
-    print(f"experiment:  {exp_name}")
-    print(f"device:      {device}")
+    print(f"experiment: {exp_name}")
+    print(f"device: {device}")
     print(f"checkpoints: {ckpt_dir}")
 
     # Data
@@ -201,15 +201,15 @@ def main( exp_name: str ) -> None:
 
     # Config snapshot + optional Weights&Biases logging.
     experiment_config = {
-        "architecture":           "TorsionalScoreNetwork",
-        "experiment_name":        exp_name,
-        "device":                 device_str,
-        "batch_size":             BATCH_SIZE,
-        "n_epochs":               N_EPOCHS,
-        "lr_max":                 LR_MAX,
-        "lr_min":                 LR_MIN,
-        "warmup_epochs":          WARMUP_EPOCHS,
-        "cutoff":                 CUTOFF,
+        "architecture": "TorsionalScoreNetwork",
+        "experiment_name": exp_name,
+        "device": device_str,
+        "batch_size": BATCH_SIZE,
+        "n_epochs": N_EPOCHS,
+        "lr_max": LR_MAX,
+        "lr_min": LR_MIN,
+        "warmup_epochs": WARMUP_EPOCHS,
+        "cutoff": CUTOFF,
         "n_trainable_parameters": n_params,
     }
     with open( ckpt_dir / "config.json", "w" ) as f:
@@ -218,17 +218,17 @@ def main( exp_name: str ) -> None:
     # Resume from the always-last-epoch checkpoint (latest.pt) if one exists. It
     # is rewritten every epoch with model + optimizer + scheduler + epoch +
     # best_val_loss + global_step, so we continue exactly where we stopped.
-    start_epoch   = 1
+    start_epoch = 1
     best_val_loss = float("inf")
-    global_step   = 0
+    global_step = 0
     latest_ckpt = ckpt_dir / "latest.pt"
     if latest_ckpt.exists():
         ckpt = pt.load( latest_ckpt, map_location=device )
         model.load_state_dict( ckpt["model"] )
         optimizer.load_state_dict( ckpt["optimizer"] )
-        start_epoch   = ckpt["epoch"] + 1
+        start_epoch = ckpt["epoch"] + 1
         best_val_loss = ckpt.get( "best_val_loss", float("inf") )
-        global_step   = ckpt.get( "global_step", 0 )
+        global_step = ckpt.get( "global_step", 0 )
         if "scheduler" in ckpt:
             scheduler.load_state_dict( ckpt["scheduler"] )
         else:
@@ -246,12 +246,12 @@ def main( exp_name: str ) -> None:
         wandb_id_file = ckpt_dir / "wandb_run_id"
         resuming = start_epoch > 1 and wandb_id_file.exists()
         run = wandb.init(
-            entity  = WANDB_ENTITY,
+            entity = WANDB_ENTITY,
             project = WANDB_PROJECT,
-            name    = exp_name,
-            config  = experiment_config,
-            id      = wandb_id_file.read_text().strip() if resuming else None,
-            resume  = "allow" if resuming else None,
+            name = exp_name,
+            config = experiment_config,
+            id = wandb_id_file.read_text().strip() if resuming else None,
+            resume = "allow" if resuming else None,
         )
         wandb_id_file.write_text( run.id )
 
