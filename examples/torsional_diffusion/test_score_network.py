@@ -9,7 +9,7 @@ What it checks:
     1. Forward pass returns the expected shape and finite values.
     2. Translation invariance: δτ(x + t) = δτ(x).
     3. Rotation invariance: δτ(Rx) = δτ(x) for R ∈ SO(3).
-    4. Parity equivariance: δτ(−x) = −δτ(x).
+    4. Parity equivariance: δτ(-x) = −δτ(x).
 
 The parity test is the architecturally interesting one: torsional diffusion
 requires the score to flip sign under reflection (the molecular energy is
@@ -32,7 +32,7 @@ import torch as pt
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from score_network import TorsionalScoreNetwork
+from chemdm.TorsionalScoreNetwork import TorsionalScoreNetwork
 
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
 

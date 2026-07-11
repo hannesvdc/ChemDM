@@ -37,8 +37,8 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from dotenv import load_dotenv
 
-from dataset import TorsionalDataset, collate_torsional
-from score_network import TorsionalScoreNetwork
+from chemdm.TorsionalDataset import TorsionalDataset, collate_torsional
+from chemdm.TorsionalScoreNetwork import TorsionalScoreNetwork
 from diffusion import sigma_schedule, wrapped_normal_score
 
 from chemdm.geometry import apply_torsion_update

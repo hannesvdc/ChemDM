@@ -40,57 +40,16 @@ score model is meant to predict updates for.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import pickle
 from pathlib import Path
 
 import networkx as nx
 import torch as pt
 
-
-@dataclass
-class MoleculeData:
-    smiles: str
-    Z: pt.Tensor                 # (N,)        long
-    edge_index: pt.Tensor        # (E, 2)      long — undirected covalent bonds, both directions
-    rotatable_bonds: pt.Tensor   # (m, 2)      long — rotatable bonds, canonical b<c ordering
-    side_atom_idx: pt.Tensor     # (P,)        long — atoms on the c-side of some bond
-    side_bond_idx: pt.Tensor     # (P,)        long — which bond (0..m-1) each side-atom belongs to
-    conformers: list[dict]       # each: {x: (N, 3) float64, totalenergy, relativeenergy, boltzmannweight}
+from chemdm.TorsionalDiffusionData import TorsionalDiffusionData, find_rotatable_bonds
 
 
-def find_rotatable_bonds( mol ) -> tuple[list[tuple[int, int]], list[list[int]]]:
-    """
-    Paper definition: severing the bond splits the graph into exactly two
-    components, each with >= 2 atoms.
-
-    Returns
-    -------
-    rotatable : list of (b, c) atom-index pairs, canonical b < c ordering.
-    sides     : list of lists; sides[i] is the sorted atom indices on the
-                c-side of bond i (the component containing c after severance).
-    """
-    G = nx.Graph()
-    G.add_nodes_from( range(mol.GetNumAtoms()) )
-    for b in mol.GetBonds():
-        G.add_edge( b.GetBeginAtomIdx(), b.GetEndAtomIdx() )
-
-    rotatable: list[tuple[int, int]] = []
-    sides:     list[list[int]]       = []
-    for u, v in list(G.edges()):
-        G.remove_edge( u, v )
-        comps = list(nx.connected_components(G))
-        if len(comps) == 2 and all( len(c) >= 2 for c in comps ):
-            b, c = (u, v) if u < v else (v, u)
-            rotatable.append( (b, c) )
-            # The c-side is whichever component contains c.
-            c_side = comps[0] if c in comps[0] else comps[1]
-            sides.append( sorted(c_side) )
-        G.add_edge( u, v )
-    return rotatable, sides
-
-
-def load_qm9_molecule( path: Path ) -> MoleculeData:
+def load_qm9_molecule( path: Path ) -> TorsionalDiffusionData:
     """
     Load one QM9 pickle into model-ready tensors.
     """
@@ -142,7 +101,7 @@ def load_qm9_molecule( path: Path ) -> MoleculeData:
             "boltzmannweight": float(c["boltzmannweight"]),
         })
 
-    return MoleculeData(
+    return TorsionalDiffusionData(
         smiles=raw["smiles"],
         Z=Z,
         edge_index=edge_index,
