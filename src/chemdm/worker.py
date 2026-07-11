@@ -11,6 +11,7 @@ from chemdm.commands.transition_path import run as run_transition_path
 from chemdm.commands.transition_path import load_attention_model
 from chemdm.commands.stable_conformer import run as run_stabilize_conformer
 from chemdm.commands.generate_conformers import run as run_generate_conformers
+from chemdm.commands.generate_conformers import load_torsional_diffusion_model
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -55,6 +56,7 @@ class WorkerState:
 
     def __init__(self) -> None:
         self.transition_path_model = None
+        self.torsional_diffusion_model = None
 
     def warm_up( self ) -> None:
         """
@@ -64,6 +66,7 @@ class WorkerState:
         Newton model loading here so it is not repeated per job.
         """
         self.transition_path_model = load_attention_model( )
+        self.torsional_diffusion_model = load_torsional_diffusion_model( )
 
 
 def run_worker() -> int:
@@ -183,7 +186,9 @@ def handle_job(job: dict[str, Any], state: WorkerState) -> None:
         elif experiment == "stabilize-conformation":
             result = run_stabilize_conformer( body, on_progress=ProgressObject(), )
         elif experiment == "generate-conformers":
-            result = run_generate_conformers( body, on_progress=ProgressObject(), )
+            result = run_generate_conformers( body, 
+                                              on_progress=ProgressObject(), 
+                                              td_network=state.torsional_diffusion_model )
         else:
             raise ValueError(f"Unknown experiment: {experiment!r}")
 
