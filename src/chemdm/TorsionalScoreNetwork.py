@@ -10,7 +10,7 @@ Composes:
     5. PseudotorqueHead: per-rotatable-bond pseudoscalar (0o) readout.
 
 The output is `δτ ∈ ℝ^m`, one real number per rotatable bond. By construction
-it is SE(3)-invariant and parity-equivariant (δτ(−x) = −δτ(x)), which are the
+it is SE(3)-invariant and parity-equivariant (δτ(-x) = −δτ(x)), which are the
 required symmetries for the torsional score on the hypertorus.
 
 Batching:
@@ -34,8 +34,8 @@ from chemdm.MLP import MultiLayerPerceptron
 from chemdm.embedding import SinusoidalEmbedding
 from chemdm.MoleculeGraph import BatchedMoleculeGraph
 
-from attention import EquivariantAttentionLayer
-from pseudotorque import PseudotorqueHead
+from chemdm.attention import EquivariantAttentionLayer
+from chemdm.pseudotorque import PseudotorqueHead
 
 
 class TorsionalScoreNetwork(nn.Module):

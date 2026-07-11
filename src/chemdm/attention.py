@@ -58,14 +58,13 @@ class EquivariantAttentionLayer(nn.Module):
         Scaling of the residual update added back to f.
     """
 
-    def __init__(
-        self,
-        irreps_node_str: str = "64x0e + 32x0o + 16x1o + 16x1e",
-        irreps_qk_str: str = "16x0e + 8x0o + 8x1o + 8x1e",
-        irreps_v_str: str | None = None,
-        d_cutoff: float = 5.0,
-        n_rbf: int = 16,
-        feature_residual_scale: float = 0.2,
+    def __init__( self,
+                  irreps_node_str: str = "64x0e + 32x0o + 16x1o + 16x1e",
+                  irreps_qk_str: str = "16x0e + 8x0o + 8x1o + 8x1e",
+                  irreps_v_str: str | None = None,
+                  d_cutoff: float = 5.0,
+                  n_rbf: int = 16,
+                  feature_residual_scale: float = 0.2,
     ) -> None:
         super().__init__()
 
