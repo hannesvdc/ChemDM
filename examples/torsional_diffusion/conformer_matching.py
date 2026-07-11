@@ -48,12 +48,13 @@ import torch as pt
 
 from dotenv import load_dotenv
 from rdkit import Chem
-from rdkit.Chem import AllChem
 from rdkit import RDLogger
 from scipy.optimize import linear_sum_assignment, differential_evolution
 
-from chemdm.geometry import apply_torsion_update, kabsch_aligned_rmsd_torch
-from qm9_parser import load_qm9_molecule, MoleculeData
+from chemdm.geometry import apply_torsion_update
+from qm9_parser import load_qm9_molecule
+
+from chemdm.TorsionalDiffusionSampling import TorsionalDiffusionData, generate_rdkit_conformers, kabsch_aligned_heavy_rmsd
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -131,31 +132,6 @@ def torsions_for_geometry( x: pt.Tensor, rotatable_bonds: pt.Tensor, ref_a: pt.T
     return pt.atan2( (m1 * n2).sum(-1), (n1 * n2).sum(-1) )
 
 
-def kabsch_aligned_heavy_rmsd( x_pred: pt.Tensor, x_ref: pt.Tensor, Z: pt.Tensor ) -> float:
-    """Heavy-atom Kabsch-aligned RMSD. Float64 on CPU for SVD stability."""
-    heavy = (Z != 1)
-    if int(heavy.sum()) < 3:
-        heavy = pt.ones_like(Z, dtype=pt.bool)
-    return float( kabsch_aligned_rmsd_torch(
-        x_pred[heavy].cpu().to(pt.float64),
-        x_ref[heavy].cpu().to(pt.float64),
-    ) )
-
-
-def generate_rdkit_conformers( rdmol: Chem.Mol, n_conf: int, seed: int = SEED ) -> list[pt.Tensor]:
-    """
-    ETKDGv3 generation, no mmf94 relaxation. Returns a list of (N, 3) float32 tensors,
-    one per successfully embedded conformer (≤ n_conf if RDKit drops any).
-    """
-    rdmol = Chem.Mol(rdmol)
-    rdmol.RemoveAllConformers()
-
-    params = AllChem.ETKDGv3()
-    params.randomSeed = seed
-    cids = list( AllChem.EmbedMultipleConfs(rdmol, numConfs=n_conf, params=params) )
-
-    return [ pt.tensor( rdmol.GetConformer(cid).GetPositions(), dtype=pt.float32 ) for cid in cids ]
-
 
 def refine_torsions_de( rdkit_x: pt.Tensor,         # (N, 3) assigned RDKit local structure
                         x_gt: pt.Tensor,            # (N, 3) target CREST conformer
@@ -207,7 +183,7 @@ def refine_torsions_de( rdkit_x: pt.Tensor,         # (N, 3) assigned RDKit loca
     return apply_torsion_update( rdkit_x, rotatable_bonds, side_atom_idx, side_bond_idx, delta )
 
 
-def match_rdkit_to_crest( d: MoleculeData, rdmol: Chem.Mol, n_rdkit_factor: int = N_RDKIT_FACTOR ) -> list[pt.Tensor]:
+def match_rdkit_to_crest( d: TorsionalDiffusionData, rdmol: Chem.Mol, n_rdkit_factor: int = N_RDKIT_FACTOR ) -> list[pt.Tensor]:
     """
     Run conformer matching for one molecule. Returns a list of (N, 3) float32
     tensors — one matched geometry per CREST conformer, ordered like

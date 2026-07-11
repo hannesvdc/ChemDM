@@ -73,16 +73,13 @@ import torch as pt
 
 from dotenv import load_dotenv
 
-from chemdm.MoleculeGraph import MoleculeGraph
 from chemdm.xtbSetup import XTBPotential
 from chemdm.relaxMolecule import relaxMolecule
 from chemdm.Constants import KJ_MOL_TO_EV
+from chemdm.TorsionalDiffusionSampling import TorsionalDiffusionData, sample_conformers, kabsch_aligned_heavy_rmsd, generate_rdkit_conformers
+from chemdm.TorsionalScoreNetwork import TorsionalScoreNetwork
 
-from qm9_parser import load_qm9_molecule, MoleculeData
-from dataset import collate_torsional
-from score_network import TorsionalScoreNetwork
-from sampler import sample_torsional_diffusion
-from conformer_matching import generate_rdkit_conformers, kabsch_aligned_heavy_rmsd
+from qm9_parser import load_qm9_molecule
 
 
 # Config
@@ -96,6 +93,10 @@ COV_DELTAS = (0.5, 0.75, 1.0, 1.25)    # coverage thresholds, Å
 
 XTB_METHOD = "GFN2-xTB"           # relaxation level (matches how CREST minima were made)
 FORCE_TOL_EV_A = 0.02             # relaxation convergence: max per-atom force (eV/Å)
+PRUNE_RMSD = 0.125                # dedup before relaxing: raw samples within this heavy-atom
+                                  # RMSD (Å) are treated as one conformer -> one relaxation.
+                                  # Keep it well below the smallest distinct-basin separation;
+                                  # too large merges real basins and drops recall.
 N_RELAX_WORKERS = os.cpu_count()  # CPU-bound, embarrassingly parallel over samples
 
 # Each run = (checkpoint, start mode, backbone/torsion factors). K = backbone_mult·n_crest · torsion_inits.
@@ -120,7 +121,7 @@ def load_model( ckpt_path: Path, device: pt.device ) -> TorsionalScoreNetwork:
 
 
 # Starting geometries
-def build_starting_geometries( d: MoleculeData, rd_mol, start: str, backbone_mult: int, torsion_inits: int ) -> list[np.ndarray] | None:
+def build_starting_geometries( d: TorsionalDiffusionData, rd_mol, start: str, backbone_mult: int, torsion_inits: int ) -> list[np.ndarray] | None:
     """
     Return the K = (backbone_mult·n_crest)·torsion_inits starting structures the
     sampler will randomize torsions on. Only the local structure (bonds/angles)
@@ -134,7 +135,8 @@ def build_starting_geometries( d: MoleculeData, rd_mol, start: str, backbone_mul
                    (the molecule is un-embeddable at inference too).
     """
     n_crest = len( d.conformers )
-    n_backbones = 1000 #backbone_mult * n_crest
+    n_backbones = 100 #backbone_mult * n_crest
+    print( n_backbones )
 
     if start == "crest":
         base = [ c["x"].numpy().astype( np.float32 ) for c in d.conformers ]
@@ -152,38 +154,8 @@ def build_starting_geometries( d: MoleculeData, rd_mol, start: str, backbone_mul
     out = []
     for b in backbones:
         out.extend( b for _ in range(torsion_inits) )
+    print( 'rdkit backbones generated')
     return out
-
-
-# Sampling
-@pt.no_grad()
-def sample_conformers( model: TorsionalScoreNetwork, d: MoleculeData, starts: list[np.ndarray], device: pt.device ) -> np.ndarray:
-    """Draw one conformer per starting structure. Returns (K, N, 3) float32."""
-    N = int( d.Z.shape[0] )
-
-    # K copies of the same molecule, each seeded with its own starting geometry;
-    # collate_torsional applies the per-copy atom/bond offsets the sampler needs.
-    examples = [ {
-            "mol": MoleculeGraph( Z=d.Z, x=pt.tensor( x0, dtype=pt.float32 ), bonds=d.edge_index ),
-            "rotatable_bonds": d.rotatable_bonds,
-            "side_atom_idx": d.side_atom_idx,
-            "side_bond_idx": d.side_bond_idx,
-        }
-        for x0 in starts
-    ]
-    batch = collate_torsional( examples )
-
-    mol = batch["mol"].to( device=device, dtype=pt.float32 )
-    x_sampled = sample_torsional_diffusion(
-        model, mol,
-        rotatable_bonds = batch["rotatable_bonds"].to( device ),
-        side_atom_idx = batch["side_atom_idx"].to( device ),
-        side_bond_idx = batch["side_bond_idx"].to( device ),
-        bond_batch = batch["bond_batch"].to( device ),
-        n_steps = N_SDE_STEPS,
-        cutoff = CUTOFF,
-    )
-    return x_sampled.detach().cpu().numpy().reshape( len( starts ), N, 3 )
 
 
 # Metrics
@@ -270,52 +242,88 @@ def _relax_one( task: tuple ) -> tuple[int, int, np.ndarray | None, dict | None 
     return ( mol_idx, k, x_relaxed.astype( np.float32 ), diag )
 
 
+def _cluster_representatives( samples: np.ndarray, Z, thresh: float ) -> list[int]:
+    """Greedy heavy-atom Kabsch-RMSD clustering of the raw samples; return the
+    representative index of each cluster (the sample that opened it).
+
+    A sample within `thresh` A of an existing representative is absorbed (it will
+    relax to the same minimum), so only representatives need relaxing. The `all(...)`
+    short-circuits on the first close representative, so absorbed samples are cheap;
+    cost is ~O(K + n_clusters^2), fine when the sampler produces few distinct basins.
+    """
+    reps: list[int] = []
+    rep_geoms: list = []
+    for k in range( samples.shape[0] ):
+        xk = pt.tensor( samples[k], dtype=pt.float32 )
+        if all( kabsch_aligned_heavy_rmsd( xk, rg, Z ) >= thresh for rg in rep_geoms ):
+            reps.append( k )
+            rep_geoms.append( xk )
+    return reps
+
+
 def relax_split( per_mol: list[dict] ) -> None:
-    """Relax every sample of every molecule (flat pool over the whole split),
-    then attach relaxed-geometry metrics onto each per-mol record in place."""
+    """Prune near-duplicate raw samples, then GFN2-xTB-relax only the cluster
+    representatives (near-duplicates relax to the same minimum, so this is a large
+    cost cut). Relaxed metrics are computed over the DEDUPLICATED set of relaxed
+    representatives -- the distinct conformers you would actually output. Recall
+    (Cov-R / AMR-R) is unchanged by dedup (dropped duplicates were not new basins);
+    precision is now over the distinct conformers. Attaches metrics in place.
+
+    NB: the raw (pre-relaxation) metrics in evaluate_run are still over ALL samples;
+    only the relaxed block uses the pruned representatives.
+    """
+    for rec in per_mol:
+        rec["rep_idx"] = _cluster_representatives( rec["samples"], rec["Z"], PRUNE_RMSD )
+
     tasks = [
-        ( i, k, rec["Z_np"], rec["samples"][k] )
+        ( i, r, rec["Z_np"], rec["samples"][r] )
         for i, rec in enumerate( per_mol )
-        for k in range( rec["samples"].shape[0] )
+        for r in rec["rep_idx"]
     ]
-    if len(tasks) == 0:
+    if len( tasks ) == 0:
         return
+
+    n_samples_total = sum( rec["samples"].shape[0] for rec in per_mol )
+    n_clusters_total = len( tasks )   # one relaxation per cluster -> total cost for this split
+    print( f"    pruned {n_samples_total:,} samples -> {n_clusters_total:,} clusters "
+           f"= {n_clusters_total:,} relaxations "
+           f"({n_samples_total / max(n_clusters_total,1):.1f}x fewer, "
+           f"{n_clusters_total / len(per_mol):.1f} clusters/mol avg, RMSD < {PRUNE_RMSD} A)" )
 
     relaxed: dict[tuple[int, int], np.ndarray] = {}
     diags: dict[tuple[int, int], dict] = {}
     t0 = time.time()
     ctx = mp.get_context( "spawn" )
     with ctx.Pool( processes=N_RELAX_WORKERS ) as pool:
-        for done, ( mol_idx, k, x_rel, diag ) in enumerate( pool.imap_unordered( _relax_one, tasks ), start=1 ):
+        for done, ( mol_idx, r, x_rel, diag ) in enumerate( pool.imap_unordered( _relax_one, tasks ), start=1 ):
             if x_rel is not None:
-                relaxed[( mol_idx, k )] = x_rel
-                diags[( mol_idx, k )] = diag
+                relaxed[( mol_idx, r )] = x_rel
+                diags[( mol_idx, r )] = diag
             if done % 500 == 0:
                 print( f"    relaxed {done:,}/{len(tasks):,} ({done/(time.time()-t0):.1f}/s)" )
 
     for i, rec in enumerate( per_mol ):
         Z = rec["Z"]
         gt = rec["gt_confs"]
-        K = rec["samples"].shape[0]
+        reps = rec["rep_idx"]
 
-        relaxed_rows = [ relaxed.get( (i, k) ) for k in range( K ) ]
-        keep = [ k for k in range( K ) if relaxed_rows[k] is not None ]
+        keep = [ r for r in reps if relaxed.get( (i, r) ) is not None ]
         if not keep:
             rec["relaxed"] = None
             continue
 
-        relaxed_stack = np.stack( [ relaxed_rows[k] for k in keep ] )           # (K', N, 3)
-        M_rel = rmsd_matrix( relaxed_stack, gt, Z )                             # (K', n_gt)
+        relaxed_stack = np.stack( [ relaxed[( i, r )] for r in keep ] )         # (R', N, 3)
+        M_rel = rmsd_matrix( relaxed_stack, gt, Z )                             # (R', n_gt)
 
-        # How far each kept sample moved under relaxation (heavy-atom aligned).
+        # How far each representative moved under relaxation (heavy-atom aligned).
         shifts = [
-            kabsch_aligned_heavy_rmsd( pt.tensor( relaxed_rows[k], dtype=pt.float32 ),
-                                       pt.tensor( rec["samples"][k], dtype=pt.float32 ), Z )
-            for k in keep
+            kabsch_aligned_heavy_rmsd( pt.tensor( relaxed[( i, r )], dtype=pt.float32 ),
+                                       pt.tensor( rec["samples"][r], dtype=pt.float32 ), Z )
+            for r in keep
         ]
         min_per_gt = M_rel.min( axis=0 )
         min_per_k = M_rel.min( axis=1 )
-        mol_diags = [ diags[( i, k )] for k in keep ]
+        mol_diags = [ diags[( i, r )] for r in keep ]
         rec["relaxed"] = {
             "relaxed_amr_p":  float( min_per_k.mean() ),
             "relaxed_amr_r":  float( min_per_gt.mean() ),
@@ -323,8 +331,11 @@ def relax_split( per_mol: list[dict] ) -> None:
             "init_force":     float( np.mean( [ d["init_force"] for d in mol_diags ] ) ),   # eV/Å, raw-sample strain
             "n_iter":         float( np.mean( [ d["n_iter"]     for d in mol_diags ] ) ),   # L-BFGS steps to relax
             "frac_converged": float( np.mean( [ d["converged"]  for d in mol_diags ] ) ),
+            "prune_factor":   float( rec["samples"].shape[0] / max( len( reps ), 1 ) ),     # samples per relaxation
+            "n_samples":      int( rec["samples"].shape[0] ),
+            "n_clusters":     len( reps ),
             "n_relaxed":      len( keep ),
-            "n_failed":       K - len( keep ),
+            "n_failed":       len( reps ) - len( keep ),
         }
         # Relaxed coverage: fraction of CREST confs (R) / samples (P) within δ AFTER
         # relaxation. With the backbone/L-shift removed, relaxed Cov-R is the clean
@@ -347,7 +358,7 @@ def aggregate( per_mol: list[dict] ) -> dict:
     relaxed = [ rec["relaxed"] for rec in per_mol if rec.get("relaxed") is not None ]
     if relaxed:
         relaxed_keys = ( [ "relaxed_amr_p", "relaxed_amr_r", "relax_shift",
-                           "init_force", "n_iter", "frac_converged" ]
+                           "init_force", "n_iter", "frac_converged", "prune_factor" ]
                          + [ f"relaxed_cov_{d}_{t}" for t in COV_DELTAS for d in ("r", "p") ] )
         for k in relaxed_keys:
             agg[k] = stat( [ r[k] for r in relaxed ] )
@@ -357,7 +368,7 @@ def aggregate( per_mol: list[dict] ) -> dict:
 
 
 # Molecule selection
-def select_molecules( qm9_dir: Path, smiles_list: list[str], n_want: int ) -> list[tuple[str, MoleculeData, object]]:
+def select_molecules( qm9_dir: Path, smiles_list: list[str], n_want: int ) -> list[tuple[str, TorsionalDiffusionData, object]]:
     """First `n_want` molecules in the split that have >=1 rotatable bond (the
     only ones a torsion sampler is defined on). Returns (smiles, MoleculeData,
     rd_mol) triples; reports how many were skipped."""
@@ -401,12 +412,15 @@ def evaluate_run( run: dict, splits_data: dict, qm9_dir: Path ) -> dict | None:
         n_dropped = 0
         t0 = time.time()
         for smi, d, rd_mol in mols:
+            print(smi)
             starts = build_starting_geometries( d, rd_mol, run["start"], run["backbone_mult"], run["torsion_inits"] )
             if starts is None:
                 n_dropped += 1
                 continue
             samples = sample_conformers( model, d, starts, device )
+            print( '\tConformers generated' )
             M = rmsd_matrix( samples, d.conformers, d.Z )
+            print( '\tRMSD done' )
             per_mol.append({
                 "smiles": smi,
                 "Z": d.Z,
@@ -443,7 +457,7 @@ def print_comparison( all_results: dict ) -> None:
     rows = ( ["amr_r", "amr_p"] + [ f"cov_{d}_{t}" for t in COV_DELTAS for d in ("r", "p") ]
              + ["relaxed_amr_r", "relaxed_amr_p", "relax_shift"]
              + [ f"relaxed_cov_{d}_{t}" for t in COV_DELTAS for d in ("r", "p") ]
-             + ["init_force", "n_iter", "frac_converged"] )
+             + ["init_force", "n_iter", "frac_converged", "prune_factor"] )
 
     print( "\n\n=================== COMPARISON (mean over molecules) ===================" )
     for split in SPLITS:
@@ -483,7 +497,7 @@ _REPORT_GROUPS = [
       ["relaxed_amr_r", "relaxed_amr_p", "relax_shift"]
       + [ f"relaxed_cov_{d}_{t}" for t in COV_DELTAS for d in ("r", "p") ] ),
     ( "Relaxation cost / validity",
-      ["init_force", "n_iter", "frac_converged"] ),
+      ["init_force", "n_iter", "frac_converged", "prune_factor"] ),
 ]
 
 
