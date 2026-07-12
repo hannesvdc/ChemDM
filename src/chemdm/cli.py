@@ -12,9 +12,12 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
+
+from dotenv import load_dotenv
 
 
 # One-shot experiments -> (command module, name of its model-loader function or None).
@@ -77,7 +80,7 @@ def _build_parser() -> argparse.ArgumentParser:
             src = s.add_mutually_exclusive_group( required=True )
             src.add_argument( "--smiles", help="SMILES string to generate conformers for." )
             src.add_argument( "--input", type=Path, help="Path to input JSON (RS contract)." )
-            s.add_argument( "--n-conformers", type=int, default=100,
+            s.add_argument( "--n-conformers", type=int, default=10,
                             help="Number of conformers to generate (used with --smiles)." )
         else:
             s.add_argument( "--input", required=True, type=Path, help="Path to input JSON." )
@@ -91,6 +94,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Load .env before dispatch so both the worker and the one-shot subcommands
+    # inherit config like DEVICE / model paths. Commands read DEVICE from os.environ.
+    load_dotenv()
+    # MPS needs a CPU fallback for scatter_reduce (E3AttentionLayer), so DEVICE=mps
+    # alone would hard-crash. Enable the fallback automatically so mps is one flag.
+    if os.environ.get( "DEVICE", "" ).lower() == "mps":
+        os.environ.setdefault( "PYTORCH_ENABLE_MPS_FALLBACK", "1" )
+
     args = _build_parser().parse_args(argv)
 
     # Build a persistent worker

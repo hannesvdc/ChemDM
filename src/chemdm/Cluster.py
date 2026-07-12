@@ -1,4 +1,5 @@
 import numpy as np
+from rdkit import Chem
 
 from chemdm.geometry import kabsch_align_numpy
 
@@ -39,12 +40,49 @@ def rmsd_clustering( Z : np.ndarray,
 
     return optimal_conformers, indices, cluster_size
 
-def post_relaxation_rmsd_clustering( Z: np.ndarray,
-                                     conformers: list[np.ndarray],
-                                     energies: list[float],
-                                     forces: list[float],
-                                     cluster_sizes: list[int],
-                                     rmsd_tol: float = 0.5,
+
+def _symmetry_corrected_heavy_rmsd( a_heavy: np.ndarray,
+                                    b_heavy: np.ndarray,
+                                    permutations: list[np.ndarray] ) -> float:
+    """Minimum heavy-atom RMSD between two conformers over the molecule's graph
+    automorphisms (each `permutations[i]` a permutation of the heavy atoms, identity
+    included). `a_heavy`, `b_heavy` are the heavy-atom coordinates, shape (H, 3).
+
+    Alignment uses `kabsch_align_numpy`, a PROPER rotation (no reflection), so a
+    permutation that would only superimpose the two under a mirror leaves the RMSD
+    high -- enantiomers / diastereomers are therefore never merged (chirality kept).
+    """
+    best = np.inf
+    for perm in permutations:
+        b_perm = b_heavy[perm]
+        a_aligned = kabsch_align_numpy( a_heavy, b_perm )        # Z=None -> fit on all (heavy) atoms
+        r = float( np.sqrt( np.mean( np.sum( (a_aligned - b_perm) ** 2, axis=1 ) ) ) )
+        if r < best:
+            best = r
+            if best < 1e-3:
+                break                                            # exact symmetry match; can't beat it
+    return best
+
+
+def _heavy_automorphisms( mol ) -> list[np.ndarray]:
+    """
+    Heavy-atom graph automorphisms of `mol` as index permutations over the heavy
+    atoms (identity included).
+    """
+    heavy_mol = Chem.RemoveHs( mol )
+    return [ np.asarray(p) for p in heavy_mol.GetSubstructMatches(
+                heavy_mol, uniquify=False, useChirality=False, maxMatches=10000 ) ]
+
+
+def post_relaxation_clustering( Z: np.ndarray,
+                                conformers: list[np.ndarray],
+                                energies: list[float],
+                                forces: list[float],
+                                cluster_sizes: list[int],
+                                rmsd_tol: float = 0.5,
+                                mol = None,                       # rdkit Chem.Mol (with Hs); enables symmetry dedup
+                                energy_tol: float = 1.0,          # kJ/mol; loose pre-filter
+                                symmetry_rmsd_tol: float = 0.1,   # Angstrom; the real identity test
     ) -> tuple[list[np.ndarray], np.ndarray, np.ndarray, list[int], list[int]]:
     """
     Greedy post-relaxation RMSD clustering. Runtime complexity is O( N log N ) with N the number of conformers.
@@ -65,6 +103,19 @@ def post_relaxation_rmsd_clustering( Z: np.ndarray,
         If there was no pre-clustering, this should be all ones.
     rmsd_tol:
         Heavy-atom RMSD clustering radius in Angstrom.
+    mol:
+        Optional RDKit molecule (with hydrogens, same atom order as `conformers`).
+        When given, conformers with near-identical energy that coincide under a graph
+        automorphism (an atom-index shuffle by molecular symmetry) are merged as
+        chemically identical -- e.g. a symmetric ring placing a substituent on an
+        equivalent site. The automorphisms are listed lazily, only once some conformers
+        actually share an energy, so molecules with all-distinct energies pay nothing.
+        None disables the symmetry dedup.
+    energy_tol:
+        Energy window (kJ/mol) gating the symmetry check (a loose pre-filter).
+    symmetry_rmsd_tol:
+        Heavy-atom RMSD tolerance (Angstrom) for the automorphism-corrected identity
+        test. Alignment is a proper rotation, so chirality is preserved.
 
     Returns
     -------
@@ -88,7 +139,7 @@ def post_relaxation_rmsd_clustering( Z: np.ndarray,
     assert len(cluster_sizes) == n_confs
 
     Z = np.asarray(Z)
-    heavy = Z != 1
+    heavy = (Z != 1)
 
     # Sort by energy so each new cluster center is the lowest-energy
     # unassigned conformer in that RMSD basin.
@@ -98,10 +149,12 @@ def post_relaxation_rmsd_clustering( Z: np.ndarray,
     optimal_forces: list[float] = []
     representative_indices: list[int] = []
     final_cluster_sizes: list[int] = []
+    permutations: list[np.ndarray] | None = None   # heavy-atom automorphisms, listed lazily (see below)
 
     for idx_in_original in order:
         x_conf = conformers[idx_in_original]
         x_conf = x_conf - np.mean(x_conf, axis=0, keepdims=True)
+        E = float(energies[idx_in_original])
 
         assigned = False
         for k, reference_conformer in enumerate(optimal_conformers):
@@ -114,9 +167,21 @@ def post_relaxation_rmsd_clustering( Z: np.ndarray,
                 final_cluster_sizes[k] += cluster_sizes[idx_in_original]
                 break
 
+            # Permutation-symmetry dedup: two relaxed conformers with near-identical
+            # energy that coincide under a graph automorphism (an atom-index shuffle by
+            # molecular symmetry) are chemically identical. Kabsch alignment keeps
+            # it chirality-safe.
+            if mol is not None and abs(E - optimal_energies[k]) <= energy_tol:
+                if permutations is None:
+                    permutations = _heavy_automorphisms( mol )
+                if _symmetry_corrected_heavy_rmsd( x_conf[heavy, :], reference_conformer[heavy, :], permutations ) <= symmetry_rmsd_tol:
+                    assigned = True
+                    final_cluster_sizes[k] += cluster_sizes[idx_in_original]
+                    break
+
         if not assigned:
             optimal_conformers.append(x_conf)
-            optimal_energies.append(float(energies[idx_in_original]))
+            optimal_energies.append(E)
             optimal_forces.append(float(forces[idx_in_original]))
             representative_indices.append(int(idx_in_original))
             final_cluster_sizes.append(int(cluster_sizes[idx_in_original]))

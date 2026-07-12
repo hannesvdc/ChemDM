@@ -14,7 +14,7 @@ from rdkit import Chem
 from chemdm.xtbSetup import XTBPotential
 from chemdm.relaxMolecule import minimize_with_lbfgs
 from chemdm.progress import ProgressCallback
-from chemdm.Cluster import rmsd_clustering, post_relaxation_rmsd_clustering
+from chemdm.Cluster import rmsd_clustering, post_relaxation_clustering
 from chemdm.TorsionalScoreNetwork import TorsionalScoreNetwork
 
 from chemdm.TorsionalDiffusionSampling import sample_conformers_from_mol
@@ -57,7 +57,7 @@ def run( input_data: dict,
     theory = input_data.get( "theory", "xtb" )
     force_tol = float( input_data.get( "force_tolerance", 0.1) )
     max_optimizer_steps = int( input_data.get( "max_optimizer_steps", 250) )
-    rmsd_tol = float( input_data.get("rmsd_tol", 0.2) )
+    rmsd_tol = float( input_data.get("rmsd_tol", 0.5) )
 
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -77,12 +77,18 @@ def run( input_data: dict,
     # conf_ids = AllChem.EmbedMultipleConfs( mol_with_h, numConfs=n_conformers, params=params )
     # raw_conformers = [ np.asarray( mol_with_h.GetConformer(conf_id).GetPositions(), dtype=float, ) for conf_id in conf_ids ]
     
+    # Run the score-network sampling on the device from the DEVICE env var
+    # ("mps" / "cuda" / "cpu"; default cpu). sample_conformers_from_mol returns
+    # numpy (CPU), so clustering + xTB downstream always stay on CPU regardless.
+    sample_device = pt.device( os.environ.get( "DEVICE", "cpu" ) )
+    td_network = td_network.to( sample_device )
+
     # This output has shape (n_conformers, N, 3)
-    print( 'Sampling Conformers', file=sys.stderr )
-    diffusion_conformers = sample_conformers_from_mol( td_network, mol_with_h, n_conformers )
+    print( f'Sampling Conformers on {sample_device}', file=sys.stderr )
+    diffusion_conformers = sample_conformers_from_mol( td_network, mol_with_h, n_conformers, device=sample_device )
     raw_conformers = [ conf for conf in diffusion_conformers ] # unpacks the first dimension
     
-    # Clustering before (expensive) XTB + L-BFGS minimization
+    # Clustering before XTB + L-BFGS minimization
     pre_conformers, _, cluster_sizes = rmsd_clustering( Z, raw_conformers, rmsd_tol )
     on_progress( "Generation", f"Generated {len(pre_conformers)} possibly distinct conformers ", fraction=0.1 )
     print( f"Generated {len(pre_conformers)} possibly distinct conformers ", file=sys.stderr )
@@ -107,7 +113,11 @@ def run( input_data: dict,
         force_norms.append( F_opt )
 
     on_progress( "Clustering", f"Clustering Stable Conformers", fraction=0.9 )
-    optimal_conformers, energies, force_norms, _, cluster_sizes = post_relaxation_rmsd_clustering( Z, optimal_conformers, energies, force_norms, cluster_sizes )
+    # Pass the molecule so clustering can merge conformers that are chemically identical
+    # but atom-index-shuffled by molecular symmetry. The heavy-atom automorphisms are
+    # listed inside, and only if some relaxed conformers actually share an energy.
+    optimal_conformers, energies, force_norms, _, cluster_sizes = post_relaxation_clustering(
+        Z, optimal_conformers, energies, force_norms, cluster_sizes, mol=mol_with_h )
     print( f'Found {len(optimal_conformers)} non-trivial conformers.', file=sys.stderr )
 
     output_data = { "Z" : Z,
