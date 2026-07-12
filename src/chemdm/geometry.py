@@ -34,7 +34,7 @@ def kabsch_align_numpy(P: np.ndarray,
     if Z is None:
         align_idx = np.arange(n_atoms)
     else:
-        Z = np.asarray(Z, dtype=np.long)
+        Z = np.asarray(Z, dtype=np.int64)
         if Z.shape != (n_atoms,):
             raise ValueError(f"Z must have shape ({n_atoms},), got {Z.shape}.")
         align_idx = np.where(Z != 1)[0]  # non-hydrogen atoms

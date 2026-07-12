@@ -188,7 +188,7 @@ def handle_job(job: dict[str, Any], state: WorkerState) -> None:
         elif experiment == "generate-conformers":
             result = run_generate_conformers( body, 
                                               on_progress=ProgressObject(), 
-                                              td_network=state.torsional_diffusion_model )
+                                              td_network=state.torsional_diffusion_model ) # type: ignore
         else:
             raise ValueError(f"Unknown experiment: {experiment!r}")
 

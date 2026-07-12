@@ -28,7 +28,7 @@ def run(input_data: dict,
     max_optimizer_steps = input_data.get( "max_iterations", 2500 )
 
     # Fetch the molecule.
-    Z = np.asarray( molecule["Z"], dtype=np.long )
+    Z = np.asarray( molecule["Z"], dtype=np.int64 )
     x0 = np.asarray( molecule["x"] )
     bonds = molecule["G"] # not directly used for the experiments, but passed back.
 

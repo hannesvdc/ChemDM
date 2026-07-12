@@ -40,7 +40,7 @@ def rdkit_mol_to_bond_list( mol: Chem.Mol ) -> np.ndarray:
 def load_torsional_diffusion_model( device : pt.device = pt.device('cpu') ) -> TorsionalScoreNetwork:
     """Instantiate the score network and load weights. Accepts both a bare
     state_dict (best.pt) and a training checkpoint dict carrying "model"."""
-    model_path = os.environ.get( "CHEMDM_TORSIONAL_DIFFUSION_MODEL", str(_REPO_ROOT / "models" / "torsional_diffusion.pr"), )
+    model_path = os.environ.get( "CHEMDM_TORSIONAL_DIFFUSION_MODEL", str(_REPO_ROOT / "models" / "torsional_diffusion.pt"), )
 
     model = TorsionalScoreNetwork().to( device=device, dtype=pt.float32 )
     state = pt.load( model_path, map_location=device, weights_only=True )
@@ -51,8 +51,9 @@ def load_torsional_diffusion_model( device : pt.device = pt.device('cpu') ) -> T
 def run( input_data: dict,
          on_progress : ProgressCallback,
          td_network : TorsionalScoreNetwork ) -> dict:
+    print( 'running confgen', file=sys.stderr )
     smiles = input_data["smiles"]
-    n_conformers = int( input_data.get("n_conformers", 100 ) )
+    n_conformers = int( input_data.get("n_conformers", 10 ) )
     theory = input_data.get( "theory", "xtb" )
     force_tol = float( input_data.get( "force_tolerance", 0.1) )
     max_optimizer_steps = int( input_data.get( "max_optimizer_steps", 250) )
@@ -77,6 +78,7 @@ def run( input_data: dict,
     # raw_conformers = [ np.asarray( mol_with_h.GetConformer(conf_id).GetPositions(), dtype=float, ) for conf_id in conf_ids ]
     
     # This output has shape (n_conformers, N, 3)
+    print( 'Sampling Conformers', file=sys.stderr )
     diffusion_conformers = sample_conformers_from_mol( td_network, mol_with_h, n_conformers )
     raw_conformers = [ conf for conf in diffusion_conformers ] # unpacks the first dimension
     
@@ -104,7 +106,6 @@ def run( input_data: dict,
         energies.append( E_opt )
         force_norms.append( F_opt )
 
-    print( 'Clustering', file=sys.stderr )
     on_progress( "Clustering", f"Clustering Stable Conformers", fraction=0.9 )
     optimal_conformers, energies, force_norms, _, cluster_sizes = post_relaxation_rmsd_clustering( Z, optimal_conformers, energies, force_norms, cluster_sizes )
     print( f'Found {len(optimal_conformers)} non-trivial conformers.', file=sys.stderr )

@@ -154,7 +154,7 @@ def run( input_data: dict,
                                                                                                                                                      
     reactant = input_data["reactant_molecule_json"]
     product = input_data["product_molecule_json"]                                                                                                      
-    Z = np.asarray( reactant["Z"], dtype=np.long )
+    Z = np.asarray( reactant["Z"], dtype=np.int64 )
     assert np.all( Z == np.asarray( product["Z"] ) ), f"Reactant and Product must have the same atoms and order in `Z`."
     xA = np.asarray( reactant["x"] )                                                                                                                     
     xB = np.asarray( product["x"] ) 
