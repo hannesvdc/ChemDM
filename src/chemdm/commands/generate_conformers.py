@@ -56,7 +56,8 @@ def run( input_data: dict,
     n_conformers = int( input_data.get("n_conformers", 10 ) )
     theory = input_data.get( "theory", "xtb" )
     force_tol = float( input_data.get( "force_tolerance", 0.1) )
-    max_optimizer_steps = int( input_data.get( "max_optimizer_steps", 250) )
+    max_optimizer_steps = int( input_data.get( "max_optimizer_steps", 1000) )
+    print( max_optimizer_steps, 'max', file=sys.stderr )
     rmsd_tol = float( input_data.get("rmsd_tol", 0.5) )
 
     mol = Chem.MolFromSmiles(smiles)
@@ -78,8 +79,7 @@ def run( input_data: dict,
     # raw_conformers = [ np.asarray( mol_with_h.GetConformer(conf_id).GetPositions(), dtype=float, ) for conf_id in conf_ids ]
     
     # Run the score-network sampling on the device from the DEVICE env var
-    # ("mps" / "cuda" / "cpu"; default cpu). sample_conformers_from_mol returns
-    # numpy (CPU), so clustering + xTB downstream always stay on CPU regardless.
+    # Return type are numpy arrays that default on CPU.
     sample_device = pt.device( os.environ.get( "DEVICE", "cpu" ) )
     td_network = td_network.to( sample_device )
 
@@ -97,27 +97,36 @@ def run( input_data: dict,
     optimal_conformers = []
     energies = []
     force_norms = []
+    kept_cluster_sizes = []
     current_fraction = on_progress.getTotalProgress()
     remaining_fraction = (0.9 - current_fraction)
     for conf_id in range( len(pre_conformers) ):
         print( f'\nStabilizing Conformer {conf_id}.', file=sys.stderr )
-        on_progress( "Stabilization", f"Stabilizing Conformation {conf_id+1}/{len(pre_conformers)}", 
+        on_progress( "Stabilization", f"Stabilizing Conformation {conf_id+1}/{len(pre_conformers)}",
                     fraction=current_fraction + (conf_id+1)/len(pre_conformers)*remaining_fraction )
         conf_opt, history = minimize_with_lbfgs( xtb, pre_conformers[conf_id], force_tol, max_optimizer_steps, verbose=True )
         E_opt = history[-1]["energy_kJ_mol"]
         F_opt = history[-1]["max_force_rms"]
         print( f'Conformer {conf_id} stabilized to E = {E_opt} and |F| = {F_opt}.', file=sys.stderr )
 
+        # Validity guard: keep only conformers that actually reached a minimum. If L-BFGS
+        # ran out of steps the reported geometry/energy is not a stationary point, so it
+        # would pollute the ensemble -- drop it (and its pre-cluster weight).
+        if F_opt > force_tol:
+            print( f'Conformer {conf_id} did not converge (|F| = {F_opt:.3f} > {force_tol}); dropping.', file=sys.stderr )
+            continue
+
         optimal_conformers.append( conf_opt )
         energies.append( E_opt )
         force_norms.append( F_opt )
+        kept_cluster_sizes.append( cluster_sizes[conf_id] )
 
     on_progress( "Clustering", f"Clustering Stable Conformers", fraction=0.9 )
     # Pass the molecule so clustering can merge conformers that are chemically identical
     # but atom-index-shuffled by molecular symmetry. The heavy-atom automorphisms are
     # listed inside, and only if some relaxed conformers actually share an energy.
     optimal_conformers, energies, force_norms, _, cluster_sizes = post_relaxation_clustering(
-        Z, optimal_conformers, energies, force_norms, cluster_sizes, mol=mol_with_h )
+        Z, optimal_conformers, energies, force_norms, kept_cluster_sizes, mol=mol_with_h )
     print( f'Found {len(optimal_conformers)} non-trivial conformers.', file=sys.stderr )
 
     output_data = { "Z" : Z,

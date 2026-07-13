@@ -43,24 +43,31 @@ def rmsd_clustering( Z : np.ndarray,
 
 def _symmetry_corrected_heavy_rmsd( a_heavy: np.ndarray,
                                     b_heavy: np.ndarray,
-                                    permutations: list[np.ndarray] ) -> float:
+                                    permutations: list[np.ndarray],
+                                    allow_reflection: bool = False ) -> float:
     """Minimum heavy-atom RMSD between two conformers over the molecule's graph
     automorphisms (each `permutations[i]` a permutation of the heavy atoms, identity
     included). `a_heavy`, `b_heavy` are the heavy-atom coordinates, shape (H, 3).
 
-    Alignment uses `kabsch_align_numpy`, a PROPER rotation (no reflection), so a
-    permutation that would only superimpose the two under a mirror leaves the RMSD
-    high -- enantiomers / diastereomers are therefore never merged (chirality kept).
+    Alignment uses `kabsch_align_numpy`, a PROPER rotation. With `allow_reflection`
+    False, a permutation that would only superimpose the two under a mirror leaves the
+    RMSD high -- enantiomers / diastereomers are never merged (chirality kept). Set
+    `allow_reflection` True ONLY for an achiral molecule: reflecting one axis and then
+    letting the proper Kabsch rotate composes to the best improper fit, so genuine
+    conformational enantiomers (mirror-image, energy-degenerate) are recognised as one.
     """
+    signs = (1.0, -1.0) if allow_reflection else (1.0,)
     best = np.inf
-    for perm in permutations:
-        b_perm = b_heavy[perm]
-        a_aligned = kabsch_align_numpy( a_heavy, b_perm )        # Z=None -> fit on all (heavy) atoms
-        r = float( np.sqrt( np.mean( np.sum( (a_aligned - b_perm) ** 2, axis=1 ) ) ) )
-        if r < best:
-            best = r
-            if best < 1e-3:
-                break                                            # exact symmetry match; can't beat it
+    for s in signs:
+        a_s = a_heavy.copy(); a_s[:, 0] *= s                     # reflect one axis; proper Kabsch supplies the rotation
+        for perm in permutations:
+            b_perm = b_heavy[perm]
+            a_aligned = kabsch_align_numpy( a_s, b_perm )        # Z=None -> fit on all (heavy) atoms
+            r = float( np.sqrt( np.mean( np.sum( (a_aligned - b_perm) ** 2, axis=1 ) ) ) )
+            if r < best:
+                best = r
+                if best < 1e-3:
+                    return best                                  # exact symmetry match; can't beat it
     return best
 
 
@@ -150,6 +157,7 @@ def post_relaxation_clustering( Z: np.ndarray,
     representative_indices: list[int] = []
     final_cluster_sizes: list[int] = []
     permutations: list[np.ndarray] | None = None   # heavy-atom automorphisms, listed lazily (see below)
+    reflectable = False                            # is the molecule achiral? set lazily with permutations
 
     for idx_in_original in order:
         x_conf = conformers[idx_in_original]
@@ -174,7 +182,8 @@ def post_relaxation_clustering( Z: np.ndarray,
             if mol is not None and abs(E - optimal_energies[k]) <= energy_tol:
                 if permutations is None:
                     permutations = _heavy_automorphisms( mol )
-                if _symmetry_corrected_heavy_rmsd( x_conf[heavy, :], reference_conformer[heavy, :], permutations ) <= symmetry_rmsd_tol:
+                    reflectable  = len( Chem.FindPotentialStereo(mol) ) == 0   # no stereo elements => achiral
+                if _symmetry_corrected_heavy_rmsd( x_conf[heavy, :], reference_conformer[heavy, :], permutations, allow_reflection=reflectable ) <= symmetry_rmsd_tol:
                     assigned = True
                     final_cluster_sizes[k] += cluster_sizes[idx_in_original]
                     break
