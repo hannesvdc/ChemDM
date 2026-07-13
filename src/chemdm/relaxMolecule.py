@@ -194,6 +194,7 @@ def minimize_with_lbfgs( potential : EnergyForceEvaluator,
     optimizer = pt.optim.LBFGS( [R],
                                 lr=1.0,
                                 max_iter=1,            # one L-BFGS iteration per outer step, so we can log and test convergence between steps
+                                max_eval=30,           # Make sure line search does not default to one step.
                                 history_size=history_size,
                                 line_search_fn="strong_wolfe", )
 
