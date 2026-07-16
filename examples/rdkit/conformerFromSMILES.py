@@ -7,7 +7,7 @@ from rdkit.Chem import AllChem, rdchem
 from rdkit.Geometry import Point3D
 import matplotlib.pyplot as plt
 
-from chemdm.xtbSetup import create_xtb_context
+from chemdm.openmmSetup import create_xtb_context
 from chemdm.geometry import kabsch_align_numpy
 from stabilizeConformer import stabilizeConformer
 

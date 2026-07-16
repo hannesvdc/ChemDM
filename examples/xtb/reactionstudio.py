@@ -2,7 +2,7 @@ import numpy as np
 import torch as pt
 import openmm as mm
 
-from chemdm.xtbSetup import create_xtb_context
+from chemdm.openmmSetup import create_xtb_context
 from chemdm.nebXtb import run_neb_xtb, normalized_arclengths
 
 from examples.transition1x_newton.NewtonE3NN import NewtonE3NN

@@ -3,7 +3,7 @@ from ase import Atoms
 from xtb.ase.calculator import XTB
 from rdkit import Chem
 
-from chemdm.xtbSetup import create_xtb_context
+from chemdm.openmmSetup import create_xtb_context
 import openmm.unit as unit
 
 EV_TO_KJ_PER_MOLE = 96.48533212331002
