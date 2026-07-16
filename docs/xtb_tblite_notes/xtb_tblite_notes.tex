@@ -219,10 +219,21 @@ backend. \code{XTBPotential} uses \xtbpy{}, which is \textbf{deprecated} (confir
 by the grimme-lab maintainer) --- and has a real gradient bug.
 
 \paragraph{What it is.} At the C\textsubscript{s}-symmetric equilibrium of
-methanol, \xtbpy{}'s \emph{analytic force disagrees with the finite-difference
+methanol (the ASE G2 geometry: four atoms in a mirror plane, two mirror-image
+methyl H), \xtbpy{}'s \emph{analytic force disagrees with the finite-difference
 gradient of its own energy} --- a self-contradiction needing no external
 reference. The neutral arbiter is $-\mathrm{FD}(\text{own energy})$; dxtb
 (autograd) and tblite both match their own FD to the FD floor, \xtbpy{} does not.
+
+\paragraph{It is geometry-specific.} The defect fires at \emph{symmetric}
+geometries, not at generic ones. This is important for reading the next section:
+the correspondence suite (\S\ref{sec:corr}) contains a molecule also called
+``methanol'', but at an \emph{asymmetric} RDKit/ETKDG conformer, where \xtbpy{}
+is perfectly self-consistent and agrees with tblite to $\num{4.3e-5}$~eV/\AA. So
+the same molecule looks fine there and broken here --- because it is two different
+geometries, and only the symmetric one triggers the bug. This is exactly why a
+correspondence sweep over ordinary conformers never surfaces the defect, and
+likely why it went unreported for so long.
 
 \paragraph{GFN1.} \xtbpy{} self-consistency error $=\num{2.2517e-1}$~eV/\AA{}
 (worst atom C, only the $x$-component wrong); tblite $=\num{7.4073e-5}$. The error
@@ -253,6 +264,7 @@ maintainer confirmed it is an \xtbpy{} bug (not dxtb), not previously known;
 tblite is self-consistent for both methods, i.e. migrating fixes it.
 
 \section{tblite: correspondence verified}
+\label{sec:corr}
 
 \textbf{tblite} (grimme-lab) is the maintained xTB library the maintainer
 recommends over \xtbpy{}. \code{TBLitePotential} (\code{examples/xtb\_gpu/tblite\_potential.py})
@@ -298,6 +310,13 @@ C60-alkane   & 182 & 4.18e-6   & 1.17e-5 & 3.05e-6 & & 0.9999999
 \num{4.3e-7}~Ha, $F_{\max}$ mean \num{3.8e-5} (max \num{1.0e-4}), worst
 $\cos=0.999999996$. GFN2 aggregate: $|\Delta E|$ mean \num{7.4e-6}~Ha, $F_{\max}$
 mean \num{2.0e-4} (max \num{7.7e-4}), worst $\cos=0.999999813$.}
+
+\medskip\noindent The suite geometries are generic RDKit/ETKDG conformers ---
+\emph{asymmetric} --- so \xtbpy{}'s symmetric-geometry gradient bug
+(\S\ref{sec:bug}) does not fire here; that is why its methanol row shows tiny
+errors ($F_{\max}=\num{4.3e-5}$ eV/\AA{} GFN1) even though the \emph{same molecule}
+at its symmetric equilibrium is $0.23$ off in \S\ref{sec:bug}. Same molecule,
+different geometry.
 
 \medskip\noindent Both methods correspond to within SCF/backend noise. GFN2's
 forces diverge a little more (multipole $+$ self-consistent D4 gradients) and the
