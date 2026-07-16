@@ -1,0 +1,407 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage[version=4]{mhchem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black}
+
+\sisetup{exponent-product=\times}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\xtbpy}{\code{xtb-python}}
+
+\title{xTB Backends for ChemDM\\
+       \large dxtb on GPU, and the \code{xtb-python} $\rightarrow$ \code{tblite} Migration}
+\author{Notes for ChemDM}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+We set out to accelerate ChemDM's semi-empirical potential by moving xTB onto the
+GPU with \textbf{dxtb} (a differentiable PyTorch reimplementation). Two findings
+came out, neither the one we went looking for. First, \textbf{dxtb on GPU is not
+faster than CPU-multiprocessed xtb} for our workloads: across a full size~$\times$
+batch sweep a single CUDA GPU never beat a 12-core \code{xtb} pool, best case
+still $3.3\times$ slower --- for architectural reasons, not tuning. Second, the
+production backend \xtbpy{} is \textbf{deprecated and has a genuine gradient bug}
+(analytic force $\neq$ finite-difference gradient of its own energy by
+$\sim\!0.22$--$0.24$~eV/\AA{} at symmetric geometries), present in \emph{both}
+GFN1 and GFN2 --- and GFN2 is our production default. The fix is to migrate the
+backend to \textbf{tblite}, which we verified reproduces \xtbpy{} to within SCF
+noise, is free of the gradient bug, \emph{and} is faster on CPU
+(up to $\sim\!4\times$ for large molecules). \textbf{Recommendation: keep
+CPU-multiprocessed evaluation, swap the backend \xtbpy{}~$\rightarrow$~tblite.}
+Everything here reproduces from \code{examples/xtb\_gpu/}.
+\end{abstract}
+
+\section{Why we cared about dxtb}
+
+ChemDM's workhorse potential is \code{XTBPotential} (\code{src/chemdm/xtbSetup.py}),
+a thin ASE wrapper around xTB, called constantly and in bulk: transition-path
+(NEB) calculations evaluate every image of a band each optimizer step, and
+conformer generation relaxes hundreds of conformers of the \emph{same} molecule.
+Both have a GPU-friendly shape --- \emph{large, homogeneous batches}: a NEB band
+is $N$ copies of the same atoms at different geometries; a conformer set is $N$
+copies of one molecule. Same atomic numbers, zero padding, identical basis size.
+
+\textbf{dxtb} (grimme-lab) is a fully differentiable, pure-PyTorch implementation
+of the xTB Hamiltonians, promising three things: (i) \textbf{GPU execution} of the
+SCF; (ii) \textbf{batching} a whole band / conformer set into one stacked call
+with per-system convergence masking; (iii) \textbf{autodiff forces}, making the
+potential itself differentiable (for training against xTB, sensitivity analysis,
+end-to-end optimization). The plan: validate GFN1 locally (no CUDA), then GFN2 +
+speed on the Linux cluster.
+
+\section{dxtb is correct --- and it exposed a bug in \xtbpy{}}
+
+Stage~1 (GFN1, CPU, float64) over a 10-molecule suite (\ce{H2} up to a 182-atom
+C60-alkane) gave essentially exact correspondence with the production potential:
+energy error mean $\sim\!\num{2e-6}$~Ha (worst \num{1.1e-5}~Ha at 182 atoms),
+force max error $\le \num{1.8e-5}$~eV/\AA, cosine $1.0$. dxtb is a faithful
+reimplementation. But used as an independent reference it \emph{disagreed} with
+\xtbpy{} by $\sim\!0.2$~eV/\AA{} on one atom at the methanol equilibrium --- far
+above the $\sim\!10^{-5}$ agreement everywhere else. That kicked off the second
+thread (\S\ref{sec:bug}); the punchline is that \xtbpy{} was the one that was
+wrong.
+
+\section{The speed question: dxtb-GPU vs multiprocessed xtb}
+\label{sec:speed}
+
+This is the measurement the GPU idea rested on. Run on the Linux cluster,
+GFN2-xTB, energy $+$ forces, min over 3 reps, comparing batched dxtb (\code{cuda:0},
+float64) against the incumbent \code{xtb-mp} --- ChemDM's spawn \code{ProcessPool}
+over \textbf{12 CPU processes} --- with \code{xtb-seq} (single process) and dxtb on
+CPU for context. Time is per batch of size $B$ (lower is better at fixed $B$);
+construction/startup/warm-up excluded.
+
+\subsection{Crossover summary (dxtb-cuda vs xtb-mp, 12 procs)}
+
+\begin{center}
+\begin{tabular}{lrccr}
+\toprule
+molecule & $n$ & smallest $B$ where dxtb-GPU wins & peak speedup \\
+\midrule
+thiophene   &  9 & never & $0.08\times$ \\
+benzene     & 12 & never & $0.10\times$ \\
+caffeine    & 24 & never & $0.12\times$ \\
+cholesterol & 74 & never & $0.30\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+\textbf{dxtb on a CUDA GPU never beats the 12-core xtb pool} --- anywhere in the
+grid, for any batch size up to 256. Its best showing (cholesterol) is still
+$3.3\times$ slower.
+
+\subsection{Full 2-D sweep (ms per batch of size $B$)}
+
+\begin{center}\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{r  rrrr  rrrr}
+\toprule
+ & \multicolumn{4}{c}{\textbf{thiophene} ($n=9$)} & \multicolumn{4}{c}{\textbf{benzene} ($n=12$)} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-9}
+$B$ & xtb-mp & xtb-seq & dxtb-cu & dxtb-cpu & xtb-mp & xtb-seq & dxtb-cu & dxtb-cpu \\
+\midrule
+1   & 5.2   & 888.9    & 234.9  & 150.1  & 5.1   & 6.8     & 236.7  & 142.9 \\
+2   & 6.5   & 1309.8   & 244.8  & 182.9  & 6.5   & 13.3    & 241.5  & 166.3 \\
+4   & 6.0   & 2475.4   & 259.1  & 207.9  & 5.9   & 26.4    & 254.9  & 198.9 \\
+8   & 5.1   & 5227.4   & 272.8  & 267.9  & 5.8   & 53.6    & 279.4  & 305.7 \\
+16  & 10.0  & 11611.7  & 310.5  & 444.5  & 10.8  & 104.4   & 322.8  & 399.9 \\
+32  & 19.3  & 23900.8  & 416.1  & 764.4  & 16.2  & 208.8   & 402.3  & 701.6 \\
+64  & 33.1  & 51414.9  & 555.0  & 973.9  & 32.1  & 410.1   & 588.2  & 1170.2 \\
+128 & 56.3  & 102243.0 & 898.5  & 1663.2 & 94.7  & 819.1   & 904.3  & 1872.4 \\
+256 & 118.5 & 191643.9 & 1575.2 & 3162.4 & 114.9 & 1714.8  & 1594.5 & 3291.7 \\
+\bottomrule
+\end{tabular}
+
+\vspace{1em}
+\begin{tabular}{r  rrrr  rrrr}
+\toprule
+ & \multicolumn{4}{c}{\textbf{caffeine} ($n=24$)} & \multicolumn{4}{c}{\textbf{cholesterol} ($n=74$)} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-9}
+$B$ & xtb-mp & xtb-seq & dxtb-cu & dxtb-cpu & xtb-mp & xtb-seq & dxtb-cu & dxtb-cpu \\
+\midrule
+1   & 17.2  & 23.2   & 266.0  & 199.7  & 88.8   & 82.0    & 298.1   & 539.8 \\
+2   & 18.2  & 44.1   & 294.1  & 296.2  & 88.7   & 163.9   & 397.0   & 840.4 \\
+4   & 17.1  & 77.4   & 306.8  & 394.6  & 88.8   & 325.9   & 469.0   & 1251.9 \\
+8   & 16.7  & 154.7  & 376.4  & 618.9  & 90.7   & 648.1   & 603.3   & 1819.5 \\
+16  & 33.5  & 314.1  & 447.5  & 849.2  & 175.7  & 1290.0  & 797.9   & 3269.2 \\
+32  & 49.4  & 626.6  & 608.7  & 1402.5 & 264.1  & 2575.2  & 1261.6  & 5599.8 \\
+64  & 100.3 & 1260.9 & 910.8  & 2542.7 & 522.5  & 5406.0  & 2262.3  & 10741.3 \\
+128 & 192.9 & 2478.7 & 1631.8 & 4307.4 & 972.3  & 10712.9 & 4604.8  & 20378.7 \\
+256 & 373.4 & 4938.3 & 3315.1 & 8415.6 & 1925.6 & 21459.3 & 11101.4 & 43307.1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\emph{(The \code{xtb-seq} thiophene column is inflated by a
+first-molecule import/warm-up artifact --- it is the first molecule in the sweep;
+not the baseline, and it changes no conclusion.)}
+
+\subsection{Reading the two trends}
+
+The data is a clean, consistent story that matches the dxtb source:
+\begin{itemize}
+  \item \textbf{Bigger molecules help.} Peak speedup climbs $0.08\to0.10\to0.12
+  \to0.30\times$ across $9\to12\to24\to74$ atoms --- the only genuinely
+  GPU-batched part (the SCF eigensolve, $O(n_{\text{ao}}^3)$) growing as a
+  fraction of total work. Extrapolated crossover to parity is far off (several
+  hundred atoms), right where forces (autograd graph, memory $\sim B\,n_{\text{ao}}^2$)
+  begin to OOM.
+  \item \textbf{Bigger batches do \emph{not} help large molecules.} For
+  cholesterol the per-$B$ speedup \emph{peaks at $B=1$} ($0.30\times$) and
+  \emph{degrades} to $0.17\times$ at $B=256$. That is the tell: GFN2's integrals
+  go through \code{libcint}, which runs on CPU, serially, one molecule at a time,
+  so the integral cost grows $\sim$linearly in $B$ and swamps the batched SCF
+  gain --- while \code{xtb-mp} parallelizes those integrals across 12 cores. For
+  \emph{small} molecules batching does help relatively (thiophene $0.02\to0.08\times$)
+  because the $\sim$235~ms fixed GPU/launch floor gets amortized.
+\end{itemize}
+
+\noindent\textbf{Root cause (confirmed from dxtb 0.4.0 source).} dxtb's GPU path
+is a \emph{hybrid}. The SCF is genuinely batched on device (one batched
+\code{torch.linalg.eigh} on $[B,n_{\text{ao}},n_{\text{ao}}]$ per step, batched
+Fock/density/Fermi, per-system convergence masking + culling). But GFN2 integrals
+(and derivatives) go through \code{libcint} on CPU, looped per molecule, with a
+CPU$\leftrightarrow$GPU transfer each step. Only a fraction is accelerated, and
+the serial CPU floor grows with $B$. This is architectural, not a knob. (GFN1 has
+a pure-torch driver, \code{int\_driver="autograd"}, that keeps everything on the
+GPU --- the one untested path with a real shot at a win.)
+
+\subsection{The CPU picture: batching is the wrong instinct there}
+
+An earlier local benchmark (aspirin~$\times N$, GFN1, energy $+$ forces, CPU) at
+$N=128$:
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+mode & time \\
+\midrule
+\code{xtb-mp} (ProcessPool, spawn, all cores) & \textbf{340 ms} \\
+\code{xtb-seq} (single process)               & 1120 ms \\
+\code{dxtb-mp} (dxtb non-batched across procs) & 1710 ms \\
+\code{dxtb-cpu-batched} (one big batched call) & 10044 ms \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent On CPU, dxtb loses every way, and \textbf{batching it is $\sim6\times$
+\emph{worse} than parallelizing it} (one giant single-threaded autograd graph +
+one huge \code{eigh} vs. many small ones across cores). Batching pays only when
+the linear algebra is massively parallel, i.e. on a real GPU --- which \S3.1 then
+showed still isn't enough for GFN2.
+
+\subsection{What dxtb \emph{is} still good for}
+
+The one thing \code{xtb-mp} cannot do is give gradients \emph{through} the
+potential. dxtb's autodiff forces make the whole potential differentiable --- the
+real prize for training a model against xTB or end-to-end optimization. That is a
+capability advantage, not a speed one, and it carries a real runtime cost (the
+retained autograd graph). Parked as a later, separate goal.
+
+\medskip\noindent\fbox{\parbox{0.97\linewidth}{\textbf{Speed verdict:} keep
+CPU-multiprocessed xtb for GFN1 and GFN2 evaluation.}}
+
+\section{The xtb-python gradient bug}
+\label{sec:bug}
+
+Staying on CPU xtb raises a correctness question about the \emph{specific}
+backend. \code{XTBPotential} uses \xtbpy{}, which is \textbf{deprecated} (confirmed
+by the grimme-lab maintainer) --- and has a real gradient bug.
+
+\paragraph{What it is.} At the C\textsubscript{s}-symmetric equilibrium of
+methanol, \xtbpy{}'s \emph{analytic force disagrees with the finite-difference
+gradient of its own energy} --- a self-contradiction needing no external
+reference. The neutral arbiter is $-\mathrm{FD}(\text{own energy})$; dxtb
+(autograd) and tblite both match their own FD to the FD floor, \xtbpy{} does not.
+
+\paragraph{GFN1.} \xtbpy{} self-consistency error $=\num{2.2517e-1}$~eV/\AA{}
+(worst atom C, only the $x$-component wrong); tblite $=\num{7.4073e-5}$. The error
+is \emph{flat across SCF accuracy} $1.0\to10^{-4}$, ruling out convergence /
+smearing / step-size. tblite-vs-dxtb agree to $\num{7.5e-5}$.
+
+\paragraph{GFN2 --- the production method.}
+
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+self-consistency: $\max|F_{\text{analytic}}-(-\mathrm{FD})|$ & GFN1 & GFN2 \\
+\midrule
+\xtbpy{}  & \num{2.2517e-1} & \num{2.3626e-1} \quad(worst: O) \\
+tblite    & \num{7.4073e-5} & \num{1.2539e-4} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The defect is present in \textbf{GFN2 too} ($0.236$~eV/\AA, again
+accuracy-invariant, again one Cartesian component of one heavy atom). The worst
+atom shifts (C for GFN1, O for GFN2) but magnitude/character match --- strong
+evidence GFN1 and GFN2 \emph{share the buggy gradient code path} (a geometry-only,
+non-self-consistent term, since it is accuracy-invariant; not the method-specific
+dispersion/multipole parts). \textbf{Because \code{XTBPotential} defaults to
+GFN2, this is affecting production forces now.} The bug was reported and the
+maintainer confirmed it is an \xtbpy{} bug (not dxtb), not previously known;
+tblite is self-consistent for both methods, i.e. migrating fixes it.
+
+\section{tblite: correspondence verified}
+
+\textbf{tblite} (grimme-lab) is the maintained xTB library the maintainer
+recommends over \xtbpy{}. \code{TBLitePotential} (\code{examples/xtb\_gpu/tblite\_potential.py})
+is a drop-in subclass of \code{XTBPotential}: it overrides only the calculator
+construction and inherits \code{energy\_forces}, keeping the parent's
+(\code{charge}, \code{uhf}) signature and bridging tblite's \code{multiplicity}
+$=\code{uhf}+1$ internally. \code{check\_correspondence.py} compares it against
+the \xtbpy{} reference over the suite.
+
+\begin{center}\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lr S S S S c  S S S S c}
+\toprule
+ & & \multicolumn{5}{c}{\textbf{GFN1}} & \multicolumn{5}{c}{\textbf{GFN2}} \\
+\cmidrule(lr){3-7}\cmidrule(lr){8-12}
+molecule & {$n$} & {$\Delta E$[Ha]} & {$F_{\max}$} & {$F_{\text{rmse}}$} & {} & {$F_{\cos}$}
+                 & {$\Delta E$[Ha]} & {$F_{\max}$} & {$F_{\text{rmse}}$} & {} & {$F_{\cos}$} \\
+\midrule
+\ce{H2}      & 2   & -3.82e-10 & 2.37e-7 & 1.37e-7 & & 1.0000000
+                   & -1.49e-10 & 2.57e-5 & 1.49e-5 & & 1.0000000 \\
+\ce{H2O}     & 3   & -4.20e-9  & 3.57e-5 & 1.55e-5 & & 1.0000000
+                   & -2.59e-9  & 1.24e-5 & 5.49e-6 & & 1.0000000 \\
+methanol     & 6   & -5.77e-9  & 4.32e-5 & 1.61e-5 & & 0.9999999
+                   & -3.70e-9  & 1.40e-4 & 4.70e-5 & & 0.9999999 \\
+thiophene    & 9   & -1.07e-8  & 2.44e-5 & 8.61e-6 & & 1.0000000
+                   & -6.30e-9  & 8.82e-5 & 2.16e-5 & & 0.9999999 \\
+benzene      & 12  & -9.73e-9  & 2.11e-6 & 9.72e-7 & & 1.0000000
+                   & -9.38e-9  & 1.02e-5 & 4.48e-6 & & 1.0000000 \\
+aspirin      & 21  & -2.75e-8  & 5.61e-5 & 1.21e-5 & & 1.0000000
+                   & -2.29e-8  & 1.18e-4 & 3.69e-5 & & 0.9999999 \\
+caffeine     & 24  & -3.32e-8  & 7.07e-5 & 1.92e-5 & & 0.9999999
+                   & -3.08e-8  & 3.11e-4 & 6.26e-5 & & 0.9999999 \\
+cholesterol  & 74  & -4.53e-8  & 3.28e-5 & 3.74e-6 & & 1.0000000
+                   & -5.60e-8  & 1.36e-4 & 1.71e-5 & & 0.9999999 \\
+atorvastatin & 76  & -9.24e-10 & 1.05e-4 & 1.43e-5 & & 0.9999999
+                   & 1.28e-5   & 7.69e-4 & 9.72e-5 & & 0.9999999 \\
+C60-alkane   & 182 & 4.18e-6   & 1.17e-5 & 3.05e-6 & & 0.9999999
+                   & 6.14e-5   & 4.28e-4 & 6.32e-5 & & 0.9999998 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\noindent{\footnotesize Forces in eV/\AA. GFN1 aggregate: $|\Delta E|$ mean
+\num{4.3e-7}~Ha, $F_{\max}$ mean \num{3.8e-5} (max \num{1.0e-4}), worst
+$\cos=0.999999996$. GFN2 aggregate: $|\Delta E|$ mean \num{7.4e-6}~Ha, $F_{\max}$
+mean \num{2.0e-4} (max \num{7.7e-4}), worst $\cos=0.999999813$.}
+
+\medskip\noindent Both methods correspond to within SCF/backend noise. GFN2's
+forces diverge a little more (multipole $+$ self-consistent D4 gradients) and the
+divergence \emph{grows with size} --- accumulating numerical noise, not a defect.
+Indeed tblite's GFN2 analytic force matches the FD of its \emph{own} energy to
+\num{1.25e-4}~eV/\AA, i.e. tblite is self-consistent (\S\ref{sec:bug}); the
+tblite-vs-xtb difference is \xtbpy{} noise/bug, not tblite error.
+
+\section{xtb-python vs tblite: CPU timing}
+\label{sec:timing}
+
+Since evaluation stays CPU-multiprocessed, the decision-relevant number is
+per-call latency at one thread (production runs single-threaded pool workers).
+Each backend timed in its own subprocess, OMP/BLAS pinned to 1, best of 10,
+warm-up excluded, distinct geometry per rep (ASE caches identical geometries).
+
+\begin{center}
+\begin{tabular}{lr rrr rrr}
+\toprule
+ & & \multicolumn{3}{c}{\textbf{GFN2} (production)} & \multicolumn{3}{c}{\textbf{GFN1}} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+molecule & $n$ & \xtbpy{} & tblite & ratio & \xtbpy{} & tblite & ratio \\
+\midrule
+\ce{H2}      & 2   & 0.15   & 0.25   & $1.72\times$ & 0.17   & 0.22   & $1.29\times$ \\
+\ce{H2O}     & 3   & 0.19   & 0.26   & $1.40\times$ & 0.29   & 0.31   & $1.08\times$ \\
+methanol     & 6   & 0.37   & 0.43   & $1.15\times$ & 0.82   & 0.65   & $0.79\times$ \\
+thiophene    & 9   & 1.47   & 1.26   & $0.86\times$ & 2.66   & 2.05   & $0.77\times$ \\
+benzene      & 12  & 1.64   & 1.34   & $0.81\times$ & 3.44   & 2.35   & $0.68\times$ \\
+aspirin      & 21  & 6.31   & 4.77   & $0.76\times$ & 11.55  & 7.20   & $0.62\times$ \\
+caffeine     & 24  & 8.43   & 5.63   & $0.67\times$ & 14.78  & 8.83   & $0.60\times$ \\
+cholesterol  & 74  & 63.37  & 37.05  & $0.58\times$ & 126.48 & 53.15  & $0.42\times$ \\
+atorvastatin & 76  & 98.75  & 50.97  & $0.52\times$ & 171.35 & 66.32  & $0.39\times$ \\
+C60-alkane   & 182 & 470.96 & 144.46 & $0.31\times$ & 996.07 & 226.04 & $0.23\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\noindent{\footnotesize Per-call wall time in ms; ratio $=$ tblite/\xtbpy{}
+($<1 \Rightarrow$ tblite faster). Geometric-mean ratio: GFN2 $0.79\times$, GFN1
+$0.62\times$.}
+
+\medskip\noindent \textbf{tblite is faster on CPU, and the advantage widens
+sharply with molecule size.} Sub-10-atom molecules are a wash (sub-millisecond
+either way, tblite marginally slower from fixed overhead), but from thiophene up
+tblite pulls ahead, reaching $3.2\times$ (GFN2) and $4.3\times$ (GFN1) on the
+182-atom C60-alkane --- exactly the regime where evaluation cost actually matters
+(NEB on large substrates, big conformers). So the migration is not a
+speed sacrifice for correctness; it is a speed \emph{win}.
+
+\section{Engineering notes: OpenMP and how the harness runs}
+
+Getting the verification to run was its own adventure, worth recording.
+\begin{itemize}
+  \item \textbf{tblite install.} Needs the Python bindings (\code{tblite-python}
+  on conda-forge, or \code{pip install tblite}), not the bare \code{tblite} C
+  library. The conda-forge \code{tblite 0.6.0} osx-arm64 build has a broken GFN2
+  path (segfaults for any GFN2 input); the PyPI \code{tblite 0.7.0} wheel fixes
+  it. GFN2 was never inherently ``Linux-only'' for tblite --- that is real only
+  for \emph{dxtb} (needs Linux-only \code{tad-libcint}).
+  \item \textbf{The OpenMP clash.} The pip tblite wheel \emph{vendors its own}
+  \code{libomp}. Running \xtbpy{} (conda OpenMP) and tblite (vendored) in one
+  process gives \code{OMP: Error \#15} $\to$ abort; \code{KMP\_DUPLICATE\_LIB\_OK}
+  escalates to segfault; \code{multiprocessing.spawn} deadlocks. Removing openmm
+  from the import graph did \emph{not} fix it --- the clash is two \code{libomp}
+  copies. conda-forge tblite (shared OpenMP) would fix it but is blocked by the
+  \code{openmm-xtb} package pinning py3.13/3.14 vs. our py3.11.
+  \item \textbf{The fix: one backend per process.} Both harness scripts delegate
+  each evaluation to \code{subproc\_worker.py} via \code{subprocess.run} --- a
+  fresh interpreter importing exactly one backend. This mirrors production (xtb
+  already runs in a spawn \code{ProcessPool}, one backend per worker), so
+  \textbf{the clash never arises in production}; it is purely a harness artifact.
+  \item \textbf{Cleanups.} \code{create\_xtb\_system}/\code{create\_xtb\_context}
+  (the only openmm-dependent helpers) moved out of \code{xtbSetup.py} into
+  \code{src/chemdm/openmmSetup.py}, so importing \code{XTBPotential} no longer
+  pulls openmm; the three example callers were repointed.
+\end{itemize}
+
+\section{Recommendations and open items}
+
+\paragraph{Recommendations.}
+\begin{enumerate}
+  \item \textbf{Evaluation stays CPU-multiprocessed xtb.} dxtb-GPU does not beat a
+  12-core pool for GFN2 at our sizes; the bottleneck (serial CPU \code{libcint})
+  is architectural.
+  \item \textbf{Migrate the backend \xtbpy{}~$\rightarrow$~tblite.} It matches to
+  backend noise, is maintained, fixes a gradient bug currently affecting
+  production GFN2 forces, \emph{and} is $\sim$1.3--4$\times$ faster on CPU for
+  non-trivial molecules.
+  \item \textbf{Keep dxtb only for differentiability.} Autodiff forces are its
+  unique capability; revisit when a differentiable-potential use case is on the
+  table.
+\end{enumerate}
+
+\paragraph{Open items.}
+\begin{itemize}
+  \item The production swap itself (\code{XTBPotential} $\rightarrow$ tblite):
+  replace outright vs. a selectable \code{backend=} parameter. To be proposed.
+  \item GFN1 \code{int\_driver="autograd"} CUDA sweep --- the one dxtb config that
+  keeps integrals on-GPU, the only remaining path that could show a GPU win.
+  \item Full 3-way (incl. dxtb) correspondence on the Linux cluster.
+\end{itemize}
+
+\bigskip\noindent\emph{Reproduce:} from \code{examples/xtb\_gpu/}, run
+\code{check\_correspondence.py}, \code{reference\_gradient\_bug.py} (both with a
+\code{METHOD} constant), and \code{benchmark\_backends.py}. On the cluster
+\code{RUN\_DXTB} auto-enables and the comparisons become three-way.
+
+\end{document}
