@@ -365,45 +365,136 @@ tblite pulls ahead, reaching $3.2\times$ (GFN2) and $4.3\times$ (GFN1) on the
 (NEB on large substrates, big conformers). So the migration is not a
 speed sacrifice for correctness; it is a speed \emph{win}.
 
-\section{Engineering notes: OpenMP and how the harness runs}
+\section{The OpenMP problem: why ChemDM needs a dedicated conda-forge env}
+\label{sec:openmp}
 
-Getting the verification to run was its own adventure, worth recording.
+Migrating the backend surfaced a runtime crash with nothing to do with chemistry
+and everything to do with packaging. It dictates how ChemDM must be installed, so
+it is documented here in full.
+
+\paragraph{The symptom.} A process that loads tblite \emph{and} another
+OpenMP-using library, then runs tblite, aborts with
+\begin{center}\small\ttfamily OMP: Error \#15: Initializing libomp.dylib, but found libomp.dylib already initialized.\end{center}
+
+\paragraph{What it means (first principles).} OpenMP ships as a runtime library
+(\code{libomp.dylib}) owning a \emph{global} thread pool and global state; its
+design assumes exactly one copy per process. When a second \code{libomp}
+initializes, it detects the first and aborts \emph{on purpose} --- two runtimes
+each spawning $N$ threads oversubscribe the CPU and can corrupt results. The abort
+is a safety feature, not a bug.
+
+\paragraph{Why it hits us --- channel mixing.} Python wheels vendor their own
+\code{libomp} (they cannot assume a system one): pip-\code{torch} ships
+\code{torch/lib/libomp.dylib}, pip-\code{tblite} ships
+\code{tblite/.dylibs/libomp.dylib}. Load both $\to$ two \code{libomp} $\to$ abort.
+We first hit this in the verification harness (xtb-python $+$ tblite), but the real
+showstopper is \textbf{torch $+$ tblite}: \code{relaxMolecule} (torch LBFGS) and
+\code{EquivariantTransformer} pull torch into every production command, so a naive
+in-process tblite call aborts at runtime.
+
+\paragraph{What does not work.} Empirically, none of the usual escape hatches fix
+it: either import order aborts; \code{KMP\_DUPLICATE\_LIB\_OK=TRUE}
+aborts/segfaults; symlinking the two \code{libomp} to one file fails (different
+install names, so dyld still loads two images); \code{DYLD\_INSERT\_LIBRARIES} $+$
+flat namespace aborts. Installing tblite from conda-forge instead of pip does
+\emph{not} help on its own either --- conda tblite also links LLVM \code{libomp}
+(via its BLAS), so it still collides with a pip-torch carrying its own.
+
+\paragraph{The resolution: one ecosystem, one OpenMP.} The canonical fix --- and
+what conda-forge is built to deliver --- is to install \emph{every} OpenMP-linked
+dependency from a single channel so they share one \code{llvm-openmp} (the
+\code{\_openmp\_mutex} mechanism). With torch, tblite, numpy, rdkit and openmm all
+from conda-forge there is exactly one \code{libomp}, and they coexist. Verified:
+\code{import torch} $+$ a tblite GFN2 single point in one process runs cleanly, and
+the full suite (\textbf{341 passed, 3 skipped}) --- including the real torch-LBFGS
+$+$ tblite relaxation --- passes in the conda-forge env. \textbf{This is why ChemDM
+ships an \code{environment.yml} and must be installed conda-forge-only}
+(\S\ref{sec:deploy}).
+
+\paragraph{One code change it forced.} \code{TBLitePotential} is now
+\emph{standalone} --- it no longer subclasses \code{XTBPotential}. The old class
+imported \code{chemdm.xtbSetup}, which imports \code{xtb.ase} (deprecated
+\code{xtb-python}) at load, so subclassing chained every production process to
+\code{xtb-python} (which additionally will not cleanly conda-solve). Standalone,
+\code{TBLitePotential} depends only on \code{tblite} $+$ \code{ase} and satisfies
+the \code{EnergyForceEvaluator} contract structurally (duck-typed).
+
+\paragraph{Related cleanups.} \code{create\_xtb\_system} /
+\code{create\_xtb\_context} (the only openmm-dependent helpers) moved from
+\code{xtbSetup.py} to \code{src/chemdm/openmmSetup.py}. The verification harness
+(\code{examples/xtb\_gpu/}) still runs each backend in its own
+\code{subprocess.run} worker so it can compare xtb-python against tblite in \emph{any}
+environment; that isolation is not needed by production in the conda-forge env.
+
+\section{Deployment}
+\label{sec:deploy}
+
+ChemDM installs from one conda-forge environment (\code{environment.yml} at the
+repo root). \textbf{Strict conda-forge is mandatory}: if any OpenMP-linked package
+(especially pytorch) comes from \code{defaults} or the \code{pytorch} channel it
+vendors a second \code{libomp} and the process aborts (\S\ref{sec:openmp}). The
+file pins \code{channels: [conda-forge, nodefaults]} to enforce this.
+
+\paragraph{New machine (macOS or Linux).}
+\begin{verbatim}
+conda env create -f environment.yml
+conda activate chemdm
+pip install -e . --no-deps
+\end{verbatim}
+\code{--no-deps} stops pip from pulling anything (all deps are satisfied by
+conda-forge) --- this is what prevents a stray pip-torch from re-introducing the
+clash. Validate with \code{pytest} (expect all pass) and a one-liner that imports
+torch and runs a tblite GFN2 single point in the same process.
+
+\paragraph{Linux production cluster.} Same three commands. Two notes:
 \begin{itemize}
-  \item \textbf{tblite install.} Needs the Python bindings (\code{tblite-python}
-  on conda-forge, or \code{pip install tblite}), not the bare \code{tblite} C
-  library. The conda-forge \code{tblite 0.6.0} osx-arm64 build has a broken GFN2
-  path (segfaults for any GFN2 input); the PyPI \code{tblite 0.7.0} wheel fixes
-  it. GFN2 was never inherently ``Linux-only'' for tblite --- that is real only
-  for \emph{dxtb} (needs Linux-only \code{tad-libcint}).
-  \item \textbf{The OpenMP clash.} The pip tblite wheel \emph{vendors its own}
-  \code{libomp}. Running \xtbpy{} (conda OpenMP) and tblite (vendored) in one
-  process gives \code{OMP: Error \#15} $\to$ abort; \code{KMP\_DUPLICATE\_LIB\_OK}
-  escalates to segfault; \code{multiprocessing.spawn} deadlocks. Removing openmm
-  from the import graph did \emph{not} fix it --- the clash is two \code{libomp}
-  copies. conda-forge tblite (shared OpenMP) would fix it but is blocked by the
-  \code{openmm-xtb} package pinning py3.13/3.14 vs. our py3.11.
-  \item \textbf{The fix: one backend per process.} Both harness scripts delegate
-  each evaluation to \code{subproc\_worker.py} via \code{subprocess.run} --- a
-  fresh interpreter importing exactly one backend. This mirrors production (xtb
-  already runs in a spawn \code{ProcessPool}, one backend per worker), so
-  \textbf{the clash never arises in production}; it is purely a harness artifact.
-  \item \textbf{Cleanups.} \code{create\_xtb\_system}/\code{create\_xtb\_context}
-  (the only openmm-dependent helpers) moved out of \code{xtbSetup.py} into
-  \code{src/chemdm/openmmSetup.py}, so importing \code{XTBPotential} no longer
-  pulls openmm; the three example callers were repointed.
+  \item \textbf{GPU torch}: for CUDA, pin a conda-forge cuda build ---
+  \code{pytorch=2.12.1=cuda*} in \code{environment.yml}. Do \emph{not} install
+  torch from the \code{pytorch} channel or via pip; that reintroduces a second
+  \code{libomp}.
+  \item \textbf{dxtb}: on Linux the comparison scripts can run the full three-way
+  (dxtb GFN2 works via Linux-only \code{tad-libcint}); \code{RUN\_DXTB} auto-enables.
+  dxtb is not a production dependency.
 \end{itemize}
+
+\paragraph{Two environments (production + verification).} \xtbpy{} \textbf{cannot}
+be conda-installed alongside \code{tblite 0.7.0}: \xtbpy{} (frozen at 22.1) needs
+the \code{xtb} program, which pins \code{tblite 0.6.x} / \code{dftd4 3.7.x} ---
+incompatible with the \code{tblite 0.7.0} / \code{dftd4 4.x} production requires
+(every Python build hits this; it is not a Python-version issue). So ChemDM uses
+two environments:
+\begin{itemize}
+  \item \textbf{Production} --- \code{environment.yml}, all conda-forge, tblite
+  only, no \xtbpy{}. Runs the commands and the test suite; single shared
+  \code{libomp}, so torch $+$ tblite coexist directly.
+  \item \textbf{Verification} --- a separate \emph{mixed} env with conda
+  \xtbpy{} $+$ \emph{pip} \code{tblite} (pip's tblite bypasses conda's solver, so
+  the two coexist on disk). Runs the comparison scripts in
+  \code{examples/xtb\_gpu/}. Here pip-tblite's vendored \code{libomp} clashes with
+  xtb-python's OpenMP in-process --- which is exactly why the harness evaluates
+  each backend in its own \code{subprocess.run} worker. On Linux add dxtb
+  (\code{pip install dxtb tad-libcint}) for the full three-way.
+\end{itemize}
+This split is by design, not a workaround to regret: the comparison scripts are
+one-off verification tools that need the deprecated reference, and production
+never loads two backends.
+
+\paragraph{Reproducibility.} \code{environment.yml} pins versions but not build
+strings, so it re-solves per platform (macOS dev, linux-64 prod) at the same
+versions. For byte-identical builds across machines, generate a \code{conda-lock}
+file from it.
 
 \section{Recommendations and open items}
 
 \paragraph{Recommendations.}
 \begin{enumerate}
-  \item \textbf{Evaluation stays CPU-multiprocessed xtb.} dxtb-GPU does not beat a
-  12-core pool for GFN2 at our sizes; the bottleneck (serial CPU \code{libcint})
-  is architectural.
-  \item \textbf{Migrate the backend \xtbpy{}~$\rightarrow$~tblite.} It matches to
-  backend noise, is maintained, fixes a gradient bug currently affecting
-  production GFN2 forces, \emph{and} is $\sim$1.3--4$\times$ faster on CPU for
-  non-trivial molecules.
+  \item \textbf{Evaluation runs on CPU with tblite.} dxtb-GPU does not beat a
+  12-core pool for GFN2 at our sizes (the bottleneck, serial CPU \code{libcint},
+  is architectural), and tblite is correct, maintained, and $\sim$1.3--4$\times$
+  faster than xtb-python on CPU for non-trivial molecules.
+  \item \textbf{Install from the conda-forge \code{environment.yml}}
+  (\S\ref{sec:deploy}). The single shared \code{libomp} is what lets torch and
+  tblite run in one process; it is a hard requirement, not a preference.
   \item \textbf{Keep dxtb only for differentiability.} Autodiff forces are its
   unique capability; revisit when a differentiable-potential use case is on the
   table.
@@ -411,16 +502,18 @@ Getting the verification to run was its own adventure, worth recording.
 
 \paragraph{Open items.}
 \begin{itemize}
-  \item The production swap itself (\code{XTBPotential} $\rightarrow$ tblite):
-  replace outright vs. a selectable \code{backend=} parameter. To be proposed.
+  \item Create and validate the env on the actual Linux cluster
+  (\code{conda env create -f environment.yml}); decide GPU-vs-CPU torch there;
+  then retire the old mixed environment.
   \item GFN1 \code{int\_driver="autograd"} CUDA sweep --- the one dxtb config that
   keeps integrals on-GPU, the only remaining path that could show a GPU win.
   \item Full 3-way (incl. dxtb) correspondence on the Linux cluster.
 \end{itemize}
 
-\bigskip\noindent\emph{Reproduce:} from \code{examples/xtb\_gpu/}, run
-\code{check\_correspondence.py}, \code{reference\_gradient\_bug.py} (both with a
-\code{METHOD} constant), and \code{benchmark\_backends.py}. On the cluster
-\code{RUN\_DXTB} auto-enables and the comparisons become three-way.
+\bigskip\noindent\emph{Reproduce:} create the env as in \S\ref{sec:deploy}. From
+\code{examples/xtb\_gpu/}, run \code{check\_correspondence.py},
+\code{reference\_gradient\_bug.py} (both with a \code{METHOD} constant), and
+\code{benchmark\_backends.py}. On the cluster \code{RUN\_DXTB} auto-enables and the
+comparisons become three-way.
 
 \end{document}
