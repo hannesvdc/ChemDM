@@ -1,0 +1,43 @@
+# ChemDM conda environment.
+#
+# Single-ecosystem design: EVERY OpenMP-linked dependency (pytorch, tblite, numpy,
+# rdkit, openmm, ...) comes from conda-forge, so they all share ONE llvm-openmp.
+# That is what lets torch and tblite run in the same process. If any of these is
+# pulled from `defaults` or the `pytorch` channel instead, it vendors a second
+# libomp and the process aborts at runtime with "OMP: Error #15". The
+# `nodefaults` channel + strict priority below enforce conda-forge-only.
+#
+# Create (macOS dev or linux-64 production):
+#   conda env create -f environment.yml
+#   conda activate chemdm
+#   pip install -e . --no-deps          # the chemdm package itself
+#
+# Linux GPU note: for CUDA torch, pin a conda-forge cuda build, e.g.
+#   - pytorch=2.12.1=cuda*
+# Do NOT install torch from the `pytorch` channel or via pip -- that reintroduces
+# a second libomp and breaks torch+tblite coexistence.
+#
+# Comparison scripts only (examples/xtb_gpu, NOT needed for production commands):
+# they compare against the deprecated xtb-python reference and, on Linux, dxtb.
+# Add separately when needed:
+#   conda install -c conda-forge xtb-python
+#   pip install dxtb tad-libcint        # tad-libcint is Linux-only (dxtb GFN2)
+
+name: chemdm
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pytorch=2.12.1        # conda-forge build -> shares conda-forge llvm-openmp
+  - tblite-python=0.7.0   # production xTB backend (GFN1 + GFN2)
+  - dftd4                 # D4 dispersion library, linked by tblite for GFN2
+  - openmm=8.5.2
+  - numpy=2.4.6
+  - scipy=1.17.1
+  - rdkit=2026.3.4
+  - ase=3.29.0
+  - matplotlib=3.11.0
+  - e3nn=0.6.0
+  - python-dotenv=1.2.2   # .env config loading
+  - pytest
