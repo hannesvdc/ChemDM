@@ -31,7 +31,7 @@ import numpy as np
 import torch as pt
 
 from chemviewer import view_movie
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from chemdm.nebXtbDirect import evaluate_path, neb_force, neb_force_metrics
 from chemdm.Constants import KJ_MOL_TO_EV
 
@@ -99,7 +99,7 @@ def predict_path(model, traj, device) -> np.ndarray:
 
 def perp_force_report(Z_np: np.ndarray, path: np.ndarray, name: str) -> dict:
     """Max (and RMS) perpendicular force to the path, via xTB. Units: kJ/mol/A."""
-    xtb = XTBPotential(Z=Z_np)
+    xtb = TBLitePotential(Z=Z_np)
     E, F = evaluate_path(xtb, path)                       # kJ/mol, kJ/mol/A
     _, F_perp = neb_force(path, E, F, SPRING_K)           # (M-2, n_atoms, 3)
 

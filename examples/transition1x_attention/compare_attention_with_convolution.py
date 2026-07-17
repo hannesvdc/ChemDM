@@ -44,7 +44,7 @@ import torch as pt
 import matplotlib.pyplot as plt
 from examples.transition1x_newton.NewtonE3NN import NewtonE3NN
 from chemdm.EquivariantTransformer import EquivariantTransformer
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from chemdm.nebXtbDirect import evaluate_path, neb_force
 from scipy.stats import wilcoxon, spearmanr
 
@@ -148,7 +148,7 @@ def evaluate_pair( att_model : EquivariantTransformer,
             # of crashing the whole multi-hour run.
             try:
                 Z_np = traj.Z.cpu().numpy().astype(int)
-                xtb = XTBPotential( Z=Z_np )            # one calculator, reused for all paths
+                xtb = TBLitePotential( Z=Z_np )            # one calculator, reused for all paths
                 forces["att"][i]  = _max_perp_force( xtb, x_a.cpu().numpy() )
                 forces["conv"][i] = _max_perp_force( xtb, x_c.cpu().numpy() )
                 forces["ref"][i]  = _max_perp_force( xtb, x_ref.cpu().numpy() )

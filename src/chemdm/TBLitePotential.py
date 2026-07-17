@@ -2,34 +2,31 @@
 TBLitePotential
 ===============
 
-A drop-in analogue of ``chemdm.xtbSetup.XTBPotential`` backed by `tblite`
-(grimme-lab), the actively-maintained library reimplementation of the xTB
-Hamiltonians. It replaces the deprecated ``xtb-python`` backend used by
-``XTBPotential`` while keeping the exact same public contract:
+The production xTB potential, backed by `tblite` (grimme-lab), the actively-
+maintained library reimplementation of the xTB Hamiltonians. It replaces the
+deprecated ``xtb-python`` backend (see ``chemdm.xtbSetup.XTBPotential``), which is
+unmaintained and has an analytic-gradient defect at symmetric geometries.
+
+Public contract (identical to the old XTBPotential):
 
     pot = TBLitePotential(Z, method="GFN1-xTB")
     energy_eV, forces_eV_A = pot.energy_forces(x_A)      # x_A in Angstrom
 
-Because ``tblite.ase.TBLite`` is an ASE calculator just like ``xtb-python``'s
-``XTB``, this is a subclass of ``XTBPotential`` that overrides only the
-calculator construction; ``energy_forces`` is inherited unchanged (it merely
-drives ``self.atoms``). Both codes speak ASE's eV / eV·Angstrom^-1 convention, so
-a correspondence test measures only algorithmic differences between the two
-implementations of GFN-xTB.
+Energies are returned in eV, forces in eV/Angstrom; input positions are assumed
+to be in Angstrom (no conversion at this level).
 
-Motivation
-----------
-The production ``XTBPotential`` uses ``xtb-python``, which is deprecated and has a
-confirmed analytical-gradient defect at some symmetric-equilibrium geometries
-(the reference's analytical force disagrees with the finite-difference gradient
-of its own energy; see ``reference_gradient_bug.py``). tblite is the grimme-lab-
-recommended replacement and is expected to be free of that defect.
+This is deliberately **standalone** -- it does NOT subclass ``XTBPotential``. The
+old class imports ``xtb.ase`` (the deprecated ``xtb-python`` package) at module
+load, so subclassing would force ``xtb-python`` to remain a hard dependency of
+every process that touches the potential, defeating the migration. Standalone,
+``TBLitePotential`` depends only on ``tblite`` + ``ase``; it satisfies the
+``chemdm.opt.EnergyForceEvaluator`` contract structurally (duck-typed), no
+inheritance required.
 
 Notes
 -----
-* ``method`` accepts the same strings as ``XTBPotential`` ("GFN1-xTB",
-  "GFN2-xTB"). Unlike dxtb, tblite provides both GFN1 and GFN2 on macOS.
-* ``uhf`` (number of unpaired electrons) maps onto tblite's ``multiplicity``
+* ``method`` accepts "GFN1-xTB" or "GFN2-xTB".
+* ``uhf`` (number of unpaired electrons, 2S) maps onto tblite's ``multiplicity``
   keyword as ``multiplicity = uhf + 1`` (2S+1).
 * Implicit solvation is not wired up yet (tblite's ``solvation`` spec differs
   from xtb-python's ``solvent`` string); passing ``solvent`` raises.
@@ -41,11 +38,9 @@ import numpy as np
 from ase import Atoms
 from tblite.ase import TBLite
 
-from chemdm.xtbSetup import XTBPotential
 
-
-class TBLitePotential(XTBPotential):
-    """xTB potential backed by tblite; mirrors XTBPotential.energy_forces."""
+class TBLitePotential:
+    """xTB potential backed by tblite; energies in eV, forces in eV/Angstrom."""
 
     def __init__( self,
                   Z: np.ndarray,
@@ -76,3 +71,19 @@ class TBLitePotential(XTBPotential):
 
         self.atoms = Atoms(numbers=self.Z, positions=np.zeros((len(self.Z), 3)))
         self.atoms.calc = TBLite( self.atoms, **kwargs )
+
+    def energy_forces( self, x_A: np.ndarray ) -> tuple[float, np.ndarray]:
+        """
+        x_A: positions in Angstrom, shape (n_atoms, 3)
+
+        returns:
+            energy_eV: float
+            forces_eV_per_A: shape (n_atoms, 3)
+        """
+        self.atoms.positions = np.asarray(x_A, dtype=float)
+
+        # ASE/tblite returns eV and eV/Angstrom
+        energy = float(self.atoms.get_potential_energy())
+        forces = np.asarray(self.atoms.get_forces(), dtype=float)
+
+        return energy, forces

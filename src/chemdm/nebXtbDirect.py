@@ -17,17 +17,17 @@ _WORKER_POTENTIAL: EnergyForceEvaluator | None = None
 def init_xtb_worker( Z: np.ndarray ):
     """
     Called once inside each worker process.
-    Creates one persistent XTBPotential per process.
+    Creates one persistent TBLitePotential per process.
     """
     global _WORKER_POTENTIAL
 
     print(f"[xtb-worker {os.getpid()}] initializer start", file=sys.stderr, flush=True)
 
     try:
-        from chemdm.xtbSetup import XTBPotential
-        print(f"[xtb-worker {os.getpid()}] imported XTBPotential", file=sys.stderr, flush=True)
-        _WORKER_POTENTIAL = XTBPotential( Z=np.asarray(Z, dtype=int) )
-        print(f"[xtb-worker {os.getpid()}] XTBPotential created", file=sys.stderr, flush=True)
+        from chemdm.TBLitePotential import TBLitePotential
+        print(f"[xtb-worker {os.getpid()}] imported TBLitePotential", file=sys.stderr, flush=True)
+        _WORKER_POTENTIAL = TBLitePotential( Z=np.asarray(Z, dtype=int) )
+        print(f"[xtb-worker {os.getpid()}] TBLitePotential created", file=sys.stderr, flush=True)
     except BaseException:
         print(f"[xtb-worker {os.getpid()}] initializer failed", file=sys.stderr, flush=True)
         traceback.print_exc()
@@ -653,8 +653,8 @@ def run_neb_xtb( Z : np.ndarray,
     if max_workers <= 1:
         print("[neb-xtb] using serial evaluator", file=sys.stderr, flush=True)
         
-        from chemdm.xtbSetup import XTBPotential
-        xtb = XTBPotential( Z=Z )
+        from chemdm.TBLitePotential import TBLitePotential
+        xtb = TBLitePotential( Z=Z )
 
         neb_energy_and_force = lambda path_A: evaluate_path(xtb, path_A)
         return run_with_evaluator( neb_energy_and_force )

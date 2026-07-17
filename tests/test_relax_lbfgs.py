@@ -234,13 +234,13 @@ def test_lbfgs_needs_fewer_steps_than_adam_on_stiff_problem():
 # Real-xTB integration (skipped unless the full xTB/OpenMM stack is installed).
 # --------------------------------------------------------------------------- #
 def test_real_xtb_h2_relaxes():
-    for mod in ("xtb", "ase", "openmm", "openmmxtb"):
+    for mod in ("tblite", "ase"):
         pytest.importorskip(mod)
-    from chemdm.xtbSetup import XTBPotential
+    from chemdm.TBLitePotential import TBLitePotential
 
     Z = np.array([1, 1])
     x0 = np.array([[0., 0., 0.], [0.90, 0., 0.]])       # stretched H2
-    xtb = XTBPotential(Z)
+    xtb = TBLitePotential(Z)
     x_opt, hist = minimize_with_lbfgs(xtb, x0, force_tolerance_kJ_mol_A=1.0, max_steps=100)
 
     E = np.array([h["energy_kJ_mol"] for h in hist])

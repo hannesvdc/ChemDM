@@ -13,7 +13,7 @@ if str(_XTB_DIR) not in sys.path:
 
 import numpy as np
 
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from chemdm.relaxMolecule import minimize_with_lbfgs
 from chemdm.progress import ProgressCallback
 
@@ -34,7 +34,7 @@ def run(input_data: dict,
 
     # Construct the XTB force field
     if theory.lower() == "xtb":
-        xtb = XTBPotential(Z)
+        xtb = TBLitePotential(Z)
 
     # Do L-BFGS minimization with line search
     x_min, history = minimize_with_lbfgs( xtb, x0, force_tolerance_kJ_mol_A=force_tol, max_steps=max_optimizer_steps, verbose=True )

@@ -42,7 +42,7 @@ from rdkit import RDLogger
 from chemdm.MoleculeGraph import MoleculeGraph
 from chemdm.prfo import PRFOOptimizer, lindh_lowest_mode, _project_mat, _trans_rot_basis
 from chemdm.relaxMolecule import relaxMolecule
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from chemdm.Constants import EV_TO_KCAL_PER_MOL
 
 from _plot import plot_prfo_trajectory
@@ -98,7 +98,7 @@ def directed_bond_tensor( bond_pairs: list[tuple[int, int]] ) -> pt.Tensor:
     return pt.tensor(edges, dtype=pt.long)
 
 
-def finite_difference_hessian( potential: XTBPotential, x: np.ndarray, h: float = 1e-3 ) -> np.ndarray:
+def finite_difference_hessian( potential: TBLitePotential, x: np.ndarray, h: float = 1e-3 ) -> np.ndarray:
     """Central-difference Cartesian Hessian (eV/Å²) for the saddle-character check."""
     n = x.size
     H = np.zeros( (n, n) )
@@ -114,7 +114,7 @@ def finite_difference_hessian( potential: XTBPotential, x: np.ndarray, h: float 
 
 def main() -> None:
     Z, x_init, bond_pairs, key = build_vinyl_alcohol()
-    potential = XTBPotential(Z=Z)
+    potential = TBLitePotential(Z=Z)
     print(f"=== Vinyl alcohol: {len(Z)} atoms, {len(bond_pairs)} bonds ===")
     print(f"key atoms: O={key['O']}, H_OH={key['H_OH']}, C_O={key['C_O']}, C_alpha={key['C_alpha']}")
 

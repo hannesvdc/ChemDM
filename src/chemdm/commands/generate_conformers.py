@@ -11,7 +11,7 @@ import torch as pt
 
 from rdkit import Chem
 
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from chemdm.relaxMolecule import minimize_with_lbfgs
 from chemdm.progress import ProgressCallback
 from chemdm.Cluster import rmsd_clustering, post_relaxation_clustering
@@ -69,7 +69,7 @@ def run( input_data: dict,
     mol_with_h = Chem.AddHs( mol )
     Z = np.array(  [atom.GetAtomicNum() for atom in mol_with_h.GetAtoms() ], dtype=np.int64 )
     if theory.lower() == "xtb":
-        xtb = XTBPotential( Z )
+        xtb = TBLitePotential( Z )
 
     # Generate rotamers / conformers
     # params = AllChem.ETKDGv3()

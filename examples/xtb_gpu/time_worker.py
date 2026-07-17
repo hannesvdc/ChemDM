@@ -14,7 +14,7 @@ def _build( backend, kwargs, Z ):
         from chemdm.xtbSetup import XTBPotential
         return XTBPotential( Z=Z, **kwargs )
     if backend == "tblite":
-        from tblite_potential import TBLitePotential
+        from chemdm.TBLitePotential import TBLitePotential
         return TBLitePotential( Z=Z, **kwargs )
     raise ValueError( f"unknown backend {backend!r}" )
 

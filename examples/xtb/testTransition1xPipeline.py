@@ -1,6 +1,6 @@
 import numpy as np
 
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from safeOptimizer import minimize_with_adam
 
 import os
@@ -51,7 +51,7 @@ def build_molecule_reaction_map(data_dir: str | Path, kind : str) -> dict[str, l
         molecule: sorted(reaction_ids) for molecule, reaction_ids in sorted(molecule_to_reactions.items())
     }
 
-def runRelaxation( xtb: XTBPotential,
+def runRelaxation( xtb: TBLitePotential,
                    trajectory : dict,
                    verbose : bool = False ) -> tuple[np.ndarray, dict]:
 
@@ -94,5 +94,5 @@ if __name__ == '__main__':
         trajectory = json.load( jsonfile )
         print( "Reaction Loaded." )
     
-    xtb = XTBPotential( trajectory["Z"] )
+    xtb = TBLitePotential( trajectory["Z"] )
     runRelaxation( xtb, trajectory, verbose=True )

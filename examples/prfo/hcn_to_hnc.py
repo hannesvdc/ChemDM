@@ -20,7 +20,7 @@ import torch as pt
 from chemdm.MoleculeGraph import MoleculeGraph
 from chemdm.prfo import PRFOOptimizer, lindh_lowest_mode
 from chemdm.relaxMolecule import relaxMolecule
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from chemdm.Constants import EV_TO_KCAL_PER_MOL
 from chemdm.prfo import _project_mat, _trans_rot_basis
 
@@ -86,7 +86,7 @@ def plot_prfo_trajectory( history: list[dict] ) -> None:
     plt.show()
 
 
-def finite_difference_hessian( potential: XTBPotential, 
+def finite_difference_hessian( potential: TBLitePotential, 
                                x: np.ndarray,
                                h: float = 1e-3
                              ) -> np.ndarray:
@@ -106,7 +106,7 @@ def finite_difference_hessian( potential: XTBPotential,
 
 def main() -> None:
     Z = np.array([1, 6, 7]) # H-C=N
-    potential = XTBPotential(Z=Z)
+    potential = TBLitePotential(Z=Z)
 
     # HCN guess, atoms collinear along x. H-C ≈ 1.07 Å, C-N ≈ 1.16 Å.
     x_init = np.array([

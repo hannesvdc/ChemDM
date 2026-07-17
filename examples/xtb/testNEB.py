@@ -2,7 +2,7 @@ import numpy as np
 import torch as pt
 
 from chemdm.Constants import *
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from chemdm.nebXtbDirect import run_neb_xtb, evaluate_path, neb_force
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, Molecule
 
@@ -81,7 +81,7 @@ def evaluateML( tp_network : pt.nn.Module,
     x = x.reshape(n_images, mol_size, 3)
     return x, xa_mol, xb_mol, s, molecule_path
 
-def evaluateMaxForce( xtb : XTBPotential,
+def evaluateMaxForce( xtb : TBLitePotential,
                       path : np.ndarray,
                       k : float, ) -> float:
     E_np, F_np = evaluate_path( xtb, path )
@@ -94,7 +94,7 @@ def evaluateMaxForce( xtb : XTBPotential,
 
 def runNEB( tp_network : pt.nn.Module,
             diffusion_network : pt.nn.Module,
-            xtb : XTBPotential,
+            xtb : TBLitePotential,
             trajectory : dict,
             device : pt.device ):
     k = 1.0 * KJ_MOL_PER_EV          # kJ/mol/Å², equivalent to 1 eV/Å²
@@ -142,5 +142,5 @@ if __name__ == '__main__':
     diffusion_network = loadDiffusionModel( './MLModel/', device, dtype )
     
     print(trajectory.keys())
-    xtb = XTBPotential( trajectory["Z"] )
+    xtb = TBLitePotential( trajectory["Z"] )
     runNEB( tp_network, diffusion_network, xtb, trajectory, device )

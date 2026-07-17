@@ -73,7 +73,7 @@ import torch as pt
 
 from dotenv import load_dotenv
 
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from chemdm.relaxMolecule import relaxMolecule
 from chemdm.Constants import KJ_MOL_TO_EV
 from chemdm.TorsionalDiffusionSampling import TorsionalDiffusionData, sample_conformers, kabsch_aligned_heavy_rmsd, generate_rdkit_conformers
@@ -227,7 +227,7 @@ def _relax_one( task: tuple ) -> tuple[int, int, np.ndarray | None, dict | None 
     mol_idx, k, Z_np, x0 = task
     tol_kJ = FORCE_TOL_EV_A / KJ_MOL_TO_EV   # relaxMolecule works in kJ/mol/Å
     try:
-        pot = XTBPotential( Z=Z_np, method=XTB_METHOD )
+        pot = TBLitePotential( Z=Z_np, method=XTB_METHOD )
         x_relaxed, history = relaxMolecule( pot, x0, minimizer="lbfgs",
                                             force_tol=tol_kJ,
                                             returnOptimizationHistory=True )

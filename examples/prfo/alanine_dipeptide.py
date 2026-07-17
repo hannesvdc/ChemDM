@@ -8,7 +8,7 @@ backbone dihedrals (φ, ψ) and several Ramachandran basins. Pipeline:
        openmmtools.AlanineDipeptideImplicit. The AMBER `System` is discarded;
        openmmtools is used here only as a convenient source of a sensible
        PDB-style geometry.
-    2. Build a chemdm.XTBPotential (ASE-backed GFN2-xTB) and relax to a
+    2. Build a chemdm.TBLitePotential (ASE-backed GFN2-xTB) and relax to a
        local minimum via :func:`chemdm.relaxMolecule.relaxMolecule`.
     3. Estimate the lowest mass-weighted Lindh mode at the relaxed minimum.
     4. Perturb along that mode.
@@ -38,7 +38,7 @@ from chemdm.prfo import (
     PRFOOptimizer, lindh_lowest_mode, _project_mat, _trans_rot_basis,
 )
 from chemdm.relaxMolecule import relaxMolecule
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from chemdm.Constants import EV_TO_KCAL_PER_MOL
 
 from _plot import plot_prfo_trajectory
@@ -54,7 +54,7 @@ def directed_bond_tensor( bond_pairs: list[tuple[int, int]] ) -> pt.Tensor:
     return pt.tensor(edges, dtype=pt.long)
 
 
-def finite_difference_hessian( potential: XTBPotential,
+def finite_difference_hessian( potential: TBLitePotential,
                                x: np.ndarray,
                                h: float = 1e-3 ) -> np.ndarray:
     """Central-difference Cartesian Hessian (eV/Å²)."""
@@ -80,7 +80,7 @@ def main() -> None:
     x_init = np.asarray( ad.positions.value_in_unit(unit.nanometer) ) * NM_TO_A
     print( f"  {n_atoms} atoms, {len(bond_pairs)} bonds" )
 
-    potential = XTBPotential( Z=Z )
+    potential = TBLitePotential( Z=Z )
 
     print( "\n=== Relaxing alanine dipeptide minimum (GFN2-xTB) ===" )
     x_min = relaxMolecule( potential, x_init, minimizer="Adam",

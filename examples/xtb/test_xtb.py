@@ -1,6 +1,6 @@
 import numpy as np
 
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 from safeOptimizer import minimize_with_adam
 
 def main():
@@ -20,7 +20,7 @@ def main():
         ], dtype=float, )
 
     # xtb uses Angstrom
-    system = XTBPotential( atomic_numbers )
+    system = TBLitePotential( atomic_numbers )
 
     print("Initial single-point:")
     E0, F0 = system.energy_forces( positions_A )

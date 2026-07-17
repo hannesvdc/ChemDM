@@ -22,7 +22,8 @@ import torch as pt
 from chemdm.Constants import *
 from chemdm.EquivariantTransformer import EquivariantTransformer
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
-from chemdm.xtbSetup import XTBPotential
+from chemdm.opt import EnergyForceEvaluator
+from chemdm.TBLitePotential import TBLitePotential
 from chemdm.nebXtbDirect import run_neb_xtb, normalized_arclengths, evaluate_path, neb_force
 from chemdm.path_smoothing import smooth_path_penalized_least_squares
 from chemdm.relaxMolecule import relaxMolecule
@@ -95,7 +96,7 @@ def _curve_dict( Z : np.ndarray,
         "labels": labels,
     }
 
-def _score_path( xtb : XTBPotential, path : np.ndarray, k : float ) -> tuple[np.ndarray, float]:
+def _score_path( xtb : EnergyForceEvaluator, path : np.ndarray, k : float ) -> tuple[np.ndarray, float]:
     """xTB energies (kJ/mol) and the max per-image perpendicular NEB force
     (kJ/mol/A) along a path. The force is the same metric run_neb_xtb reports, so
     the three curves' `best_force` values are directly comparable."""
@@ -163,7 +164,7 @@ def run( input_data: dict,
 
     # Construct the XTB force field
     if theory.lower() == "xtb":
-        xtb = XTBPotential( Z )
+        xtb = TBLitePotential( Z )
 
     # Align the end points for stability. Relax endpoints if desired.
     if relax_endpoints:
@@ -301,7 +302,7 @@ def cleanupPath( Z : np.ndarray,
 
     return path
 
-def _methyl_phase_from_H(A : np.ndarray, C : np.ndarray, H : np.ndarray ) -> np.ndarray:
+def _methyl_phase_from_H( A : np.ndarray, C : np.ndarray, H : np.ndarray ) -> np.ndarray:
     """
     Compute the methyl phase phi of one reference hydrogen.
 

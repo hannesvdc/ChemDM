@@ -2,9 +2,9 @@ import numpy as np
 import torch as pt
 
 from chemdm.Constants import *
-from chemdm.xtbSetup import XTBPotential
+from chemdm.TBLitePotential import TBLitePotential
 
-def evaluate_xtb( xtb : XTBPotential , positions_A: np.ndarray):
+def evaluate_xtb( xtb : TBLitePotential , positions_A: np.ndarray):
     """
     positions_A: (N, 3), Angstrom
 
@@ -28,7 +28,7 @@ def displacement_stats(R0_A: np.ndarray, R1_A: np.ndarray) -> dict:
         "max_displacement_A": float( np.max(displacement) ),
     }
 
-def minimize_with_adam( xtb : XTBPotential,
+def minimize_with_adam( xtb : TBLitePotential,
                         positions_A: np.ndarray,
                         n_steps: int = 10_000,
                         lr: float = 1e-3,  # Angstrom-scale learning rate

@@ -34,7 +34,7 @@ def _tblite_eval( kwargs : dict, Z : np.ndarray, x_A : np.ndarray ):
                       electronic_temperature=kwargs["electronic_temperature"],
                       max_iterations=kwargs["max_iterations"], verbosity=0 )
     atoms = Atoms( numbers=np.asarray(Z, dtype=int), positions=np.asarray(x_A, dtype=float) )
-    atoms.calc = TBLite( **tb_kwargs )
+    atoms.calc = TBLite( atoms, **tb_kwargs )
     e = float( atoms.get_potential_energy() )
     f = np.asarray( atoms.get_forces(), dtype=float )
     return e, f
