@@ -9,12 +9,18 @@ packaging story, the tblite migration, benchmarks), see
 
 ## TL;DR
 
+One command (detects your conda tool, creates the env, installs the package,
+validates torch+tblite):
 ```bash
-# Production / development env (all conda-forge, single OpenMP)
-conda env create -f environment.yml
+./install_env.sh        # CHEMDM_RECREATE=1 to rebuild an existing env
+conda activate chemdm
+pytest                  # expect all pass
+```
+Equivalently, by hand:
+```bash
+conda env create -f environment.yml     # all conda-forge, single OpenMP
 conda activate chemdm
 pip install -e . --no-deps
-pytest          # expect all pass
 ```
 
 That's the whole install. The rest of this document explains the two-environment
@@ -87,20 +93,23 @@ python -c "import torch, numpy as np; \
 
 ---
 
-## Linux production cluster
+## Linux production cluster (CPU-only)
 
-Identical to the TL;DR (`conda env create -f environment.yml && pip install -e . --no-deps`). Two cluster-specific notes:
+The cluster has conda and is **CPU-only**, so the install is identical to a dev
+machine — no GPU/CUDA handling, same `environment.yml`:
+```bash
+# on the cluster, in the repo checkout:
+module load conda        # or `module load miniforge`, if the site uses modules
+./install_env.sh         # or: conda env create -f environment.yml && conda run -n chemdm pip install -e . --no-deps
+```
+Then point that host's ReactionStudio at `.../envs/chemdm/bin/chemdm`.
 
-- **GPU torch.** For CUDA, pin a **conda-forge** cuda build in `environment.yml`:
-  ```yaml
-  - pytorch=2.12.1=cuda*
-  ```
-  Do **not** install torch from the `pytorch` channel or via pip — that vendors a
-  second `libomp` and breaks torch+tblite coexistence. (Keep this as a small
-  `environment.cluster.yml` overlay if you want mac-CPU + linux-GPU from one base.)
 - **dxtb.** On Linux, dxtb GFN2 works (Linux-only `tad-libcint`), so the
-  comparison scripts auto-run the full three-way (`RUN_DXTB` flips on). dxtb is a
-  verification dependency, not a production one.
+  *comparison* scripts can run the full three-way (`RUN_DXTB` auto-enables). It is
+  a verification-only dependency, not part of the production env.
+- **If a GPU node is ever added** (not the case today): install a **conda-forge**
+  CUDA torch build (`pytorch=2.12.1=*cuda*`), never a pip/pytorch-channel wheel,
+  or two `libomp` copies collide.
 
 ---
 
