@@ -29,9 +29,9 @@ channels:
   - nodefaults
 dependencies:
   - python=3.11
-  - pytorch=2.12.1        # conda-forge build -> shares conda-forge llvm-openmp
-  - tblite-python=0.7.0   # production xTB backend (GFN1 + GFN2)
-  - dftd4                 # D4 dispersion library, linked by tblite for GFN2
+  - pytorch=2.12.1
+  - tblite-python=0.7.0
+  - dftd4
   - openmm=8.5.2
   - numpy=2.4.6
   - scipy=1.17.1
