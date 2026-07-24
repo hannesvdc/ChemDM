@@ -23,7 +23,6 @@ from chemdm.Constants import *
 from chemdm.EquivariantTransformer import EquivariantTransformer
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
 from chemdm.potentials import EnergyForceEvaluator
-from chemdm.TBLitePotential import TBLitePotential
 from chemdm.nebXtbDirect import run_neb_xtb, normalized_arclengths, evaluate_path, neb_force
 from chemdm.path_smoothing import smooth_path_penalized_least_squares
 from chemdm.relaxMolecule import relaxMolecule

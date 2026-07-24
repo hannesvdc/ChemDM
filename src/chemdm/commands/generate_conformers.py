@@ -54,7 +54,7 @@ def run( input_data: dict,
     print( 'running confgen', file=sys.stderr )
     smiles = input_data["smiles"]
     n_conformers = int( input_data.get("n_conformers", 10 ) )
-    theory = input_data.get( "theory", "xtb" )
+    theory = input_data.get( "theory", "GFN2-xTB" )
     force_tol = float( input_data.get( "force_tolerance", 0.1) )
     max_optimizer_steps = int( input_data.get( "max_optimizer_steps", 1000) )
     print( max_optimizer_steps, 'max', file=sys.stderr )

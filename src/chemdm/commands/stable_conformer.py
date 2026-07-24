@@ -13,7 +13,7 @@ if str(_XTB_DIR) not in sys.path:
 
 import numpy as np
 
-from chemdm.TBLitePotential import TBLitePotential
+from chemdm.potentials import make_potential
 from chemdm.relaxMolecule import minimize_with_lbfgs
 from chemdm.progress import ProgressCallback
 
@@ -23,7 +23,7 @@ def run(input_data: dict,
     Empty implementation for now.
     """
     molecule = input_data["input_molecule_json"]
-    theory = input_data.get( "force_field", "xtb" )
+    theory = input_data.get( "force_field", "GFN2-xTB" )
     force_tol = input_data.get( "accuracy", 1.0 ) #kJ/mol/A
     max_optimizer_steps = input_data.get( "max_iterations", 2500 )
 
@@ -33,11 +33,10 @@ def run(input_data: dict,
     bonds = molecule["G"] # not directly used for the experiments, but passed back.
 
     # Construct the XTB force field
-    if theory.lower() == "xtb":
-        xtb = TBLitePotential(Z)
+    potential = make_potential( theory, Z )
 
     # Do L-BFGS minimization with line search
-    x_min, history = minimize_with_lbfgs( xtb, x0, force_tolerance_kJ_mol_A=force_tol, max_steps=max_optimizer_steps, verbose=True )
+    x_min, history = minimize_with_lbfgs( potential, x0, force_tolerance_kJ_mol_A=force_tol, max_steps=max_optimizer_steps, verbose=True )
     energies = np.array([ row["energy_kJ_mol"] for row in history])
     rmsds = np.array([ row["rmsd"] for row in history])
     converged = (history[-1]["max_force_rms"] < force_tol)
