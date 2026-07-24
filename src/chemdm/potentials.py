@@ -37,7 +37,7 @@ def make_potential( force_field: str,
     if ff in _XTB_METHODS:
         from chemdm.TBLitePotential import TBLitePotential
         return TBLitePotential( Z, charge=charge, uhf=uhf, method=_XTB_METHODS[ff], **kw )
-    if force_field == "dft":
+    elif ff == "wb97x-d":
         from chemdm.Psi4Potential import Psi4Potential
         return Psi4Potential( Z, charge=charge, uhf=uhf, **kw )
     raise ValueError( f"Unknown force_field {force_field!r}." )

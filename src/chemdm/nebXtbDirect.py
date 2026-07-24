@@ -9,27 +9,24 @@ from concurrent.futures import ProcessPoolExecutor
 
 from chemdm.Constants import *
 from chemdm.diagnostics import has_plateaued, has_started_increasing
-from chemdm.opt import EnergyForceEvaluator
+from chemdm.potentials import EnergyForceEvaluator
 from typing import Callable, Optional
 
 _WORKER_POTENTIAL: EnergyForceEvaluator | None = None
 
-def init_xtb_worker( Z: np.ndarray ):
-    """
-    Called once inside each worker process.
-    Creates one persistent TBLitePotential per process.
-    """
+def init_worker( force_field: str, 
+                 Z : np.ndarray, 
+                 charge: int=0, 
+                 uhf: int=0, 
+                 config=None) -> None:
     global _WORKER_POTENTIAL
-
-    print(f"[xtb-worker {os.getpid()}] initializer start", file=sys.stderr, flush=True)
+    from chemdm.potentials import make_potential
 
     try:
-        from chemdm.TBLitePotential import TBLitePotential
-        print(f"[xtb-worker {os.getpid()}] imported TBLitePotential", file=sys.stderr, flush=True)
-        _WORKER_POTENTIAL = TBLitePotential( Z=np.asarray(Z, dtype=int) )
-        print(f"[xtb-worker {os.getpid()}] TBLitePotential created", file=sys.stderr, flush=True)
+        _WORKER_POTENTIAL = make_potential( force_field, Z, charge=charge, uhf=uhf, **(config or {}) )
+        print(f"[worker {os.getpid()}] Potential created", file=sys.stderr, flush=True)
     except BaseException:
-        print(f"[xtb-worker {os.getpid()}] initializer failed", file=sys.stderr, flush=True)
+        print(f"[worker {os.getpid()}] initializer failed", file=sys.stderr, flush=True)
         traceback.print_exc()
         raise
 
@@ -592,7 +589,8 @@ def normalized_arclengths( path : np.ndarray ) -> np.ndarray:
     normalized_arclengths = arclenghts / arclenghts[-1]
     return normalized_arclengths
 
-def run_neb_xtb( Z : np.ndarray,
+def run_neb_xtb( force_field: str,
+                 Z : np.ndarray,
                  path0_A: np.ndarray,      # (M, n_atoms, 3), includes endpoints
                  n_steps: int = 250,
                  k: float = 1.0/KJ_MOL_TO_EV,  # kJ/mol/A^2
@@ -602,6 +600,10 @@ def run_neb_xtb( Z : np.ndarray,
                  callback : Optional[Callable] = None,
                  dk: Optional[float] = None,
                  climb: bool = True,
+                 *,
+                 charge: int=0,
+                 uhf: int=0,
+                 config: Optional[dict] = None,
                 ):
     """
     Climbing-image Nudged-Elastic Band implementation using direct xTB forces
@@ -651,20 +653,20 @@ def run_neb_xtb( Z : np.ndarray,
         return path_opt_A, E_best, info["best_force_rms"]
 
     if max_workers <= 1:
-        print("[neb-xtb] using serial evaluator", file=sys.stderr, flush=True)
+        print("[neb] using serial evaluator", file=sys.stderr, flush=True)
         
-        from chemdm.TBLitePotential import TBLitePotential
-        xtb = TBLitePotential( Z=Z )
+        from chemdm.potentials import make_potential
+        potential = make_potential( force_field, Z, charge=charge, uhf=uhf, **(config or {}))
 
-        neb_energy_and_force = lambda path_A: evaluate_path(xtb, path_A)
+        neb_energy_and_force = lambda path_A: evaluate_path( potential, path_A )
         return run_with_evaluator( neb_energy_and_force )
     
     # Process-parallel mode.
-    print( f"[neb-xtb] using spawn ProcessPoolExecutor with {max_workers} workers", file=sys.stderr, flush=True )
+    print( f"[neb] using spawn ProcessPoolExecutor with {max_workers} workers", file=sys.stderr, flush=True )
     ctx = mp.get_context("spawn")
     with ProcessPoolExecutor( max_workers=max_workers,
                               mp_context=ctx,
-                              initializer=init_xtb_worker,
-                              initargs=( Z, ),  ) as pool:
+                              initializer=init_worker,
+                              initargs=(force_field, Z, charge, uhf, config), ) as pool:
         neb_energy_and_force = lambda path_A: evaluate_path_process_parallel( path_A, pool )
         return run_with_evaluator( neb_energy_and_force )

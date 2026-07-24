@@ -5,7 +5,7 @@ import torch as pt
 
 from chemdm.Constants import *
 
-from chemdm.opt import EnergyForceEvaluator
+from chemdm.potentials import EnergyForceEvaluator, make_potential
 from chemdm.diagnostics import *
 
 
@@ -29,7 +29,8 @@ def evaluateEnergyAndForces( potential: EnergyForceEvaluator,
     return E_kj_mol, F_kJ_mol_A
 
 
-def relaxMolecule( potential : EnergyForceEvaluator,
+def relaxMolecule( force_field: str,
+                   Z : np.ndarray,
                    x0 : np.ndarray, 
                    minimizer : str = "Adam",
                    force_tol : float = 0.02 / KJ_MOL_TO_EV,
@@ -37,6 +38,8 @@ def relaxMolecule( potential : EnergyForceEvaluator,
                    verbose : bool = False,
                    returnOptimizationHistory : bool = False ) -> np.ndarray | tuple[np.ndarray,list]:
     """ General entry point for all relaxation codes"""
+    potential = make_potential( force_field, Z )
+
     if minimizer.lower() == "adam":
         x_opt, info = minimize_with_adam( potential, x0, force_tol, max_steps, verbose=verbose )
     elif minimizer.lower() == "lbfgs":

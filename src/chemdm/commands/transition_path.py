@@ -22,7 +22,7 @@ import torch as pt
 from chemdm.Constants import *
 from chemdm.EquivariantTransformer import EquivariantTransformer
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
-from chemdm.opt import EnergyForceEvaluator
+from chemdm.potentials import EnergyForceEvaluator
 from chemdm.TBLitePotential import TBLitePotential
 from chemdm.nebXtbDirect import run_neb_xtb, normalized_arclengths, evaluate_path, neb_force
 from chemdm.path_smoothing import smooth_path_penalized_least_squares
@@ -148,7 +148,7 @@ def run( input_data: dict,
     print( f"[runner] {input_data['n_images']}", flush=True, file=sys.stderr )
 
     n_images = int( input_data.get("n_images", 20) )
-    theory = input_data.get( "force_field", "xtb" ) 
+    theory = input_data.get( "force_field", "gfn2-xtb" ) 
     relax_endpoints = bool( input_data.get( "endpoint_relaxation", True) )
     force_tol = float( input_data.get("accuracy", 0.1) )                                                                                          
     n_steps = int( input_data.get("max_iterations", 2500) )
@@ -162,15 +162,11 @@ def run( input_data: dict,
     GA = np.asarray( reactant["G"] )                                                                                                                     
     GB = np.asarray( product["G"] ) 
 
-    # Construct the XTB force field
-    if theory.lower() == "xtb":
-        xtb = TBLitePotential( Z )
-
     # Align the end points for stability. Relax endpoints if desired.
     if relax_endpoints:
         on_progress( "relax", "Relaxinging reactants and products", fraction=0.02 )
-        xA = relaxMolecule( xtb, xA, minimizer="LBFGS", returnOptimizationHistory=False )
-        xB = relaxMolecule( xtb, xB, minimizer="LBFGS", returnOptimizationHistory=False )
+        xA = relaxMolecule( theory, Z, xA, minimizer="LBFGS", returnOptimizationHistory=False )
+        xB = relaxMolecule( theory, Z, xB, minimizer="LBFGS", returnOptimizationHistory=False )
 
     on_progress("align", "Aligning endpoints", fraction=0.10)
     xB = kabsch_align_numpy( xB, xA, Z ) # type: ignore
@@ -198,7 +194,7 @@ def run( input_data: dict,
                      fraction = progress_so_far + (1.0 - progress_so_far) * iter / n_steps )
     on_progress( "fine_tune_path", "Fine-tuning", fraction=0.50 )
     progress_so_far = on_progress.getTotalProgress()
-    path_opt, E_neb, best_force = run_neb_xtb( Z, path_smoothed, n_steps, k, max_step_A, force_tol, callback=callback, max_workers=max_workers, climb=True )
+    path_opt, E_neb, best_force = run_neb_xtb( theory, Z, path_smoothed, n_steps, k, max_step_A, force_tol, callback=callback, max_workers=max_workers, climb=True )
 
     # Score the two pre-NEB guesses with xTB so all three curves carry an energy
     # profile and a comparable force metric.
