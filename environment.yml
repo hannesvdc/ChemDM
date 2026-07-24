@@ -37,6 +37,7 @@ dependencies:
   - scipy=1.17.1
   - rdkit=2026.3.4
   - ase=3.29.0
+  - psi4=1.11
   - matplotlib=3.11.0
   - e3nn=0.6.0
   - python-dotenv=1.2.2   # .env config loading
