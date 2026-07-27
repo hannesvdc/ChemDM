@@ -32,6 +32,8 @@ dependencies:
   - pytorch=2.12.1
   - tblite-python=0.7.0
   - dftd4
+  - dftd3-python=1.4.0    # D3(BJ) dispersion Python API for psi4 -d3bj / 3c methods (pulls simple-dftd3)
+  - gcp-correction=2.3.2  # geometric counterpoise for psi4 3c composite methods
   - openmm=8.5.2
   - numpy=2.4.6
   - scipy=1.17.1

@@ -19,7 +19,9 @@ class Psi4Potential:
                        uhf: int=0,
                        *,
                        functional: str="wb97x-d", 
-                       basis: str="def2-tzvp",
+                       basis: Optional[str]="def2-tzvp",
+                       reference: Optional[str]=None,
+                       options: Optional[dict]=None,
                        memory: str="4 GB", 
                        num_threads: Optional[int]=1, 
                        scratch_dir=None):
@@ -30,7 +32,7 @@ class Psi4Potential:
         self.symbols = [ chemical_symbols[z] for z in self.Z ]
         self.charge = int(charge)
         self.multiplicity = int(uhf) + 1
-        self.method = f"{functional}/{basis}"
+        self.method = functional if basis is None else f"{functional}/{basis}"
 
         psi4.core.be_quiet()
         psi4.set_memory( memory )
@@ -40,11 +42,16 @@ class Psi4Potential:
             os.makedirs( scratch_dir, exist_ok=True )
             psi4.core.IOManager.shared_object().set_default_path( scratch_dir )
 
-        # Closed-shell singlet -> RKS (fast); anything open-shell -> UKS.
-        # UKS is also what makes DFT usable through the multireference TS
-        # region on transition paths.
-        reference = "UKS" if self.multiplicity > 1 else "RKS"
-        psi4.set_options({ "reference": reference, "maxiter": 200})          # bump SCF iterations for stretched geoms
+        # DFT backends default to a Kohn-Sham reference (RKS closed-shell, UKS
+        # open-shell -- UKS is also what makes DFT usable through the
+        # multireference TS region on transition paths). Wavefunction methods
+        # (HF / MP2 / CCSD(T)) must pass reference="RHF"/"UHF" instead.
+        if reference is None:
+            reference = "UKS" if self.multiplicity > 1 else "RKS"
+        scf_options = { "reference": reference, "maxiter": 200 }
+        if options is not None:
+            scf_options.update( options )
+        psi4.set_options( scf_options )          # bump SCF iterations for stretched geoms
 
     def _geometry( self, x_A : np.ndarray ):
         x_A = np.asarray(x_A, dtype=float)

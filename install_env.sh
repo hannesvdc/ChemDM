@@ -11,7 +11,8 @@
 #   1. finds conda (or mamba),
 #   2. conda env create -f environment.yml,
 #   3. pip install -e . --no-deps,
-#   4. validates torch + tblite coexistence.
+#   4. validates torch + tblite coexistence,
+#   5. validates psi4 DFT + D3/gCP dispersion.
 #
 # Usage:  ./install_env.sh
 # Overrides:
@@ -68,6 +69,16 @@ from chemdm.TBLitePotential import TBLitePotential
 e, _ = TBLitePotential(Z=np.array([1, 1])).energy_forces(np.array([[0, 0, 0], [0, 0, 0.74]]))
 assert abs(e - (-26.72)) < 0.5, f"unexpected H2 GFN2 energy {e}"
 print(f"[install] OK: torch+tblite coexist; H2 GFN2 E={e:.4f} eV")
+PY
+
+# --- 5. validate psi4 DFT + dispersion (d3bj / 3c backends) -------------------
+echo "[install] validating (psi4 DFT with D3/gCP dispersion)..."
+"$CONDA" run -n "$ENV_NAME" python - <<'PY'
+import numpy as np
+from chemdm.potentials import make_potential
+pot = make_potential("b3lyp-d3bj", np.array([1, 1]), basis="sto-3g", num_threads=1)
+e, _ = pot.energy_forces(np.array([[0, 0, 0], [0, 0, 0.74]]))
+print(f"[install] OK: psi4 b3lyp-d3bj ran (dftd3-python+gcp wired); H2 E={e:.4f} eV")
 PY
 
 echo "[install] DONE. Activate:  $CONDA activate $ENV_NAME   (then: pytest)"
