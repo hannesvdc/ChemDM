@@ -27,6 +27,7 @@ _ONESHOT: dict[str, tuple[str, str | None]] = {
     "transition-path":        ( "chemdm.commands.transition_path",     "load_attention_model" ),
     "generate-conformers":    ( "chemdm.commands.generate_conformers", "load_torsional_diffusion_model" ),
     "stabilize-conformation": ( "chemdm.commands.stable_conformer",    None ),
+    "list-force-fields":      ( "chemdm.commands.list_force_fields",   None ),
 }
 
 
@@ -82,6 +83,8 @@ def _build_parser() -> argparse.ArgumentParser:
             src.add_argument( "--input", type=Path, help="Path to input JSON (RS contract)." )
             s.add_argument( "--n-conformers", type=int, default=10,
                             help="Number of conformers to generate (used with --smiles)." )
+        elif name == "list-force-fields":
+            pass  # metadata query -- takes no input
         else:
             s.add_argument( "--input", required=True, type=Path, help="Path to input JSON." )
         s.set_defaults( command_kind="oneshot" )
@@ -122,13 +125,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     # that builds the same dict the JSON contract would; otherwise read --input JSON.
     if getattr( args, "smiles", None ):
         input_data = { "smiles": args.smiles, "n_conformers": args.n_conformers }
-    else:
+    elif getattr( args, "input", None ) is not None:
         try:
             with open( args.input ) as f:
                 input_data = json.load(f)
         except Exception as e:
             print( f"chemdm: failed to read input {args.input}: {e}", file=sys.stderr )
             return 1
+    else:
+        input_data = {}   # commands that take no input (e.g. list-force-fields)
 
     on_progress = _CliProgress()
     network = getattr( module, loader_name )() if loader_name else None

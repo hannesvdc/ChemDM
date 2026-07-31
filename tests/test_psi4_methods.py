@@ -1,6 +1,6 @@
 """
-Diagnostic + regression tests for the Psi4 backends registered in
-``chemdm.potentials._PSI4_METHODS``.
+Diagnostic + regression tests for the Psi4 backends in the force-field
+registry (`chemdm.potentials._FORCE_FIELDS`).
 
 Consolidates the two exploratory probes used while adding the Psi4 force
 fields, kept here for continuity: re-run after any environment change (e.g.
@@ -13,13 +13,16 @@ working analytic gradients.
     # as pytest (needs the chemdm env, where psi4 lives):
     conda run -n chemdm python -m pytest tests/test_psi4_methods.py -q
 
-The `-d3bj` and `3c` methods need `simple-dftd3` + `gcp-correction` installed;
+The `-d3bj` and `3c` methods need `simple-dftd3` + `dftd3-python` + `gcp`;
 until then they are reported as NO-DISP / skipped rather than failed.
 """
 import numpy as np
 import pytest
 
-from chemdm.potentials import make_potential, _PSI4_METHODS
+from chemdm.potentials import make_potential, _FORCE_FIELDS
+
+# The psi4-backed entries of the registry, keyed by canonical id.
+_PSI4 = {ff["id"]: ff for ff in _FORCE_FIELDS if ff["backend"] == "psi4"}
 
 # Small, distorted, off-axis water: nonzero gradient, not in a standard frame.
 Z = np.array([8, 1, 1])
@@ -35,11 +38,11 @@ _DEFAULT_TEST_BASIS = "def2-svp"
 def _build(ff):
     """Construct a registered Psi4 potential with a cheap basis for testing.
 
-    Composite (`3c`) methods carry their own basis (registry basis is None),
-    so we never override those.
+    Composite (`3c`) methods carry their own basis (build basis is None), so we
+    never override those.
     """
     kw = {"num_threads": 2}
-    if _PSI4_METHODS[ff].get("basis") is not None:
+    if _PSI4[ff]["build"].get("basis") is not None:
         kw["basis"] = _TEST_BASIS.get(ff, _DEFAULT_TEST_BASIS)
     return make_potential(ff, Z, **kw)
 
@@ -49,13 +52,13 @@ def _is_missing_dispersion(err):
     return "dftd3" in msg or "gcp" in msg or "s-dftd3" in msg
 
 
-@pytest.mark.parametrize("ff", sorted(_PSI4_METHODS))
+@pytest.mark.parametrize("ff", sorted(_PSI4))
 def test_method_energy_and_forces(ff):
     try:
         e, f = _build(ff).energy_forces(X0)
     except Exception as err:
-        if _PSI4_METHODS[ff].get("needs_dispersion") and _is_missing_dispersion(err):
-            pytest.skip(f"{ff} needs simple-dftd3 + gcp-correction (not installed)")
+        if _PSI4[ff].get("needs_dispersion") and _is_missing_dispersion(err):
+            pytest.skip(f"{ff} needs simple-dftd3 + dftd3-python + gcp (not installed)")
         raise
     assert np.isfinite(e)
     assert f.shape == (3, 3)
@@ -79,12 +82,12 @@ def test_numerical_gradient_mp2():
 def _diagnostic_table():
     print(f"{'force_field':13} {'status':9} {'energy[eV]':>14} {'|f|max':>10}")
     print("-" * 50)
-    for ff in sorted(_PSI4_METHODS):
+    for ff in sorted(_PSI4):
         try:
             e, f = _build(ff).energy_forces(X0)
             print(f"{ff:13} {'OK':9} {e:14.4f} {np.abs(f).max():10.4f}")
         except Exception as err:
-            no_disp = _PSI4_METHODS[ff].get("needs_dispersion") and _is_missing_dispersion(err)
+            no_disp = _PSI4[ff].get("needs_dispersion") and _is_missing_dispersion(err)
             tag = "NO-DISP" if no_disp else "FAIL"
             print(f"{ff:13} {tag:9} {'-':>14} {'-':>10}   "
                   f"({type(err).__name__}: {str(err)[:45]})")

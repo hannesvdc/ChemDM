@@ -11,7 +11,7 @@ import torch as pt
 
 from rdkit import Chem
 
-from chemdm.TBLitePotential import TBLitePotential
+from chemdm.potentials import make_potential, resolve_force_field, DEFAULT_FORCE_FIELD
 from chemdm.relaxMolecule import minimize_with_lbfgs
 from chemdm.progress import ProgressCallback
 from chemdm.Cluster import rmsd_clustering, post_relaxation_clustering
@@ -54,7 +54,7 @@ def run( input_data: dict,
     print( 'running confgen', file=sys.stderr )
     smiles = input_data["smiles"]
     n_conformers = int( input_data.get("n_conformers", 10 ) )
-    theory = input_data.get( "theory", "GFN2-xTB" )
+    theory = resolve_force_field( input_data.get( "force_field", DEFAULT_FORCE_FIELD ) )
     force_tol = float( input_data.get( "force_tolerance", 0.1) )
     max_optimizer_steps = int( input_data.get( "max_optimizer_steps", 1000) )
     print( max_optimizer_steps, 'max', file=sys.stderr )
@@ -68,8 +68,7 @@ def run( input_data: dict,
     # Add hydrogens
     mol_with_h = Chem.AddHs( mol )
     Z = np.array(  [atom.GetAtomicNum() for atom in mol_with_h.GetAtoms() ], dtype=np.int64 )
-    if theory.lower() == "xtb":
-        xtb = TBLitePotential( Z )
+    xtb = make_potential( theory, Z )
 
     # Generate rotamers / conformers
     # params = AllChem.ETKDGv3()

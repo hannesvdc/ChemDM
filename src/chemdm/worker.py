@@ -12,6 +12,7 @@ from chemdm.commands.transition_path import load_attention_model
 from chemdm.commands.stable_conformer import run as run_stabilize_conformer
 from chemdm.commands.generate_conformers import run as run_generate_conformers
 from chemdm.commands.generate_conformers import load_torsional_diffusion_model
+from chemdm.commands.list_force_fields import run as run_list_force_fields
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -186,9 +187,11 @@ def handle_job(job: dict[str, Any], state: WorkerState) -> None:
         elif experiment == "stabilize-conformation":
             result = run_stabilize_conformer( body, on_progress=ProgressObject(), )
         elif experiment == "generate-conformers":
-            result = run_generate_conformers( body, 
-                                              on_progress=ProgressObject(), 
+            result = run_generate_conformers( body,
+                                              on_progress=ProgressObject(),
                                               td_network=state.torsional_diffusion_model ) # type: ignore
+        elif experiment == "list-force-fields":
+            result = run_list_force_fields( body )
         else:
             raise ValueError(f"Unknown experiment: {experiment!r}")
 

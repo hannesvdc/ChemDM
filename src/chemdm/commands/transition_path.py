@@ -22,7 +22,7 @@ import torch as pt
 from chemdm.Constants import *
 from chemdm.EquivariantTransformer import EquivariantTransformer
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
-from chemdm.potentials import EnergyForceEvaluator
+from chemdm.potentials import EnergyForceEvaluator, resolve_force_field, DEFAULT_FORCE_FIELD
 from chemdm.nebXtbDirect import run_neb_xtb, normalized_arclengths, evaluate_path, neb_force
 from chemdm.path_smoothing import smooth_path_penalized_least_squares
 from chemdm.relaxMolecule import relaxMolecule
@@ -147,7 +147,7 @@ def run( input_data: dict,
     print( f"[runner] {input_data['n_images']}", flush=True, file=sys.stderr )
 
     n_images = int( input_data.get("n_images", 20) )
-    theory = input_data.get( "force_field", "gfn2-xtb" ) 
+    theory = resolve_force_field( input_data.get( "force_field", DEFAULT_FORCE_FIELD ) ) 
     relax_endpoints = bool( input_data.get( "endpoint_relaxation", True) )
     force_tol = float( input_data.get("accuracy", 0.1) )                                                                                          
     n_steps = int( input_data.get("max_iterations", 2500) )

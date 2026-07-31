@@ -13,7 +13,7 @@ if str(_XTB_DIR) not in sys.path:
 
 import numpy as np
 
-from chemdm.potentials import make_potential
+from chemdm.potentials import make_potential, resolve_force_field, DEFAULT_FORCE_FIELD
 from chemdm.relaxMolecule import minimize_with_lbfgs
 from chemdm.progress import ProgressCallback
 
@@ -23,7 +23,7 @@ def run(input_data: dict,
     Empty implementation for now.
     """
     molecule = input_data["input_molecule_json"]
-    theory = input_data.get( "force_field", "GFN2-xTB" )
+    theory = resolve_force_field( input_data.get( "force_field", DEFAULT_FORCE_FIELD ) )
     force_tol = input_data.get( "accuracy", 1.0 ) #kJ/mol/A
     max_optimizer_steps = input_data.get( "max_iterations", 2500 )
 
@@ -32,7 +32,7 @@ def run(input_data: dict,
     x0 = np.asarray( molecule["x"] )
     bonds = molecule["G"] # not directly used for the experiments, but passed back.
 
-    # Construct the XTB force field
+    # Construct the force field
     potential = make_potential( theory, Z )
 
     # Do L-BFGS minimization with line search
