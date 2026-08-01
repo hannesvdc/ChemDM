@@ -22,7 +22,7 @@ import torch as pt
 from chemdm.Constants import *
 from chemdm.EquivariantTransformer import EquivariantTransformer
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules
-from chemdm.potentials import EnergyForceEvaluator, resolve_force_field, DEFAULT_FORCE_FIELD
+from chemdm.potentialInterface import EnergyForceEvaluator, resolve_force_field, DEFAULT_FORCE_FIELD
 from chemdm.nebXtbDirect import run_neb_xtb, normalized_arclengths, evaluate_path, neb_force
 from chemdm.path_smoothing import smooth_path_penalized_least_squares
 from chemdm.relaxMolecule import relaxMolecule

@@ -2,7 +2,7 @@ import numpy as np
 import torch as pt
 
 from chemdm.Constants import *
-from chemdm.TBLitePotential import TBLitePotential
+from chemdm.potentials.TBLitePotential import TBLitePotential
 from chemdm.nebXtbDirect import run_neb_xtb, evaluate_path, neb_force
 from chemdm.MoleculeGraph import MoleculeGraph, batchMolecules, Molecule
 

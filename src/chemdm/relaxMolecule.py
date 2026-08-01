@@ -5,7 +5,7 @@ import torch as pt
 
 from chemdm.Constants import *
 
-from chemdm.potentials import EnergyForceEvaluator, make_potential
+from chemdm.potentialInterface import EnergyForceEvaluator, make_potential
 from chemdm.diagnostics import *
 
 

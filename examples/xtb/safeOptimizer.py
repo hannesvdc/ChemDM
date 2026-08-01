@@ -2,7 +2,7 @@ import numpy as np
 import torch as pt
 
 from chemdm.Constants import *
-from chemdm.TBLitePotential import TBLitePotential
+from chemdm.potentials.TBLitePotential import TBLitePotential
 
 def evaluate_xtb( xtb : TBLitePotential , positions_A: np.ndarray):
     """

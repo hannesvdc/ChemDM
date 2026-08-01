@@ -73,7 +73,7 @@ import torch as pt
 
 from dotenv import load_dotenv
 
-from chemdm.TBLitePotential import TBLitePotential
+from chemdm.potentials.TBLitePotential import TBLitePotential
 from chemdm.relaxMolecule import relaxMolecule
 from chemdm.Constants import KJ_MOL_TO_EV
 from chemdm.TorsionalDiffusionSampling import TorsionalDiffusionData, sample_conformers, kabsch_aligned_heavy_rmsd, generate_rdkit_conformers

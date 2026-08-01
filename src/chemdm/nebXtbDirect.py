@@ -9,7 +9,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 from chemdm.Constants import *
 from chemdm.diagnostics import has_plateaued, has_started_increasing
-from chemdm.potentials import EnergyForceEvaluator
+from chemdm.potentialInterface import EnergyForceEvaluator
 from typing import Callable, Optional
 
 _WORKER_POTENTIAL: EnergyForceEvaluator | None = None
@@ -20,7 +20,7 @@ def init_worker( force_field: str,
                  uhf: int=0, 
                  config=None) -> None:
     global _WORKER_POTENTIAL
-    from chemdm.potentials import make_potential
+    from chemdm.potentialInterface import make_potential
 
     try:
         _WORKER_POTENTIAL = make_potential( force_field, Z, charge=charge, uhf=uhf, **(config or {}) )
@@ -655,7 +655,7 @@ def run_neb_xtb( force_field: str,
     if max_workers <= 1:
         print("[neb] using serial evaluator", file=sys.stderr, flush=True)
         
-        from chemdm.potentials import make_potential
+        from chemdm.potentialInterface import make_potential
         potential = make_potential( force_field, Z, charge=charge, uhf=uhf, **(config or {}))
 
         neb_energy_and_force = lambda path_A: evaluate_path( potential, path_A )

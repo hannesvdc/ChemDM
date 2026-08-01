@@ -236,7 +236,7 @@ def test_lbfgs_needs_fewer_steps_than_adam_on_stiff_problem():
 def test_real_xtb_h2_relaxes():
     for mod in ("tblite", "ase"):
         pytest.importorskip(mod)
-    from chemdm.TBLitePotential import TBLitePotential
+    from chemdm.potentials.TBLitePotential import TBLitePotential
 
     Z = np.array([1, 1])
     x0 = np.array([[0., 0., 0.], [0.90, 0., 0.]])       # stretched H2

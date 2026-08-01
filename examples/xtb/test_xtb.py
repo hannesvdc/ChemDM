@@ -1,6 +1,6 @@
 import numpy as np
 
-from chemdm.TBLitePotential import TBLitePotential
+from chemdm.potentials.TBLitePotential import TBLitePotential
 from safeOptimizer import minimize_with_adam
 
 def main():

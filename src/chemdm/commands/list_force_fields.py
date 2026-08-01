@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from chemdm.potentials import available_force_fields
+from chemdm.potentialInterface import available_force_fields
 
 
 def run( input_data: dict | None = None,

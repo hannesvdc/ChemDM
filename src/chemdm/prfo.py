@@ -20,7 +20,7 @@ from chemdm.MoleculeGraph import Molecule
 from chemdm.MoleculeInformation import _ATOMIC_MASS_TABLE
 from chemdm.Constants import _HARTREE_TO_EV, _HARTREE_PER_BOHR2_TO_EV_PER_ANG2
 from chemdm.lanczos import lanczos_lowest
-from chemdm.potentials import EnergyForceEvaluator
+from chemdm.potentialInterface import EnergyForceEvaluator
 
 
 def _mass_inv_sqrt_dof( Z: np.ndarray ) -> np.ndarray:

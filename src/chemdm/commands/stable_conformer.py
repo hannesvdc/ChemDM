@@ -13,7 +13,7 @@ if str(_XTB_DIR) not in sys.path:
 
 import numpy as np
 
-from chemdm.potentials import make_potential, resolve_force_field, DEFAULT_FORCE_FIELD
+from chemdm.potentialInterface import make_potential, resolve_force_field, DEFAULT_FORCE_FIELD
 from chemdm.relaxMolecule import minimize_with_lbfgs
 from chemdm.progress import ProgressCallback
 
