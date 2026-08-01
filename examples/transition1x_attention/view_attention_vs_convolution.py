@@ -31,7 +31,7 @@ import numpy as np
 import torch as pt
 
 from chemviewer import view_movie
-from chemdm.TBLitePotential import TBLitePotential
+from chemdm.potentials.TBLitePotential import TBLitePotential
 from chemdm.nebXtbDirect import evaluate_path, neb_force, neb_force_metrics
 from chemdm.Constants import KJ_MOL_TO_EV
 

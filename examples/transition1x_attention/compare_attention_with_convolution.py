@@ -44,7 +44,7 @@ import torch as pt
 import matplotlib.pyplot as plt
 from examples.transition1x_newton.NewtonE3NN import NewtonE3NN
 from chemdm.EquivariantTransformer import EquivariantTransformer
-from chemdm.TBLitePotential import TBLitePotential
+from chemdm.potentials.TBLitePotential import TBLitePotential
 from chemdm.nebXtbDirect import evaluate_path, neb_force
 from scipy.stats import wilcoxon, spearmanr
 

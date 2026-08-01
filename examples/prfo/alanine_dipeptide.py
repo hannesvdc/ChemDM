@@ -38,7 +38,7 @@ from chemdm.prfo import (
     PRFOOptimizer, lindh_lowest_mode, _project_mat, _trans_rot_basis,
 )
 from chemdm.relaxMolecule import relaxMolecule
-from chemdm.TBLitePotential import TBLitePotential
+from chemdm.potentials.TBLitePotential import TBLitePotential
 from chemdm.Constants import EV_TO_KCAL_PER_MOL
 
 from _plot import plot_prfo_trajectory

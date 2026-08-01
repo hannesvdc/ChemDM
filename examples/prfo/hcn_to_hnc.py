@@ -20,7 +20,7 @@ import torch as pt
 from chemdm.MoleculeGraph import MoleculeGraph
 from chemdm.prfo import PRFOOptimizer, lindh_lowest_mode
 from chemdm.relaxMolecule import relaxMolecule
-from chemdm.TBLitePotential import TBLitePotential
+from chemdm.potentials.TBLitePotential import TBLitePotential
 from chemdm.Constants import EV_TO_KCAL_PER_MOL
 from chemdm.prfo import _project_mat, _trans_rot_basis
 
@@ -31,7 +31,7 @@ def plot_prfo_trajectory( history: list[dict] ) -> None:
 
     Top panel — *followed eigenvalue per iteration*.
         A clean climb shows λ_followed staying negative throughout (early
-        iterations report the artificial −1 from the rank-1 overlay; only
+        iterations report the artificial -1 from the rank-1 overlay; only
         after ~5 Bofill updates does the value become physically meaningful).
         Excursions to positive values indicate the mode-following heuristic
         briefly lost the unstable direction.

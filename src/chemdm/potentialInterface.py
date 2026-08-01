@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from typing import Protocol
 
 import numpy as np
@@ -116,6 +117,19 @@ def resolve_force_field( name: str ) -> str:
     return _lookup( name )["id"]
 
 
+# psi4 DFT force-field id -> pyscf/gpu4pyscf functional spelling (+ dispersion).
+# Only these DFT methods are wired for the pyscf engine. The wb97* / m06-2x
+# entries were verified to match the psi4 numbers to ~1e-4 Ha; the -d3bj ones
+# additionally need `pip install pyscf-dispersion` on the GPU node.
+_PYSCF_XC = {
+    "wb97x-d":    dict( xc="wb97xd" ),
+    "wb97m-v":    dict( xc="wb97mv" ),
+    "m06-2x":     dict( xc="m06-2x" ),
+    "b3lyp-d3bj": dict( xc="b3lyp", disp="d3bj" ),
+    "pbe0-d3bj":  dict( xc="pbe0",  disp="d3bj" ),
+}
+
+
 def make_potential( force_field: str,
                     Z: np.ndarray,
                     charge: int = 0,
@@ -129,11 +143,26 @@ def make_potential( force_field: str,
     build = spec["build"]
 
     if spec["backend"] == "tblite":
-        from chemdm.TBLitePotential import TBLitePotential
+        from chemdm.potentials.TBLitePotential import TBLitePotential
         return TBLitePotential( Z, charge=charge, uhf=uhf, method=build["method"], **kw )
 
+    # DFT may run on the pyscf / gpu4pyscf engine instead (set
+    # CHEMDM_DFT_ENGINE=pyscf, e.g. on a GPU node) for the same functional at
+    # GPU speed. Wavefunction methods (hf/mp2/ccsd(t)) always run on psi4.
+    engine = os.environ.get( "CHEMDM_DFT_ENGINE", "psi4" ).strip().lower()
+    if build["reference"] == "ks" and engine in ( "pyscf", "gpu4pyscf", "gpu" ):
+        xc = _PYSCF_XC.get( spec["id"] )
+        if xc is None:
+            raise ValueError(
+                f"Force field {spec['id']!r} is not available on the pyscf/gpu4pyscf "
+                f"engine yet; unset CHEMDM_DFT_ENGINE to run it on psi4." )
+        from chemdm.potentials.PySCFPotential import PySCFPotential
+        kwargs = dict( functional=xc["xc"], basis=build.get("basis"), disp=xc.get("disp") )
+        kwargs.update( kw )
+        return PySCFPotential( Z, charge=charge, uhf=uhf, **kwargs )
+
     # psi4: resolve the reference family to a concrete reference by spin state.
-    from chemdm.Psi4Potential import Psi4Potential
+    from chemdm.potentials.Psi4Potential import Psi4Potential
     open_shell = (uhf > 0)
     reference = ( "UKS" if open_shell else "RKS" ) if build["reference"] == "ks" \
                 else ( "UHF" if open_shell else "RHF" )
