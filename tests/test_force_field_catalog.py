@@ -7,7 +7,7 @@ installed (the `available` flags simply reflect whatever is present).
 """
 import pytest
 
-from chemdm.potentials import (
+from chemdm.potentialInterface import (
     DEFAULT_FORCE_FIELD,
     _FORCE_FIELDS,
     available_force_fields,

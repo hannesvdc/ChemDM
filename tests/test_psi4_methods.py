@@ -19,7 +19,7 @@ until then they are reported as NO-DISP / skipped rather than failed.
 import numpy as np
 import pytest
 
-from chemdm.potentials import make_potential, _FORCE_FIELDS
+from chemdm.potentialInterface import make_potential, _FORCE_FIELDS
 
 # The psi4-backed entries of the registry, keyed by canonical id.
 _PSI4 = {ff["id"]: ff for ff in _FORCE_FIELDS if ff["backend"] == "psi4"}
