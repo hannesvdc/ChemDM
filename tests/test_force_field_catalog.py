@@ -17,8 +17,10 @@ from chemdm.potentialInterface import (
 
 def test_registry_entries_are_well_formed():
     for ff in _FORCE_FIELDS:
-        assert {"id", "label", "category", "backend", "supports_tp", "build"} <= set(ff)
-        assert ff["backend"] in {"tblite", "psi4"}
+        assert {"id", "label", "category", "backend", "supports_tp", "build", "supports_gpu"} <= set(ff)
+        assert ff["backend"] in {"tblite", "pyscf"}
+        assert isinstance(ff["supports_tp"], bool)
+        assert isinstance(ff["supports_gpu"], bool)
         if ff["backend"] == "tblite":
             assert "method" in ff["build"]
         else:

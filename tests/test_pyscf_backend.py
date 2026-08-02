@@ -1,8 +1,10 @@
-"""CPU-path tests for the PySCF / gpu4pyscf DFT backend.
+"""Backend-mechanics tests for PySCFPotential (CPU path).
 
-Validates units, the gradient sign, and the CHEMDM_DFT_ENGINE routing on CPU
-pyscf -- the same code path gpu4pyscf runs on a GPU (only the imported dft
-module differs). Skips if pyscf is not installed.
+Numerical correctness of ωB97X-D (functional + CHG dispersion, checked against
+psi4) lives in test_chg_d2.py. Here we only exercise the plumbing: energy/force
+units and shapes, the device selector and its GPU->CPU fallback, and that
+make_potential routes each force field to the right backend (with `device`
+never leaking into the CPU-only tblite constructor). Skips if pyscf is absent.
 """
 import numpy as np
 import pytest
@@ -10,35 +12,35 @@ import pytest
 pytest.importorskip("pyscf")
 
 from chemdm.potentials.PySCFPotential import PySCFPotential
+from chemdm.potentialInterface import make_potential
 
 Z = np.array([8, 1, 1])
-X0 = np.array([[0.10, 0.05, 0.00],
-               [0.75, 0.60, 0.30],
-               [-0.60, 0.55, -0.20]])
+X0 = np.array([[0.0, 0.0, 0.117], [0.0, 0.757, -0.469], [0.0, -0.757, -0.469]])
 
 
-def test_energy_units_and_numerical_gradient():
-    pot = PySCFPotential(Z, functional="wb97xd", basis="def2-svp", device="cpu")
-    e, f = pot.energy_forces(X0)
+def test_energy_forces_units_and_shapes():
+    e, f = PySCFPotential(Z, functional="wb97xd", basis="def2-svp", device="cpu").energy_forces(X0)
     assert np.isfinite(e)
+    assert -2200 < e < -1950          # water ωB97X ~ -2075 eV -> confirms eV (not Hartree)
     assert f.shape == (3, 3) and np.all(np.isfinite(f))
-    # water wb97x-d ~ -76 Ha ~ -2075 eV
-    assert -2200 < e < -1950
-    # forces == -dE/dx : central difference must match returned forces
-    h = 1e-3
-    fd = np.zeros_like(X0)
-    for i in range(3):
-        for k in range(3):
-            xp = X0.copy(); xp[i, k] += h
-            xm = X0.copy(); xm[i, k] -= h
-            fd[i, k] = -(pot.energy_forces(xp)[0] - pot.energy_forces(xm)[0]) / (2 * h)
-    assert np.allclose(f, fd, atol=2e-2), np.abs(f - fd).max()
 
 
-def test_engine_selection_via_env(monkeypatch):
-    from chemdm.potentialInterface import make_potential
-    monkeypatch.setenv("CHEMDM_DFT_ENGINE", "pyscf")
+def test_device_cpu_selects_cpu():
+    assert PySCFPotential(Z, basis="def2-svp", device="cpu")._gpu is False
+
+
+def test_gpu_falls_back_to_cpu_when_unavailable():
+    # No gpu4pyscf in this env -> device="gpu" must degrade to CPU, not crash.
+    assert PySCFPotential(Z, basis="def2-svp", device="gpu")._gpu is False
+
+
+def test_make_potential_routes_wb97x_d_to_pyscf():
     pot = make_potential("wb97x-d", Z, basis="def2-svp", device="cpu")
     assert isinstance(pot, PySCFPotential)
-    e, _ = pot.energy_forces(X0)
-    assert np.isfinite(e)
+    assert pot.disp == "chg-d2"        # ωB97X-D carries the CHG dispersion flag
+
+
+def test_make_potential_device_is_noop_for_tblite():
+    # `device` must not leak into TBLitePotential (which has no such argument).
+    from chemdm.potentials.TBLitePotential import TBLitePotential
+    assert isinstance(make_potential("gfn2-xtb", Z, device="gpu"), TBLitePotential)
