@@ -29,16 +29,20 @@ def evaluateEnergyAndForces( potential: EnergyForceEvaluator,
     return E_kj_mol, F_kJ_mol_A
 
 
-def relaxMolecule( force_field: str,
-                   Z : np.ndarray,
+def relaxMolecule( potential: EnergyForceEvaluator | str,
                    x0 : np.ndarray, 
+                   *,
+                   Z : np.ndarray | None = None,
                    minimizer : str = "Adam",
                    force_tol : float = 0.02 / KJ_MOL_TO_EV,
                    max_steps : int = 1000,
                    verbose : bool = False,
                    returnOptimizationHistory : bool = False ) -> np.ndarray | tuple[np.ndarray,list]:
     """ General entry point for all relaxation codes"""
-    potential = make_potential( force_field, Z )
+    if isinstance( potential, str ):
+        if Z is None:
+            raise ValueError( "Z is required when the first argument is a force-field string." )
+        potential = make_potential( potential, Z )
 
     if minimizer.lower() == "adam":
         x_opt, info = minimize_with_adam( potential, x0, force_tol, max_steps, verbose=verbose )

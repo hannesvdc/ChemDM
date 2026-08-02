@@ -164,8 +164,8 @@ def run( input_data: dict,
     # Align the end points for stability. Relax endpoints if desired.
     if relax_endpoints:
         on_progress( "relax", "Relaxinging reactants and products", fraction=0.02 )
-        xA = relaxMolecule( theory, Z, xA, minimizer="LBFGS", returnOptimizationHistory=False )
-        xB = relaxMolecule( theory, Z, xB, minimizer="LBFGS", returnOptimizationHistory=False )
+        xA = relaxMolecule( theory, xA, Z=Z, minimizer="LBFGS", returnOptimizationHistory=False )
+        xB = relaxMolecule( theory, xB, Z=Z, minimizer="LBFGS", returnOptimizationHistory=False )
 
     on_progress("align", "Aligning endpoints", fraction=0.10)
     xB = kabsch_align_numpy( xB, xA, Z ) # type: ignore
