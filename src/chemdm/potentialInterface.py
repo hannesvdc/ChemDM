@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 from typing import Protocol
 
 import numpy as np
@@ -23,19 +22,19 @@ class EnergyForceEvaluator(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# The force-field registry: the single source of truth for every selectable
-# backend. Everything else (the factory, the RS catalog, name resolution) is
-# derived from this list. Order == display order in the RS UI.
+# The force-field registry for every selectable backend. Everything else 
+# (the factory, the RS catalog, name resolution) is derived from this list. 
+# 
+# Order == display order in the RS UI.
 #
 # Each entry:
 #   id           canonical id (what commands / make_potential resolve to)
 #   label        display label shown in RS
 #   category     UI grouping
-#   backend      "tblite" | "psi4"
-#   supports_tp  may drive a transition-path (NEB) run. xTB and DFT are true
-#                PESs that handle bond breaking; HF/MP2/CCSD(T) are relaxation /
-#                single-point only (MP2 diverges near a TS, HF dissociates
-#                incorrectly, CCSD(T) is too costly for a full band).
+#   backend      "tblite" | "pyscf"
+#   supports_tp  Can drive a transition-path (NEB) run. xTB and DFT are true
+#                PESs that handle bond breaking; Other force fields may not be 
+#                valid out of equilibrium or may be too slow.
 #   aliases      alternate accepted names (case-insensitive), e.g. GFN spellings
 #   build        kwargs handed to the backend potential constructor. For psi4,
 #                `reference` is a family ("ks" = Kohn-Sham DFT, "hf" =
@@ -46,54 +45,23 @@ class EnergyForceEvaluator(Protocol):
 _FORCE_FIELDS = [
     dict( id="gfn2-xtb", label="GFN2-xTB", category="Semiempirical (xTB)",
           backend="tblite", supports_tp=True, aliases=["xtb2", "gfn2", "xtb"],
-          build=dict(method="GFN2-xTB") ),
+          build=dict(method="GFN2-xTB"), supports_gpu=False ),
     dict( id="gfn1-xtb", label="GFN1-xTB", category="Semiempirical (xTB)",
           backend="tblite", supports_tp=True, aliases=["xtb1", "gfn1"],
-          build=dict(method="GFN1-xTB") ),
+          build=dict(method="GFN1-xTB"), supports_gpu=False ),
 
     dict( id="wb97x-d", label="ωB97X-D / def2-TZVP", category="DFT",
-          backend="psi4", supports_tp=True,
-          build=dict(functional="wb97x-d", basis="def2-tzvp", reference="ks") ),
+          backend="pyscf", supports_tp=True,
+          build=dict(functional="wb97x-d", basis="def2-tzvp", reference="ks"),
+          supports_gpu=True ),
     dict( id="wb97m-v", label="ωB97M-V / def2-TZVP", category="DFT",
-          backend="psi4", supports_tp=True,
-          build=dict(functional="wb97m-v", basis="def2-tzvp", reference="ks") ),
-    dict( id="m06-2x", label="M06-2X / def2-TZVP", category="DFT",
-          backend="psi4", supports_tp=True,
-          build=dict(functional="m06-2x", basis="def2-tzvp", reference="ks") ),
-    dict( id="b3lyp-d3bj", label="B3LYP-D3(BJ) / def2-TZVP", category="DFT",
-          backend="psi4", supports_tp=True, needs_dispersion=True,
-          build=dict(functional="b3lyp-d3bj", basis="def2-tzvp", reference="ks") ),
-    dict( id="pbe0-d3bj", label="PBE0-D3(BJ) / def2-TZVP", category="DFT",
-          backend="psi4", supports_tp=True, needs_dispersion=True,
-          build=dict(functional="pbe0-d3bj", basis="def2-tzvp", reference="ks") ),
-    dict( id="pbeh-3c", label="PBEh-3c", category="DFT (composite)",
-          backend="psi4", supports_tp=True, needs_dispersion=True,
-          build=dict(functional="pbeh3c", basis=None, reference="ks") ),
-    dict( id="b97-3c", label="B97-3c", category="DFT (composite)",
-          backend="psi4", supports_tp=True, needs_dispersion=True,
-          build=dict(functional="b973c", basis=None, reference="ks") ),
-
-    dict( id="mp2", label="MP2 / def2-TZVP", category="Wavefunction",
-          backend="psi4", supports_tp=False,
-          build=dict(functional="mp2", basis="def2-tzvp", reference="hf") ),
-    dict( id="scs-mp2", label="SCS-MP2 / def2-TZVP", category="Wavefunction",
-          backend="psi4", supports_tp=False,
-          build=dict(functional="scs-mp2", basis="def2-tzvp", reference="hf") ),
-    dict( id="hf", label="Hartree-Fock / def2-TZVP", category="Wavefunction",
-          backend="psi4", supports_tp=False,
-          build=dict(functional="hf", basis="def2-tzvp", reference="hf") ),
-    dict( id="ccsd(t)", label="CCSD(T) / cc-pVDZ", category="Wavefunction",
-          backend="psi4", supports_tp=False,
-          build=dict(functional="ccsd(t)", basis="cc-pvdz", reference="hf",
-                     options={"scf_type": "pk", "cc_type": "conv",
-                              "mp2_type": "conv", "freeze_core": True}) ),
+          backend="pyscf", supports_tp=True,
+          build=dict(functional="wb97m-v", basis="def2-tzvp", reference="ks"),
+          supports_gpu=True ),
 ]
-
 DEFAULT_FORCE_FIELD = "gfn2-xtb"
 
-# Lower-cased name (id | label | alias) -> registry entry. One index feeds both
-# name resolution and the factory, so "what RS shows" and the internal name can
-# never disagree.
+# Lower-cased name (id | label | alias) -> registry entry.
 _BY_NAME = {
     name.lower(): ff
     for ff in _FORCE_FIELDS
@@ -117,16 +85,12 @@ def resolve_force_field( name: str ) -> str:
     return _lookup( name )["id"]
 
 
-# psi4 DFT force-field id -> pyscf/gpu4pyscf functional spelling (+ dispersion).
-# Only these DFT methods are wired for the pyscf engine. The wb97* / m06-2x
-# entries were verified to match the psi4 numbers to ~1e-4 Ha; the -d3bj ones
-# additionally need `pip install pyscf-dispersion` on the GPU node.
+# Force-field id -> pyscf functional spelling and add-on dispersion. "chg-d2"
+# is chemdm's own ωB97X-D CHG dispersion (added post-SCF in PySCFPotential,
+# since pyscf has no D2); VV10 functionals (wb97m-v) need no add-on.
 _PYSCF_XC = {
-    "wb97x-d":    dict( xc="wb97xd" ),
-    "wb97m-v":    dict( xc="wb97mv" ),
-    "m06-2x":     dict( xc="m06-2x" ),
-    "b3lyp-d3bj": dict( xc="b3lyp", disp="d3bj" ),
-    "pbe0-d3bj":  dict( xc="pbe0",  disp="d3bj" ),
+    "wb97x-d":  dict( xc="wb97xd", disp="chg-d2" ),
+    "wb97m-v":  dict( xc="wb97mv" ),
 }
 
 
@@ -134,6 +98,8 @@ def make_potential( force_field: str,
                     Z: np.ndarray,
                     charge: int = 0,
                     uhf: int = 0,
+                    *,
+                    device: str = "cpu",
                     **kw ) -> EnergyForceEvaluator:
     """Build the requested force field. Accepts any id / label / alias. Lazy-
     imports the backend so the xTB path never pulls in psi4 and vice versa.
@@ -143,33 +109,21 @@ def make_potential( force_field: str,
     build = spec["build"]
 
     if spec["backend"] == "tblite":
+        # tblite is always CPU (for now).
         from chemdm.potentials.TBLitePotential import TBLitePotential
         return TBLitePotential( Z, charge=charge, uhf=uhf, method=build["method"], **kw )
 
-    # DFT may run on the pyscf / gpu4pyscf engine instead (set
-    # CHEMDM_DFT_ENGINE=pyscf, e.g. on a GPU node) for the same functional at
-    # GPU speed. Wavefunction methods (hf/mp2/ccsd(t)) always run on psi4.
-    engine = os.environ.get( "CHEMDM_DFT_ENGINE", "psi4" ).strip().lower()
-    if build["reference"] == "ks" and engine in ( "pyscf", "gpu4pyscf", "gpu" ):
-        xc = _PYSCF_XC.get( spec["id"] )
-        if xc is None:
-            raise ValueError(
-                f"Force field {spec['id']!r} is not available on the pyscf/gpu4pyscf "
-                f"engine yet; unset CHEMDM_DFT_ENGINE to run it on psi4." )
+    # DFT runs on pyscf (CPU) or gpu4pyscf (GPU); the `device` kwarg picks the
+    # engine inside PySCFPotential. _PYSCF_XC maps the id to the pyscf functional
+    # spelling and any add-on dispersion (e.g. "chg-d2" for ωB97X-D).
+    if spec["backend"] == "pyscf":
         from chemdm.potentials.PySCFPotential import PySCFPotential
+        xc = _PYSCF_XC[ spec["id"] ]
         kwargs = dict( functional=xc["xc"], basis=build.get("basis"), disp=xc.get("disp") )
-        kwargs.update( kw )
-        return PySCFPotential( Z, charge=charge, uhf=uhf, **kwargs )
+        kwargs.update( kw )        # num_threads, basis override
+        return PySCFPotential( Z, charge=charge, uhf=uhf, device=device, **kwargs )
 
-    # psi4: resolve the reference family to a concrete reference by spin state.
-    from chemdm.potentials.Psi4Potential import Psi4Potential
-    open_shell = (uhf > 0)
-    reference = ( "UKS" if open_shell else "RKS" ) if build["reference"] == "ks" \
-                else ( "UHF" if open_shell else "RHF" )
-    kwargs = dict( functional=build["functional"], basis=build.get("basis"),
-                   reference=reference, options=build.get("options") )
-    kwargs.update( kw )
-    return Psi4Potential( Z, charge=charge, uhf=uhf, **kwargs )
+    raise ValueError( f"Unknown backend {spec['backend']!r} for force field {spec['id']!r}" )
 
 
 def _module_available( name: str ) -> bool:
@@ -187,19 +141,17 @@ def available_force_fields() -> list[dict]:
     Each entry: id, label, category, supports_tp, available, reason.
     """
     have_tblite = _module_available( "tblite" )
-    have_psi4 = _module_available( "psi4" )
-    have_dftd3 = _module_available( "dftd3" )  # D3 Python API for -d3bj / 3c methods
+    have_pyscf = _module_available( "pyscf" )
 
     out = []
     for ff in _FORCE_FIELDS:
         if ff["backend"] == "tblite":
             ok, reason = have_tblite, ( None if have_tblite else "tblite not installed" )
-        elif not have_psi4:
-            ok, reason = False, "psi4 not installed"
-        elif ff.get("needs_dispersion") and not have_dftd3:
-            ok, reason = False, "dftd3-python not installed"
+        elif ff["backend"] == "pyscf":
+            ok, reason = have_pyscf, ( None if have_pyscf else "PySCF not installed" )
         else:
             ok, reason = True, None
         out.append( { "id": ff["id"], "label": ff["label"], "category": ff["category"],
-                      "supports_tp": ff["supports_tp"], "available": ok, "reason": reason } )
+                      "supports_tp": ff["supports_tp"], "available": ok, "reason": reason,
+                      "supports_gpu": ff["supports_gpu"] } )
     return out
